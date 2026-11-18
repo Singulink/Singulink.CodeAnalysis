@@ -1,0 +1,5 @@
+# How the probe project was built: see ProbeTests.
+OutputKind=Exe
+AllowUnsafe=true
+Nullable=enable
+ImplicitUsings=false

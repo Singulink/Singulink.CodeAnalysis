@@ -1,0 +1,11 @@
+NonCopyableSymbols.txt(10,1): SCA1042
+NonCopyableSymbols.txt(4,1): SCA1042
+NonCopyableSymbols.txt(5,1): SCA1042
+NonCopyableSymbols.txt(6,1): SCA1042
+NonCopyableSymbols.txt(8,1): SCA1042
+Q.cs(38,85): SCA1031
+Q.cs(39,40): SCA1031
+Q.cs(40,47): SCA1020
+Q.cs(40,79): SCA1020
+Q.cs(40,79): SCA1031
+Q.cs(42,101): SCA1031

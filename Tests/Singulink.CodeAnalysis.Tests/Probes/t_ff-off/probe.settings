@@ -1,0 +1,6 @@
+# How the probe project was built: see ProbeTests.
+OutputKind=Exe
+AllowUnsafe=false
+Nullable=disable
+ImplicitUsings=false
+build_property.NonCopyableAllowImplicitMoves=false

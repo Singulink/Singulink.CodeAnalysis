@@ -1,0 +1,43 @@
+<Project>
+  <!--
+    The package has this file under build and under buildTransitive, so it runs in every project that gets the analyzer: one that
+    references a package of it, and one that only gets it through a library.
+  -->
+
+  <!--
+    The list files of the project's own folder are read with nothing more written: NonCopyableSymbols.txt and NonCopyableSymbols.*.txt.
+    This is a targets file, so the items of the project are known here, and a file that the project adds itself is not added twice. A
+    file in another folder is added by the project.
+  -->
+  <ItemGroup>
+    <_NonCopyableSymbolsFile Include="$(MSBuildProjectDirectory)\NonCopyableSymbols.txt" Condition="Exists('$(MSBuildProjectDirectory)\NonCopyableSymbols.txt')" />
+    <_NonCopyableSymbolsFile Include="$(MSBuildProjectDirectory)\NonCopyableSymbols.*.txt" />
+    <_NonCopyableSymbolsFile Remove="@(AdditionalFiles)" />
+    <AdditionalFiles Include="@(_NonCopyableSymbolsFile)" Visible="false" />
+    <_NonCopyableSymbolsFile Remove="@(_NonCopyableSymbolsFile)" />
+  </ItemGroup>
+
+  <!--
+    The built-in non-copyable types are on in a project that references one of the two packages itself, and off in one that only gets the
+    analyzer through a library: a library that marks its guards brings the analyzer to everyone who uses it, and must not bring findings
+    about their own GCHandle code with it. A project that sets NonCopyableIncludeBuiltInTypes keeps its value. The items of the project
+    are not known when properties are evaluated, so this runs as a target, before the compiler-visible properties are written for the
+    compiler; it runs in a design-time build as well.
+  -->
+  <Target Name="_NonCopyableSetIncludeBuiltInTypes"
+          BeforeTargets="GenerateMSBuildEditorConfigFileCore"
+          Condition="'$(NonCopyableIncludeBuiltInTypes)' == ''">
+    <ItemGroup>
+      <_NonCopyablePackageReference Include="@(PackageReference)" Condition="'%(Identity)' == 'Singulink.CodeAnalysis' or '%(Identity)' == 'Singulink.CodeAnalysis.Analyzers'" />
+    </ItemGroup>
+
+    <PropertyGroup>
+      <NonCopyableIncludeBuiltInTypes Condition="'@(_NonCopyablePackageReference)' != ''">true</NonCopyableIncludeBuiltInTypes>
+      <NonCopyableIncludeBuiltInTypes Condition="'@(_NonCopyablePackageReference)' == ''">false</NonCopyableIncludeBuiltInTypes>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <_NonCopyablePackageReference Remove="@(_NonCopyablePackageReference)" />
+    </ItemGroup>
+  </Target>
+</Project>

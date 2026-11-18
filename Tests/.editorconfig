@@ -1,0 +1,15 @@
+# Editor config overrides specifically for test projects
+
+
+########### C# files ###########
+[*.cs]
+
+#### Analyzer diagnostics ####
+
+stylecop.documentation.documentExposedElements = false
+
+# CA2007: Consider calling ConfigureAwait on the awaited task
+dotnet_diagnostic.CA2007.severity = none
+
+# SA1118: Parameter should not span multiple lines (test sources, list files and expected messages are multi-line arguments)
+dotnet_diagnostic.SA1118.severity = none

@@ -1,0 +1,16 @@
+<Solution>
+  <Folder Name="/Solution Items/">
+    <File Path=".editorconfig" />
+    <File Path="Directory.Build.props" />
+    <File Path="Directory.Packages.props" />
+    <File Path="README.md" />
+    <File Path="THIRD-PARTY-NOTICES.md" />
+  </Folder>
+  <Folder Name="/Source/">
+    <Project Path="Source/Singulink.CodeAnalysis.Analyzers/Singulink.CodeAnalysis.Analyzers.csproj" />
+    <Project Path="Source/Singulink.CodeAnalysis/Singulink.CodeAnalysis.csproj" />
+  </Folder>
+  <Folder Name="/Tests/">
+    <Project Path="Tests/Singulink.CodeAnalysis.Tests/Singulink.CodeAnalysis.Tests.csproj" />
+  </Folder>
+</Solution>

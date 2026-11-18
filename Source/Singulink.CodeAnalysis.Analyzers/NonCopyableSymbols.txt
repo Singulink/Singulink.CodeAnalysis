@@ -1,0 +1,1052 @@
+# Built-in safe list for the non-copyable analyzer.
+# Format: one documentation-comment ID per line, optional ";new", ";borrows", ";drains", ";owned", ";view", ";noncopyable" or ";erasable" marker, optional ";for=" type parameter names.
+# Runtime source read: dotnet/runtime d757c03be2c3.
+# Lines ending in "# net9+" or "# net10+" do not resolve against the .NET 8 reference assemblies.
+#
+#
+# "borrows" also answers who keeps a container. A parameter whose type mentions a type parameter that is not marked is taken to
+# keep the container that it is given, since no declaration tells ArrayPool`1.Return, which keeps its array, from Array.Reverse``1,
+# which only uses it. Every member of this list with such a parameter was read in the runtime source. One that only uses what it is
+# given during the call is marked "borrows". One that hands it back, as a reference, a ref struct, another type or an "out"
+# argument, needs no marker: what it hands back is followed. One that is left without a marker keeps: constructors,
+# ArrayPool`1.Return and Task.Run.
+#
+# Members of Unsafe, MemoryMarshal, CollectionsMarshal, ImmutableCollectionsMarshal and Marshal are listed for one fact only:
+# they make no copy. What they let code do that the language otherwise rules out (write through a read-only reference, hold a
+# null reference, keep a view past a change of its collection) is outside what the analyzer guarantees: see "Not covered".
+
+# ============================================================================
+# Views: copying the struct copies no elements
+# ============================================================================
+
+T:System.Span`1;view
+T:System.Span`1.Enumerator;view
+T:System.ReadOnlySpan`1;view
+T:System.ReadOnlySpan`1.Enumerator;view
+T:System.Memory`1;view
+T:System.ReadOnlyMemory`1;view
+T:System.ArraySegment`1;view
+T:System.ArraySegment`1.Enumerator;view
+T:System.Buffers.ReadOnlySequence`1;view
+T:System.Buffers.ReadOnlySequence`1.Enumerator;view
+T:System.Collections.Generic.Dictionary`2.AlternateLookup`1;view
+T:System.Collections.Concurrent.ConcurrentDictionary`2.AlternateLookup`1;view
+T:System.Collections.Frozen.FrozenDictionary`2.AlternateLookup`1;view
+T:System.Collections.Immutable.ImmutableArray`1;view
+T:System.Collections.Immutable.ImmutableArray`1.Enumerator;view
+T:System.Runtime.CompilerServices.TaskAwaiter`1;view
+T:System.Runtime.CompilerServices.ConfiguredTaskAwaitable`1;view
+T:System.Runtime.CompilerServices.ConfiguredTaskAwaitable`1.ConfiguredTaskAwaiter;view
+
+# ============================================================================
+# Non-copyable framework structs
+# ============================================================================
+
+T:System.Threading.SpinLock;noncopyable
+T:System.Runtime.InteropServices.GCHandle;noncopyable
+T:System.Runtime.InteropServices.GCHandle`1;noncopyable  # net10+
+T:System.Runtime.InteropServices.PinnedGCHandle`1;noncopyable  # net10+
+T:System.Runtime.InteropServices.WeakGCHandle`1;noncopyable  # net10+
+T:System.Threading.Lock.Scope;noncopyable  # net9+
+T:System.Buffers.MemoryHandle;noncopyable
+T:System.Runtime.CompilerServices.DefaultInterpolatedStringHandler;noncopyable
+T:System.Threading.AsyncFlowControl;noncopyable
+T:System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore`1;noncopyable
+
+# Members of those structs that take one by value and only read it: a stored value may be passed.
+# The MemoryHandle constructor keeps the GCHandle that it is given, so it is not here.
+M:System.Runtime.InteropServices.GCHandle.ToIntPtr(System.Runtime.InteropServices.GCHandle);borrows
+M:System.Runtime.InteropServices.GCHandle.Equals(System.Runtime.InteropServices.GCHandle);borrows
+M:System.Runtime.InteropServices.GCHandle.op_Equality(System.Runtime.InteropServices.GCHandle,System.Runtime.InteropServices.GCHandle);borrows
+M:System.Runtime.InteropServices.GCHandle.op_Inequality(System.Runtime.InteropServices.GCHandle,System.Runtime.InteropServices.GCHandle);borrows
+M:System.Runtime.InteropServices.GCHandle.op_Explicit(System.Runtime.InteropServices.GCHandle)~System.IntPtr;borrows
+M:System.Runtime.InteropServices.GCHandle`1.ToIntPtr(System.Runtime.InteropServices.GCHandle{`0});borrows  # net10+
+M:System.Runtime.InteropServices.GCHandle`1.Equals(System.Runtime.InteropServices.GCHandle{`0});borrows  # net10+
+M:System.Runtime.InteropServices.PinnedGCHandle`1.ToIntPtr(System.Runtime.InteropServices.PinnedGCHandle{`0});borrows  # net10+
+M:System.Runtime.InteropServices.PinnedGCHandle`1.Equals(System.Runtime.InteropServices.PinnedGCHandle{`0});borrows  # net10+
+M:System.Runtime.InteropServices.WeakGCHandle`1.ToIntPtr(System.Runtime.InteropServices.WeakGCHandle{`0});borrows  # net10+
+M:System.Runtime.InteropServices.WeakGCHandle`1.Equals(System.Runtime.InteropServices.WeakGCHandle{`0});borrows  # net10+
+M:System.Runtime.InteropServices.GCHandleExtensions.GetAddressOfArrayData``1(System.Runtime.InteropServices.PinnedGCHandle{``0[]});borrows  # net10+
+M:System.Runtime.InteropServices.GCHandleExtensions.GetAddressOfStringData(System.Runtime.InteropServices.PinnedGCHandle{System.String});borrows  # net10+
+M:System.Threading.AsyncFlowControl.Equals(System.Threading.AsyncFlowControl);borrows
+M:System.Threading.AsyncFlowControl.op_Equality(System.Threading.AsyncFlowControl,System.Threading.AsyncFlowControl);borrows
+M:System.Threading.AsyncFlowControl.op_Inequality(System.Threading.AsyncFlowControl,System.Threading.AsyncFlowControl);borrows
+
+# ============================================================================
+# Erasable types: no base type or interface hands out a value of the type arguments
+# ============================================================================
+
+# Task`1: its base Task and its interfaces IAsyncResult and IDisposable expose nothing of TResult.
+T:System.Threading.Tasks.Task`1;erasable
+# TaskCompletionSource`1: no base class, no interface, no override of a member of object.
+T:System.Threading.Tasks.TaskCompletionSource`1;erasable
+
+# ============================================================================
+# Awaiting
+# ============================================================================
+
+# System.Threading.Tasks.Task`1
+P:System.Threading.Tasks.Task`1.Result
+M:System.Threading.Tasks.Task`1.GetAwaiter
+M:System.Threading.Tasks.Task`1.ConfigureAwait(System.Boolean)
+M:System.Threading.Tasks.Task`1.ConfigureAwait(System.Threading.Tasks.ConfigureAwaitOptions)
+# WaitAsync puts a copy of the result in the task it returns; every read of that task is judged by where it came from
+M:System.Threading.Tasks.Task`1.WaitAsync(System.Threading.CancellationToken)
+M:System.Threading.Tasks.Task`1.WaitAsync(System.TimeSpan)
+M:System.Threading.Tasks.Task`1.WaitAsync(System.TimeSpan,System.TimeProvider)
+M:System.Threading.Tasks.Task`1.WaitAsync(System.TimeSpan,System.Threading.CancellationToken)
+M:System.Threading.Tasks.Task`1.WaitAsync(System.TimeSpan,System.TimeProvider,System.Threading.CancellationToken)
+# The constructors keep what the delegate returns as the result, once, as Task.Run does. The state is an object of the caller's.
+M:System.Threading.Tasks.Task`1.#ctor(System.Func{`0})
+M:System.Threading.Tasks.Task`1.#ctor(System.Func{`0},System.Threading.CancellationToken)
+M:System.Threading.Tasks.Task`1.#ctor(System.Func{`0},System.Threading.CancellationToken,System.Threading.Tasks.TaskCreationOptions)
+M:System.Threading.Tasks.Task`1.#ctor(System.Func{`0},System.Threading.Tasks.TaskCreationOptions)
+M:System.Threading.Tasks.Task`1.#ctor(System.Func{System.Object,`0},System.Object)
+M:System.Threading.Tasks.Task`1.#ctor(System.Func{System.Object,`0},System.Object,System.Threading.CancellationToken)
+M:System.Threading.Tasks.Task`1.#ctor(System.Func{System.Object,`0},System.Object,System.Threading.CancellationToken,System.Threading.Tasks.TaskCreationOptions)
+M:System.Threading.Tasks.Task`1.#ctor(System.Func{System.Object,`0},System.Object,System.Threading.Tasks.TaskCreationOptions)
+P:System.Threading.Tasks.Task`1.Factory
+
+# System.Threading.Tasks.TaskFactory`1: each member makes a task whose result is what one delegate returns, set once
+# (FutureFactory.cs 507-536, Future.cs 490-496). What it is given of other tasks is judged by their own type parameters.
+M:System.Threading.Tasks.TaskFactory`1.#ctor
+M:System.Threading.Tasks.TaskFactory`1.#ctor(System.Threading.CancellationToken)
+M:System.Threading.Tasks.TaskFactory`1.#ctor(System.Threading.CancellationToken,System.Threading.Tasks.TaskCreationOptions,System.Threading.Tasks.TaskContinuationOptions,System.Threading.Tasks.TaskScheduler)
+M:System.Threading.Tasks.TaskFactory`1.#ctor(System.Threading.Tasks.TaskCreationOptions,System.Threading.Tasks.TaskContinuationOptions)
+M:System.Threading.Tasks.TaskFactory`1.#ctor(System.Threading.Tasks.TaskScheduler)
+P:System.Threading.Tasks.TaskFactory`1.CancellationToken
+P:System.Threading.Tasks.TaskFactory`1.ContinuationOptions
+P:System.Threading.Tasks.TaskFactory`1.CreationOptions
+P:System.Threading.Tasks.TaskFactory`1.Scheduler
+M:System.Threading.Tasks.TaskFactory`1.StartNew(System.Func{`0})
+M:System.Threading.Tasks.TaskFactory`1.StartNew(System.Func{`0},System.Threading.CancellationToken)
+M:System.Threading.Tasks.TaskFactory`1.StartNew(System.Func{`0},System.Threading.CancellationToken,System.Threading.Tasks.TaskCreationOptions,System.Threading.Tasks.TaskScheduler)
+M:System.Threading.Tasks.TaskFactory`1.StartNew(System.Func{`0},System.Threading.Tasks.TaskCreationOptions)
+M:System.Threading.Tasks.TaskFactory`1.StartNew(System.Func{System.Object,`0},System.Object)
+M:System.Threading.Tasks.TaskFactory`1.StartNew(System.Func{System.Object,`0},System.Object,System.Threading.CancellationToken)
+M:System.Threading.Tasks.TaskFactory`1.StartNew(System.Func{System.Object,`0},System.Object,System.Threading.CancellationToken,System.Threading.Tasks.TaskCreationOptions,System.Threading.Tasks.TaskScheduler)
+M:System.Threading.Tasks.TaskFactory`1.StartNew(System.Func{System.Object,`0},System.Object,System.Threading.Tasks.TaskCreationOptions)
+M:System.Threading.Tasks.TaskFactory`1.ContinueWhenAll(System.Threading.Tasks.Task[],System.Func{System.Threading.Tasks.Task[],`0})
+M:System.Threading.Tasks.TaskFactory`1.ContinueWhenAll(System.Threading.Tasks.Task[],System.Func{System.Threading.Tasks.Task[],`0},System.Threading.CancellationToken)
+M:System.Threading.Tasks.TaskFactory`1.ContinueWhenAll(System.Threading.Tasks.Task[],System.Func{System.Threading.Tasks.Task[],`0},System.Threading.CancellationToken,System.Threading.Tasks.TaskContinuationOptions,System.Threading.Tasks.TaskScheduler)
+M:System.Threading.Tasks.TaskFactory`1.ContinueWhenAll(System.Threading.Tasks.Task[],System.Func{System.Threading.Tasks.Task[],`0},System.Threading.Tasks.TaskContinuationOptions)
+M:System.Threading.Tasks.TaskFactory`1.ContinueWhenAll``1(System.Threading.Tasks.Task{``0}[],System.Func{System.Threading.Tasks.Task{``0}[],`0});for=TResult
+M:System.Threading.Tasks.TaskFactory`1.ContinueWhenAll``1(System.Threading.Tasks.Task{``0}[],System.Func{System.Threading.Tasks.Task{``0}[],`0},System.Threading.CancellationToken);for=TResult
+M:System.Threading.Tasks.TaskFactory`1.ContinueWhenAll``1(System.Threading.Tasks.Task{``0}[],System.Func{System.Threading.Tasks.Task{``0}[],`0},System.Threading.CancellationToken,System.Threading.Tasks.TaskContinuationOptions,System.Threading.Tasks.TaskScheduler);for=TResult
+M:System.Threading.Tasks.TaskFactory`1.ContinueWhenAll``1(System.Threading.Tasks.Task{``0}[],System.Func{System.Threading.Tasks.Task{``0}[],`0},System.Threading.Tasks.TaskContinuationOptions);for=TResult
+M:System.Threading.Tasks.TaskFactory`1.ContinueWhenAny(System.Threading.Tasks.Task[],System.Func{System.Threading.Tasks.Task,`0})
+M:System.Threading.Tasks.TaskFactory`1.ContinueWhenAny(System.Threading.Tasks.Task[],System.Func{System.Threading.Tasks.Task,`0},System.Threading.CancellationToken)
+M:System.Threading.Tasks.TaskFactory`1.ContinueWhenAny(System.Threading.Tasks.Task[],System.Func{System.Threading.Tasks.Task,`0},System.Threading.CancellationToken,System.Threading.Tasks.TaskContinuationOptions,System.Threading.Tasks.TaskScheduler)
+M:System.Threading.Tasks.TaskFactory`1.ContinueWhenAny(System.Threading.Tasks.Task[],System.Func{System.Threading.Tasks.Task,`0},System.Threading.Tasks.TaskContinuationOptions)
+M:System.Threading.Tasks.TaskFactory`1.ContinueWhenAny``1(System.Threading.Tasks.Task{``0}[],System.Func{System.Threading.Tasks.Task{``0},`0});for=TResult
+M:System.Threading.Tasks.TaskFactory`1.ContinueWhenAny``1(System.Threading.Tasks.Task{``0}[],System.Func{System.Threading.Tasks.Task{``0},`0},System.Threading.CancellationToken);for=TResult
+M:System.Threading.Tasks.TaskFactory`1.ContinueWhenAny``1(System.Threading.Tasks.Task{``0}[],System.Func{System.Threading.Tasks.Task{``0},`0},System.Threading.CancellationToken,System.Threading.Tasks.TaskContinuationOptions,System.Threading.Tasks.TaskScheduler);for=TResult
+M:System.Threading.Tasks.TaskFactory`1.ContinueWhenAny``1(System.Threading.Tasks.Task{``0}[],System.Func{System.Threading.Tasks.Task{``0},`0},System.Threading.Tasks.TaskContinuationOptions);for=TResult
+M:System.Threading.Tasks.TaskFactory`1.FromAsync(System.Func{System.AsyncCallback,System.Object,System.IAsyncResult},System.Func{System.IAsyncResult,`0},System.Object)
+M:System.Threading.Tasks.TaskFactory`1.FromAsync(System.Func{System.AsyncCallback,System.Object,System.IAsyncResult},System.Func{System.IAsyncResult,`0},System.Object,System.Threading.Tasks.TaskCreationOptions)
+M:System.Threading.Tasks.TaskFactory`1.FromAsync(System.IAsyncResult,System.Func{System.IAsyncResult,`0})
+M:System.Threading.Tasks.TaskFactory`1.FromAsync(System.IAsyncResult,System.Func{System.IAsyncResult,`0},System.Threading.Tasks.TaskCreationOptions)
+M:System.Threading.Tasks.TaskFactory`1.FromAsync(System.IAsyncResult,System.Func{System.IAsyncResult,`0},System.Threading.Tasks.TaskCreationOptions,System.Threading.Tasks.TaskScheduler)
+M:System.Threading.Tasks.TaskFactory`1.FromAsync``1(System.Func{``0,System.AsyncCallback,System.Object,System.IAsyncResult},System.Func{System.IAsyncResult,`0},``0,System.Object);for=TResult
+M:System.Threading.Tasks.TaskFactory`1.FromAsync``1(System.Func{``0,System.AsyncCallback,System.Object,System.IAsyncResult},System.Func{System.IAsyncResult,`0},``0,System.Object,System.Threading.Tasks.TaskCreationOptions);for=TResult
+M:System.Threading.Tasks.TaskFactory`1.FromAsync``2(System.Func{``0,``1,System.AsyncCallback,System.Object,System.IAsyncResult},System.Func{System.IAsyncResult,`0},``0,``1,System.Object);for=TResult
+M:System.Threading.Tasks.TaskFactory`1.FromAsync``2(System.Func{``0,``1,System.AsyncCallback,System.Object,System.IAsyncResult},System.Func{System.IAsyncResult,`0},``0,``1,System.Object,System.Threading.Tasks.TaskCreationOptions);for=TResult
+M:System.Threading.Tasks.TaskFactory`1.FromAsync``3(System.Func{``0,``1,``2,System.AsyncCallback,System.Object,System.IAsyncResult},System.Func{System.IAsyncResult,`0},``0,``1,``2,System.Object);for=TResult
+M:System.Threading.Tasks.TaskFactory`1.FromAsync``3(System.Func{``0,``1,``2,System.AsyncCallback,System.Object,System.IAsyncResult},System.Func{System.IAsyncResult,`0},``0,``1,``2,System.Object,System.Threading.Tasks.TaskCreationOptions);for=TResult
+
+# System.Threading.Tasks.Task (generic statics)
+M:System.Threading.Tasks.Task.FromResult``1(``0)
+M:System.Threading.Tasks.Task.FromCanceled``1(System.Threading.CancellationToken)
+M:System.Threading.Tasks.Task.FromException``1(System.Exception)
+# Run keeps the delegate in the task until it has run. It is not marked "borrows".
+M:System.Threading.Tasks.Task.Run``1(System.Func{``0})
+M:System.Threading.Tasks.Task.Run``1(System.Func{``0},System.Threading.CancellationToken)
+
+# System.Runtime.CompilerServices.TaskAwaiter`1
+P:System.Runtime.CompilerServices.TaskAwaiter`1.IsCompleted
+M:System.Runtime.CompilerServices.TaskAwaiter`1.GetResult
+M:System.Runtime.CompilerServices.TaskAwaiter`1.OnCompleted(System.Action)
+M:System.Runtime.CompilerServices.TaskAwaiter`1.UnsafeOnCompleted(System.Action)
+
+# System.Runtime.CompilerServices.ConfiguredTaskAwaitable`1 and its awaiter
+M:System.Runtime.CompilerServices.ConfiguredTaskAwaitable`1.GetAwaiter
+P:System.Runtime.CompilerServices.ConfiguredTaskAwaitable`1.ConfiguredTaskAwaiter.IsCompleted
+M:System.Runtime.CompilerServices.ConfiguredTaskAwaitable`1.ConfiguredTaskAwaiter.GetResult
+M:System.Runtime.CompilerServices.ConfiguredTaskAwaitable`1.ConfiguredTaskAwaiter.OnCompleted(System.Action)
+M:System.Runtime.CompilerServices.ConfiguredTaskAwaitable`1.ConfiguredTaskAwaiter.UnsafeOnCompleted(System.Action)
+
+# System.Threading.Tasks.ValueTask`1
+M:System.Threading.Tasks.ValueTask`1.#ctor(`0)
+M:System.Threading.Tasks.ValueTask`1.#ctor(System.Threading.Tasks.Task{`0})
+# new: the value task is the one handle to the result of that source and token; the source itself stays stored
+M:System.Threading.Tasks.ValueTask`1.#ctor(System.Threading.Tasks.Sources.IValueTaskSource{`0},System.Int16);new
+M:System.Threading.Tasks.ValueTask`1.AsTask
+M:System.Threading.Tasks.ValueTask`1.Preserve
+P:System.Threading.Tasks.ValueTask`1.IsCompleted
+P:System.Threading.Tasks.ValueTask`1.IsCompletedSuccessfully
+P:System.Threading.Tasks.ValueTask`1.IsFaulted
+P:System.Threading.Tasks.ValueTask`1.IsCanceled
+P:System.Threading.Tasks.ValueTask`1.Result
+M:System.Threading.Tasks.ValueTask`1.GetAwaiter
+M:System.Threading.Tasks.ValueTask`1.ConfigureAwait(System.Boolean)
+
+# System.Threading.Tasks.ValueTask (generic statics)
+M:System.Threading.Tasks.ValueTask.FromResult``1(``0)
+M:System.Threading.Tasks.ValueTask.FromCanceled``1(System.Threading.CancellationToken)
+M:System.Threading.Tasks.ValueTask.FromException``1(System.Exception)
+
+# System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore`1
+# GetResult has no marker on purpose: the result stays in the core until Reset, so a by-value read from a stored core is a copy.
+P:System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore`1.RunContinuationsAsynchronously
+P:System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore`1.Version
+M:System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore`1.Reset
+M:System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore`1.SetResult(`0)
+M:System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore`1.SetException(System.Exception)
+M:System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore`1.GetStatus(System.Int16)
+M:System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore`1.GetResult(System.Int16)
+M:System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore`1.OnCompleted(System.Action{System.Object},System.Object,System.Int16,System.Threading.Tasks.Sources.ValueTaskSourceOnCompletedFlags)
+
+# System.Runtime.CompilerServices.ValueTaskAwaiter`1
+P:System.Runtime.CompilerServices.ValueTaskAwaiter`1.IsCompleted
+M:System.Runtime.CompilerServices.ValueTaskAwaiter`1.GetResult
+M:System.Runtime.CompilerServices.ValueTaskAwaiter`1.OnCompleted(System.Action)
+M:System.Runtime.CompilerServices.ValueTaskAwaiter`1.UnsafeOnCompleted(System.Action)
+
+# System.Runtime.CompilerServices.ConfiguredValueTaskAwaitable`1 and its awaiter
+M:System.Runtime.CompilerServices.ConfiguredValueTaskAwaitable`1.GetAwaiter
+P:System.Runtime.CompilerServices.ConfiguredValueTaskAwaitable`1.ConfiguredValueTaskAwaiter.IsCompleted
+M:System.Runtime.CompilerServices.ConfiguredValueTaskAwaitable`1.ConfiguredValueTaskAwaiter.GetResult
+M:System.Runtime.CompilerServices.ConfiguredValueTaskAwaitable`1.ConfiguredValueTaskAwaiter.OnCompleted(System.Action)
+M:System.Runtime.CompilerServices.ConfiguredValueTaskAwaitable`1.ConfiguredValueTaskAwaiter.UnsafeOnCompleted(System.Action)
+
+# System.Threading.Tasks.Sources.IValueTaskSource`1
+M:System.Threading.Tasks.Sources.IValueTaskSource`1.GetResult(System.Int16)
+M:System.Threading.Tasks.Sources.IValueTaskSource`1.GetStatus(System.Int16)
+M:System.Threading.Tasks.Sources.IValueTaskSource`1.OnCompleted(System.Action{System.Object},System.Object,System.Int16,System.Threading.Tasks.Sources.ValueTaskSourceOnCompletedFlags)
+
+# System.Threading.Tasks.TaskCompletionSource`1
+M:System.Threading.Tasks.TaskCompletionSource`1.#ctor
+M:System.Threading.Tasks.TaskCompletionSource`1.#ctor(System.Threading.Tasks.TaskCreationOptions)
+M:System.Threading.Tasks.TaskCompletionSource`1.#ctor(System.Object)
+M:System.Threading.Tasks.TaskCompletionSource`1.#ctor(System.Object,System.Threading.Tasks.TaskCreationOptions)
+P:System.Threading.Tasks.TaskCompletionSource`1.Task;owned  # the task belongs to the source alone, and nothing else hands it out
+M:System.Threading.Tasks.TaskCompletionSource`1.SetResult(`0)
+M:System.Threading.Tasks.TaskCompletionSource`1.TrySetResult(`0)
+M:System.Threading.Tasks.TaskCompletionSource`1.SetException(System.Exception)
+M:System.Threading.Tasks.TaskCompletionSource`1.SetException(System.Collections.Generic.IEnumerable{System.Exception})
+M:System.Threading.Tasks.TaskCompletionSource`1.TrySetException(System.Exception)
+M:System.Threading.Tasks.TaskCompletionSource`1.TrySetException(System.Collections.Generic.IEnumerable{System.Exception})
+M:System.Threading.Tasks.TaskCompletionSource`1.SetCanceled
+M:System.Threading.Tasks.TaskCompletionSource`1.SetCanceled(System.Threading.CancellationToken)
+M:System.Threading.Tasks.TaskCompletionSource`1.TrySetCanceled
+M:System.Threading.Tasks.TaskCompletionSource`1.TrySetCanceled(System.Threading.CancellationToken)
+
+# ============================================================================
+# Spans, memory and arrays
+# ============================================================================
+
+# System.Span`1
+M:System.Span`1.#ctor(`0[])
+M:System.Span`1.#ctor(`0[],System.Int32,System.Int32)
+M:System.Span`1.#ctor(System.Void*,System.Int32)
+M:System.Span`1.#ctor(`0@)
+P:System.Span`1.Item(System.Int32)
+P:System.Span`1.Length
+P:System.Span`1.IsEmpty
+P:System.Span`1.Empty
+M:System.Span`1.op_Equality(System.Span{`0},System.Span{`0});borrows
+M:System.Span`1.op_Inequality(System.Span{`0},System.Span{`0});borrows
+M:System.Span`1.op_Implicit(`0[])~System.Span{`0}
+M:System.Span`1.op_Implicit(System.ArraySegment{`0})~System.Span{`0}
+M:System.Span`1.op_Implicit(System.Span{`0})~System.ReadOnlySpan{`0}
+M:System.Span`1.GetEnumerator
+M:System.Span`1.Enumerator.MoveNext
+P:System.Span`1.Enumerator.Current
+M:System.Span`1.GetPinnableReference
+M:System.Span`1.Clear
+M:System.Span`1.Slice(System.Int32)
+M:System.Span`1.Slice(System.Int32,System.Int32)
+M:System.Span`1.ToString
+
+# System.ReadOnlySpan`1
+M:System.ReadOnlySpan`1.#ctor(`0[])
+M:System.ReadOnlySpan`1.#ctor(`0[],System.Int32,System.Int32)
+M:System.ReadOnlySpan`1.#ctor(System.Void*,System.Int32)
+M:System.ReadOnlySpan`1.#ctor(`0@)
+P:System.ReadOnlySpan`1.Item(System.Int32)
+P:System.ReadOnlySpan`1.Length
+P:System.ReadOnlySpan`1.IsEmpty
+P:System.ReadOnlySpan`1.Empty
+M:System.ReadOnlySpan`1.op_Equality(System.ReadOnlySpan{`0},System.ReadOnlySpan{`0});borrows
+M:System.ReadOnlySpan`1.op_Inequality(System.ReadOnlySpan{`0},System.ReadOnlySpan{`0});borrows
+M:System.ReadOnlySpan`1.op_Implicit(`0[])~System.ReadOnlySpan{`0}
+M:System.ReadOnlySpan`1.op_Implicit(System.ArraySegment{`0})~System.ReadOnlySpan{`0}
+M:System.ReadOnlySpan`1.GetEnumerator
+M:System.ReadOnlySpan`1.Enumerator.MoveNext
+P:System.ReadOnlySpan`1.Enumerator.Current
+M:System.ReadOnlySpan`1.GetPinnableReference
+M:System.ReadOnlySpan`1.Slice(System.Int32)
+M:System.ReadOnlySpan`1.Slice(System.Int32,System.Int32)
+M:System.ReadOnlySpan`1.ToString
+
+# System.Memory`1
+M:System.Memory`1.#ctor(`0[])
+M:System.Memory`1.#ctor(`0[],System.Int32,System.Int32)
+M:System.Memory`1.op_Implicit(`0[])~System.Memory{`0}
+M:System.Memory`1.op_Implicit(System.ArraySegment{`0})~System.Memory{`0}
+M:System.Memory`1.op_Implicit(System.Memory{`0})~System.ReadOnlyMemory{`0}
+P:System.Memory`1.Empty
+P:System.Memory`1.Length
+P:System.Memory`1.IsEmpty
+M:System.Memory`1.Slice(System.Int32)
+M:System.Memory`1.Slice(System.Int32,System.Int32)
+P:System.Memory`1.Span
+M:System.Memory`1.Pin
+M:System.Memory`1.Equals(System.Memory{`0});borrows
+M:System.Memory`1.GetHashCode
+M:System.Memory`1.ToString
+
+# System.ReadOnlyMemory`1
+M:System.ReadOnlyMemory`1.#ctor(`0[])
+M:System.ReadOnlyMemory`1.#ctor(`0[],System.Int32,System.Int32)
+M:System.ReadOnlyMemory`1.op_Implicit(`0[])~System.ReadOnlyMemory{`0}
+M:System.ReadOnlyMemory`1.op_Implicit(System.ArraySegment{`0})~System.ReadOnlyMemory{`0}
+P:System.ReadOnlyMemory`1.Empty
+P:System.ReadOnlyMemory`1.Length
+P:System.ReadOnlyMemory`1.IsEmpty
+M:System.ReadOnlyMemory`1.Slice(System.Int32)
+M:System.ReadOnlyMemory`1.Slice(System.Int32,System.Int32)
+P:System.ReadOnlyMemory`1.Span
+M:System.ReadOnlyMemory`1.Pin
+M:System.ReadOnlyMemory`1.Equals(System.ReadOnlyMemory{`0});borrows
+M:System.ReadOnlyMemory`1.GetHashCode
+M:System.ReadOnlyMemory`1.ToString
+
+# System.ArraySegment`1
+M:System.ArraySegment`1.#ctor(`0[])
+M:System.ArraySegment`1.#ctor(`0[],System.Int32,System.Int32)
+P:System.ArraySegment`1.Empty
+P:System.ArraySegment`1.Array
+P:System.ArraySegment`1.Offset
+P:System.ArraySegment`1.Count
+P:System.ArraySegment`1.Item(System.Int32)
+M:System.ArraySegment`1.GetEnumerator
+M:System.ArraySegment`1.Enumerator.MoveNext
+P:System.ArraySegment`1.Enumerator.Current
+M:System.ArraySegment`1.Enumerator.Dispose
+M:System.ArraySegment`1.Slice(System.Int32)
+M:System.ArraySegment`1.Slice(System.Int32,System.Int32)
+M:System.ArraySegment`1.Equals(System.ArraySegment{`0});borrows
+M:System.ArraySegment`1.GetHashCode
+M:System.ArraySegment`1.op_Equality(System.ArraySegment{`0},System.ArraySegment{`0});borrows
+M:System.ArraySegment`1.op_Inequality(System.ArraySegment{`0},System.ArraySegment{`0});borrows
+M:System.ArraySegment`1.op_Implicit(`0[])~System.ArraySegment{`0}
+
+# System.MemoryExtensions
+M:System.MemoryExtensions.AsSpan``1(``0[])
+M:System.MemoryExtensions.AsSpan``1(``0[],System.Int32)
+M:System.MemoryExtensions.AsSpan``1(``0[],System.Index)
+M:System.MemoryExtensions.AsSpan``1(``0[],System.Range)
+M:System.MemoryExtensions.AsSpan``1(``0[],System.Int32,System.Int32)
+M:System.MemoryExtensions.AsSpan``1(System.ArraySegment{``0})
+M:System.MemoryExtensions.AsSpan``1(System.ArraySegment{``0},System.Int32)
+M:System.MemoryExtensions.AsSpan``1(System.ArraySegment{``0},System.Index)
+M:System.MemoryExtensions.AsSpan``1(System.ArraySegment{``0},System.Int32,System.Int32)
+M:System.MemoryExtensions.AsSpan``1(System.ArraySegment{``0},System.Range)
+M:System.MemoryExtensions.AsMemory``1(``0[])
+M:System.MemoryExtensions.AsMemory``1(``0[],System.Int32)
+M:System.MemoryExtensions.AsMemory``1(``0[],System.Index)
+M:System.MemoryExtensions.AsMemory``1(``0[],System.Int32,System.Int32)
+M:System.MemoryExtensions.AsMemory``1(``0[],System.Range)
+M:System.MemoryExtensions.AsMemory``1(System.ArraySegment{``0})
+M:System.MemoryExtensions.AsMemory``1(System.ArraySegment{``0},System.Int32)
+M:System.MemoryExtensions.AsMemory``1(System.ArraySegment{``0},System.Int32,System.Int32)
+M:System.MemoryExtensions.Overlaps``1(System.Span{``0},System.ReadOnlySpan{``0});borrows
+M:System.MemoryExtensions.Overlaps``1(System.Span{``0},System.ReadOnlySpan{``0},System.Int32@);borrows
+M:System.MemoryExtensions.Overlaps``1(System.ReadOnlySpan{``0},System.ReadOnlySpan{``0});borrows
+M:System.MemoryExtensions.Overlaps``1(System.ReadOnlySpan{``0},System.ReadOnlySpan{``0},System.Int32@);borrows
+M:System.MemoryExtensions.Reverse``1(System.Span{``0});borrows
+
+# System.Array (members used on arrays)
+P:System.Array.Length
+P:System.Array.LongLength
+P:System.Array.Rank
+M:System.Array.GetLength(System.Int32)
+M:System.Array.GetLongLength(System.Int32)
+M:System.Array.GetLowerBound(System.Int32)
+M:System.Array.GetUpperBound(System.Int32)
+M:System.Array.Empty``1
+M:System.Array.Clear(System.Array)
+M:System.Array.Clear(System.Array,System.Int32,System.Int32)
+M:System.Array.Reverse``1(``0[]);borrows
+M:System.Array.Reverse``1(``0[],System.Int32,System.Int32);borrows
+
+# System.GC
+M:System.GC.AllocateArray``1(System.Int32,System.Boolean);new
+M:System.GC.AllocateUninitializedArray``1(System.Int32,System.Boolean);new
+
+# System.Runtime.InteropServices.MemoryMarshal
+M:System.Runtime.InteropServices.MemoryMarshal.GetReference``1(System.Span{``0})
+M:System.Runtime.InteropServices.MemoryMarshal.GetReference``1(System.ReadOnlySpan{``0})
+M:System.Runtime.InteropServices.MemoryMarshal.GetArrayDataReference``1(``0[])
+M:System.Runtime.InteropServices.MemoryMarshal.CreateSpan``1(``0@,System.Int32)
+M:System.Runtime.InteropServices.MemoryMarshal.CreateReadOnlySpan``1(``0@,System.Int32)
+M:System.Runtime.InteropServices.MemoryMarshal.AsMemory``1(System.ReadOnlyMemory{``0})
+M:System.Runtime.InteropServices.MemoryMarshal.TryGetArray``1(System.ReadOnlyMemory{``0},System.ArraySegment{``0}@)
+M:System.Runtime.InteropServices.MemoryMarshal.TryGetMemoryManager``2(System.ReadOnlyMemory{``0},``1@)
+M:System.Runtime.InteropServices.MemoryMarshal.TryGetMemoryManager``2(System.ReadOnlyMemory{``0},``1@,System.Int32@,System.Int32@)
+M:System.Runtime.InteropServices.MemoryMarshal.CreateFromPinnedArray``1(``0[],System.Int32,System.Int32)
+
+# System.Runtime.InteropServices.CollectionsMarshal
+M:System.Runtime.InteropServices.CollectionsMarshal.AsSpan``1(System.Collections.Generic.List{``0})
+M:System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrNullRef``2(System.Collections.Generic.Dictionary{``0,``1},``0);for=TValue
+M:System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrNullRef``3(System.Collections.Generic.Dictionary{``0,``1}.AlternateLookup{``2},``2);for=TValue  # net9+
+M:System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault``2(System.Collections.Generic.Dictionary{``0,``1},``0,System.Boolean@);for=TValue
+M:System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault``3(System.Collections.Generic.Dictionary{``0,``1}.AlternateLookup{``2},``2,System.Boolean@);for=TValue  # net9+
+
+# System.Runtime.InteropServices.ImmutableCollectionsMarshal
+M:System.Runtime.InteropServices.ImmutableCollectionsMarshal.AsImmutableArray``1(``0[])
+M:System.Runtime.InteropServices.ImmutableCollectionsMarshal.AsArray``1(System.Collections.Immutable.ImmutableArray{``0})
+M:System.Runtime.InteropServices.ImmutableCollectionsMarshal.AsMemory``1(System.Collections.Immutable.ImmutableArray{``0}.Builder)  # net10+
+
+# System.Runtime.InteropServices.SequenceMarshal
+M:System.Runtime.InteropServices.SequenceMarshal.TryGetReadOnlySequenceSegment``1(System.Buffers.ReadOnlySequence{``0},System.Buffers.ReadOnlySequenceSegment{``0}@,System.Int32@,System.Buffers.ReadOnlySequenceSegment{``0}@,System.Int32@)
+M:System.Runtime.InteropServices.SequenceMarshal.TryGetArray``1(System.Buffers.ReadOnlySequence{``0},System.ArraySegment{``0}@)
+M:System.Runtime.InteropServices.SequenceMarshal.TryGetReadOnlyMemory``1(System.Buffers.ReadOnlySequence{``0},System.ReadOnlyMemory{``0}@)
+
+# System.Runtime.InteropServices.Marshal (generic members)
+M:System.Runtime.InteropServices.Marshal.SizeOf``1
+M:System.Runtime.InteropServices.Marshal.OffsetOf``1(System.String)
+
+# System.Runtime.CompilerServices.Unsafe
+M:System.Runtime.CompilerServices.Unsafe.SizeOf``1
+M:System.Runtime.CompilerServices.Unsafe.Add``1(``0@,System.Int32)
+M:System.Runtime.CompilerServices.Unsafe.Add``1(``0@,System.IntPtr)
+M:System.Runtime.CompilerServices.Unsafe.Add``1(``0@,System.UIntPtr)
+M:System.Runtime.CompilerServices.Unsafe.Add``1(System.Void*,System.Int32)
+M:System.Runtime.CompilerServices.Unsafe.AddByteOffset``1(``0@,System.IntPtr)
+M:System.Runtime.CompilerServices.Unsafe.AddByteOffset``1(``0@,System.UIntPtr)
+M:System.Runtime.CompilerServices.Unsafe.Subtract``1(``0@,System.Int32)
+M:System.Runtime.CompilerServices.Unsafe.Subtract``1(``0@,System.IntPtr)
+M:System.Runtime.CompilerServices.Unsafe.Subtract``1(``0@,System.UIntPtr)
+M:System.Runtime.CompilerServices.Unsafe.Subtract``1(System.Void*,System.Int32)
+M:System.Runtime.CompilerServices.Unsafe.SubtractByteOffset``1(``0@,System.IntPtr)
+M:System.Runtime.CompilerServices.Unsafe.SubtractByteOffset``1(``0@,System.UIntPtr)
+M:System.Runtime.CompilerServices.Unsafe.AreSame``1(``0@,``0@)
+M:System.Runtime.CompilerServices.Unsafe.IsAddressGreaterThan``1(``0@,``0@)
+M:System.Runtime.CompilerServices.Unsafe.IsAddressLessThan``1(``0@,``0@)
+M:System.Runtime.CompilerServices.Unsafe.IsAddressGreaterThanOrEqualTo``1(``0@,``0@)
+M:System.Runtime.CompilerServices.Unsafe.IsAddressLessThanOrEqualTo``1(``0@,``0@)
+M:System.Runtime.CompilerServices.Unsafe.ByteOffset``1(``0@,``0@)
+M:System.Runtime.CompilerServices.Unsafe.AsRef``1(System.Void*)
+M:System.Runtime.CompilerServices.Unsafe.AsRef``1(``0@)
+M:System.Runtime.CompilerServices.Unsafe.NullRef``1
+M:System.Runtime.CompilerServices.Unsafe.IsNullRef``1(``0@)
+# Unbox returns a reference into the box: the value is used in place.
+M:System.Runtime.CompilerServices.Unsafe.Unbox``1(System.Object)
+
+# System.Runtime.CompilerServices.RuntimeHelpers (generic members)
+M:System.Runtime.CompilerServices.RuntimeHelpers.IsReferenceOrContainsReferences``1
+
+# System.Nullable (static helper)
+M:System.Nullable.GetValueRefOrDefaultRef``1(System.Nullable{``0}@)
+
+# System.Buffers.ArrayPool`1
+P:System.Buffers.ArrayPool`1.Shared
+M:System.Buffers.ArrayPool`1.Create
+M:System.Buffers.ArrayPool`1.Create(System.Int32,System.Int32)
+M:System.Buffers.ArrayPool`1.Rent(System.Int32);new
+# Return keeps the array: the pool hands it to a later Rent. It is not marked "borrows".
+M:System.Buffers.ArrayPool`1.Return(`0[],System.Boolean)
+
+# System.Buffers.MemoryPool`1 and IMemoryOwner`1
+P:System.Buffers.MemoryPool`1.Shared
+M:System.Buffers.MemoryPool`1.Rent(System.Int32);new
+P:System.Buffers.MemoryPool`1.MaxBufferSize
+M:System.Buffers.MemoryPool`1.Dispose
+P:System.Buffers.IMemoryOwner`1.Memory
+
+# System.Buffers.IBufferWriter`1: hands out memory of the writer to write into, which is a view. An entry for a member of an
+# interface is a statement about every implementation of it.
+M:System.Buffers.IBufferWriter`1.Advance(System.Int32)
+M:System.Buffers.IBufferWriter`1.GetMemory(System.Int32)
+M:System.Buffers.IBufferWriter`1.GetSpan(System.Int32)
+
+# System.Buffers.ArrayBufferWriter`1: grows by moving what was written into a larger array (Array.Resize).
+M:System.Buffers.ArrayBufferWriter`1.#ctor
+M:System.Buffers.ArrayBufferWriter`1.#ctor(System.Int32)
+M:System.Buffers.ArrayBufferWriter`1.Advance(System.Int32)
+M:System.Buffers.ArrayBufferWriter`1.Clear
+M:System.Buffers.ArrayBufferWriter`1.ResetWrittenCount
+M:System.Buffers.ArrayBufferWriter`1.GetMemory(System.Int32)
+M:System.Buffers.ArrayBufferWriter`1.GetSpan(System.Int32)
+P:System.Buffers.ArrayBufferWriter`1.Capacity
+P:System.Buffers.ArrayBufferWriter`1.FreeCapacity
+P:System.Buffers.ArrayBufferWriter`1.WrittenCount
+P:System.Buffers.ArrayBufferWriter`1.WrittenMemory
+P:System.Buffers.ArrayBufferWriter`1.WrittenSpan
+
+# System.Buffers.ReadOnlySequence`1, a view over memory or segments: every member hands out a view or a position.
+M:System.Buffers.ReadOnlySequence`1.#ctor(System.Buffers.ReadOnlySequenceSegment{`0},System.Int32,System.Buffers.ReadOnlySequenceSegment{`0},System.Int32)
+M:System.Buffers.ReadOnlySequence`1.#ctor(System.ReadOnlyMemory{`0})
+M:System.Buffers.ReadOnlySequence`1.#ctor(`0[])
+M:System.Buffers.ReadOnlySequence`1.#ctor(`0[],System.Int32,System.Int32)
+M:System.Buffers.ReadOnlySequence`1.GetEnumerator
+M:System.Buffers.ReadOnlySequence`1.GetOffset(System.SequencePosition)
+M:System.Buffers.ReadOnlySequence`1.GetPosition(System.Int64)
+M:System.Buffers.ReadOnlySequence`1.GetPosition(System.Int64,System.SequencePosition)
+M:System.Buffers.ReadOnlySequence`1.Slice(System.Int32,System.Int32)
+M:System.Buffers.ReadOnlySequence`1.Slice(System.Int32,System.SequencePosition)
+M:System.Buffers.ReadOnlySequence`1.Slice(System.Int64)
+M:System.Buffers.ReadOnlySequence`1.Slice(System.Int64,System.Int64)
+M:System.Buffers.ReadOnlySequence`1.Slice(System.Int64,System.SequencePosition)
+M:System.Buffers.ReadOnlySequence`1.Slice(System.SequencePosition)
+M:System.Buffers.ReadOnlySequence`1.Slice(System.SequencePosition,System.Int32)
+M:System.Buffers.ReadOnlySequence`1.Slice(System.SequencePosition,System.Int64)
+M:System.Buffers.ReadOnlySequence`1.Slice(System.SequencePosition,System.SequencePosition)
+M:System.Buffers.ReadOnlySequence`1.ToString
+M:System.Buffers.ReadOnlySequence`1.TryGet(System.SequencePosition@,System.ReadOnlyMemory{`0}@,System.Boolean)
+P:System.Buffers.ReadOnlySequence`1.End
+P:System.Buffers.ReadOnlySequence`1.First
+P:System.Buffers.ReadOnlySequence`1.FirstSpan
+P:System.Buffers.ReadOnlySequence`1.IsEmpty
+P:System.Buffers.ReadOnlySequence`1.IsSingleSegment
+P:System.Buffers.ReadOnlySequence`1.Length
+P:System.Buffers.ReadOnlySequence`1.Start
+M:System.Buffers.ReadOnlySequence`1.Enumerator.#ctor(System.Buffers.ReadOnlySequence{`0}@)
+M:System.Buffers.ReadOnlySequence`1.Enumerator.MoveNext
+P:System.Buffers.ReadOnlySequence`1.Enumerator.Current
+P:System.Buffers.ReadOnlySequenceSegment`1.Memory
+P:System.Buffers.ReadOnlySequenceSegment`1.Next
+P:System.Buffers.ReadOnlySequenceSegment`1.RunningIndex
+
+# System.Buffers.MemoryManager`1: hands out the memory that it manages, and pins it with a handle of its own at every call.
+M:System.Buffers.MemoryManager`1.GetSpan
+M:System.Buffers.MemoryManager`1.Pin(System.Int32);new
+M:System.Buffers.MemoryManager`1.Unpin
+P:System.Buffers.MemoryManager`1.Memory
+
+# ============================================================================
+# Atomic helpers (non-primitive structs are rejected at run time; these entries serve containers)
+# ============================================================================
+
+M:System.Threading.Interlocked.Exchange``1(``0@,``0);new
+M:System.Threading.Interlocked.CompareExchange``1(``0@,``0,``0)
+M:System.Threading.Volatile.Read``1(``0@)
+M:System.Threading.Volatile.Write``1(``0@,``0)
+
+# ============================================================================
+# Collections (basic members only)
+# ============================================================================
+
+# System.Collections.Generic.List`1
+M:System.Collections.Generic.List`1.#ctor
+M:System.Collections.Generic.List`1.#ctor(System.Int32)
+M:System.Collections.Generic.List`1.Add(`0)
+M:System.Collections.Generic.List`1.Insert(System.Int32,`0)
+M:System.Collections.Generic.List`1.RemoveAt(System.Int32)
+M:System.Collections.Generic.List`1.RemoveRange(System.Int32,System.Int32)
+M:System.Collections.Generic.List`1.Reverse
+M:System.Collections.Generic.List`1.Reverse(System.Int32,System.Int32)
+M:System.Collections.Generic.List`1.Clear
+P:System.Collections.Generic.List`1.Count
+P:System.Collections.Generic.List`1.Capacity
+P:System.Collections.Generic.List`1.Item(System.Int32)
+M:System.Collections.Generic.List`1.EnsureCapacity(System.Int32)
+M:System.Collections.Generic.List`1.TrimExcess
+M:System.Collections.Generic.List`1.GetEnumerator
+M:System.Collections.Generic.List`1.Enumerator.MoveNext
+P:System.Collections.Generic.List`1.Enumerator.Current
+M:System.Collections.Generic.List`1.Enumerator.Dispose
+
+# System.Collections.Generic.Stack`1
+M:System.Collections.Generic.Stack`1.#ctor
+M:System.Collections.Generic.Stack`1.#ctor(System.Int32)
+M:System.Collections.Generic.Stack`1.Push(`0)
+M:System.Collections.Generic.Stack`1.Pop;new
+M:System.Collections.Generic.Stack`1.TryPop(`0@);new
+M:System.Collections.Generic.Stack`1.Peek
+M:System.Collections.Generic.Stack`1.TryPeek(`0@)
+P:System.Collections.Generic.Stack`1.Count
+M:System.Collections.Generic.Stack`1.Clear
+M:System.Collections.Generic.Stack`1.GetEnumerator
+M:System.Collections.Generic.Stack`1.Enumerator.MoveNext
+P:System.Collections.Generic.Stack`1.Enumerator.Current
+M:System.Collections.Generic.Stack`1.Enumerator.Dispose
+M:System.Collections.Generic.Stack`1.EnsureCapacity(System.Int32)
+M:System.Collections.Generic.Stack`1.TrimExcess
+M:System.Collections.Generic.Stack`1.TrimExcess(System.Int32)
+P:System.Collections.Generic.Stack`1.Capacity
+
+# System.Collections.Generic.Queue`1
+M:System.Collections.Generic.Queue`1.#ctor
+M:System.Collections.Generic.Queue`1.#ctor(System.Int32)
+M:System.Collections.Generic.Queue`1.Enqueue(`0)
+M:System.Collections.Generic.Queue`1.Dequeue;new
+M:System.Collections.Generic.Queue`1.TryDequeue(`0@);new
+M:System.Collections.Generic.Queue`1.Peek
+M:System.Collections.Generic.Queue`1.TryPeek(`0@)
+P:System.Collections.Generic.Queue`1.Count
+M:System.Collections.Generic.Queue`1.Clear
+M:System.Collections.Generic.Queue`1.GetEnumerator
+M:System.Collections.Generic.Queue`1.Enumerator.MoveNext
+P:System.Collections.Generic.Queue`1.Enumerator.Current
+M:System.Collections.Generic.Queue`1.Enumerator.Dispose
+M:System.Collections.Generic.Queue`1.EnsureCapacity(System.Int32)
+M:System.Collections.Generic.Queue`1.TrimExcess
+M:System.Collections.Generic.Queue`1.TrimExcess(System.Int32)
+P:System.Collections.Generic.Queue`1.Capacity
+
+# System.Collections.Generic.Dictionary`2 (safe for a non-copyable TValue only: lookups pass the key by value to the comparer)
+M:System.Collections.Generic.Dictionary`2.#ctor;for=TValue
+M:System.Collections.Generic.Dictionary`2.#ctor(System.Int32);for=TValue
+M:System.Collections.Generic.Dictionary`2.Add(`0,`1);for=TValue
+M:System.Collections.Generic.Dictionary`2.TryAdd(`0,`1);for=TValue
+M:System.Collections.Generic.Dictionary`2.Remove(`0);for=TValue
+M:System.Collections.Generic.Dictionary`2.Remove(`0,`1@);new;for=TValue
+M:System.Collections.Generic.Dictionary`2.TryGetValue(`0,`1@);for=TValue
+P:System.Collections.Generic.Dictionary`2.Item(`0);for=TValue
+M:System.Collections.Generic.Dictionary`2.ContainsKey(`0);for=TValue
+P:System.Collections.Generic.Dictionary`2.Count;for=TValue
+M:System.Collections.Generic.Dictionary`2.Clear;for=TValue
+M:System.Collections.Generic.Dictionary`2.GetEnumerator;for=TValue
+M:System.Collections.Generic.Dictionary`2.Enumerator.MoveNext;for=TValue
+P:System.Collections.Generic.Dictionary`2.Enumerator.Current;for=TValue
+M:System.Collections.Generic.Dictionary`2.Enumerator.Dispose;for=TValue
+
+# The keys of a dictionary: the collection and its enumerator read keys only, so no value is copied. It is how the values of
+# a dictionary are released one by one: snapshot the keys with a spread, '[.. map.Keys]', and take each value out with Remove.
+P:System.Collections.Generic.Dictionary`2.Keys;for=TValue
+M:System.Collections.Generic.Dictionary`2.KeyCollection.GetEnumerator;for=TValue
+P:System.Collections.Generic.Dictionary`2.KeyCollection.Count;for=TValue
+M:System.Collections.Generic.Dictionary`2.KeyCollection.Contains(`0);for=TValue
+M:System.Collections.Generic.Dictionary`2.KeyCollection.CopyTo(`0[],System.Int32);for=TValue
+M:System.Collections.Generic.Dictionary`2.KeyCollection.Enumerator.MoveNext;for=TValue
+P:System.Collections.Generic.Dictionary`2.KeyCollection.Enumerator.Current;for=TValue
+M:System.Collections.Generic.Dictionary`2.KeyCollection.Enumerator.Dispose;for=TValue
+M:System.Collections.Generic.Dictionary`2.#ctor(System.Collections.Generic.IEqualityComparer{`0});for=TValue
+M:System.Collections.Generic.Dictionary`2.#ctor(System.Int32,System.Collections.Generic.IEqualityComparer{`0});for=TValue
+P:System.Collections.Generic.Dictionary`2.Comparer;for=TValue
+P:System.Collections.Generic.Dictionary`2.Capacity;for=TValue
+M:System.Collections.Generic.Dictionary`2.EnsureCapacity(System.Int32);for=TValue
+M:System.Collections.Generic.Dictionary`2.TrimExcess;for=TValue
+M:System.Collections.Generic.Dictionary`2.TrimExcess(System.Int32);for=TValue
+M:System.Collections.Generic.Dictionary`2.GetAlternateLookup``1;for=TValue
+M:System.Collections.Generic.Dictionary`2.TryGetAlternateLookup``1(System.Collections.Generic.Dictionary{`0,`1}.AlternateLookup{``0}@);for=TValue
+P:System.Collections.Generic.Dictionary`2.AlternateLookup`1.Dictionary;for=TValue
+P:System.Collections.Generic.Dictionary`2.AlternateLookup`1.Item(`2);for=TValue
+M:System.Collections.Generic.Dictionary`2.AlternateLookup`1.ContainsKey(`2);for=TValue
+M:System.Collections.Generic.Dictionary`2.AlternateLookup`1.TryAdd(`2,`1);for=TValue
+M:System.Collections.Generic.Dictionary`2.AlternateLookup`1.TryGetValue(`2,`1@);for=TValue
+M:System.Collections.Generic.Dictionary`2.AlternateLookup`1.TryGetValue(`2,`0@,`1@);for=TValue
+M:System.Collections.Generic.Dictionary`2.AlternateLookup`1.Remove(`2);for=TValue
+M:System.Collections.Generic.Dictionary`2.AlternateLookup`1.Remove(`2,`0@,`1@);new;for=TValue
+
+# System.Collections.Generic.PriorityQueue`2 (safe for a non-copyable TElement only: the comparer is given priorities). The heap
+# moves elements within its array; what is dequeued is taken out.
+M:System.Collections.Generic.PriorityQueue`2.#ctor;for=TElement
+M:System.Collections.Generic.PriorityQueue`2.#ctor(System.Int32);for=TElement
+M:System.Collections.Generic.PriorityQueue`2.#ctor(System.Collections.Generic.IComparer{`1});for=TElement
+M:System.Collections.Generic.PriorityQueue`2.#ctor(System.Int32,System.Collections.Generic.IComparer{`1});for=TElement
+M:System.Collections.Generic.PriorityQueue`2.Enqueue(`0,`1);for=TElement
+M:System.Collections.Generic.PriorityQueue`2.Dequeue;new;for=TElement
+M:System.Collections.Generic.PriorityQueue`2.TryDequeue(`0@,`1@);new;for=TElement
+M:System.Collections.Generic.PriorityQueue`2.EnqueueDequeue(`0,`1);new;for=TElement
+M:System.Collections.Generic.PriorityQueue`2.DequeueEnqueue(`0,`1);new;for=TElement
+M:System.Collections.Generic.PriorityQueue`2.Peek;for=TElement
+M:System.Collections.Generic.PriorityQueue`2.TryPeek(`0@,`1@);for=TElement
+M:System.Collections.Generic.PriorityQueue`2.Clear;for=TElement
+M:System.Collections.Generic.PriorityQueue`2.EnsureCapacity(System.Int32);for=TElement
+M:System.Collections.Generic.PriorityQueue`2.TrimExcess;for=TElement
+P:System.Collections.Generic.PriorityQueue`2.Capacity;for=TElement
+P:System.Collections.Generic.PriorityQueue`2.Comparer;for=TElement
+P:System.Collections.Generic.PriorityQueue`2.Count;for=TElement
+P:System.Collections.Generic.PriorityQueue`2.UnorderedItems;for=TElement
+M:System.Collections.Generic.PriorityQueue`2.UnorderedItemsCollection.GetEnumerator;for=TElement
+P:System.Collections.Generic.PriorityQueue`2.UnorderedItemsCollection.Count;for=TElement
+M:System.Collections.Generic.PriorityQueue`2.UnorderedItemsCollection.Enumerator.MoveNext;for=TElement
+P:System.Collections.Generic.PriorityQueue`2.UnorderedItemsCollection.Enumerator.Current;for=TElement
+M:System.Collections.Generic.PriorityQueue`2.UnorderedItemsCollection.Enumerator.Dispose;for=TElement
+
+# System.Collections.Generic.LinkedList`1 and its node. A node holds its value until it is assigned again, also after it is
+# removed from the list. Find, FindLast, Contains and Remove(T) compare values and are not here.
+M:System.Collections.Generic.LinkedList`1.#ctor
+M:System.Collections.Generic.LinkedList`1.AddAfter(System.Collections.Generic.LinkedListNode{`0},`0)
+M:System.Collections.Generic.LinkedList`1.AddAfter(System.Collections.Generic.LinkedListNode{`0},System.Collections.Generic.LinkedListNode{`0})
+M:System.Collections.Generic.LinkedList`1.AddBefore(System.Collections.Generic.LinkedListNode{`0},`0)
+M:System.Collections.Generic.LinkedList`1.AddBefore(System.Collections.Generic.LinkedListNode{`0},System.Collections.Generic.LinkedListNode{`0})
+M:System.Collections.Generic.LinkedList`1.AddFirst(`0)
+M:System.Collections.Generic.LinkedList`1.AddFirst(System.Collections.Generic.LinkedListNode{`0})
+M:System.Collections.Generic.LinkedList`1.AddLast(`0)
+M:System.Collections.Generic.LinkedList`1.AddLast(System.Collections.Generic.LinkedListNode{`0})
+M:System.Collections.Generic.LinkedList`1.Clear
+M:System.Collections.Generic.LinkedList`1.Remove(System.Collections.Generic.LinkedListNode{`0})
+M:System.Collections.Generic.LinkedList`1.RemoveFirst
+M:System.Collections.Generic.LinkedList`1.RemoveLast
+P:System.Collections.Generic.LinkedList`1.Count
+P:System.Collections.Generic.LinkedList`1.First
+P:System.Collections.Generic.LinkedList`1.Last
+M:System.Collections.Generic.LinkedList`1.GetEnumerator
+M:System.Collections.Generic.LinkedList`1.Enumerator.MoveNext
+P:System.Collections.Generic.LinkedList`1.Enumerator.Current
+M:System.Collections.Generic.LinkedList`1.Enumerator.Dispose
+M:System.Collections.Generic.LinkedListNode`1.#ctor(`0)
+P:System.Collections.Generic.LinkedListNode`1.List
+P:System.Collections.Generic.LinkedListNode`1.Next
+P:System.Collections.Generic.LinkedListNode`1.Previous
+P:System.Collections.Generic.LinkedListNode`1.Value
+P:System.Collections.Generic.LinkedListNode`1.ValueRef
+
+# System.Collections.Generic.SortedList`2 (safe for a non-copyable TValue only): the keys and the values are two arrays, and only
+# the keys are searched. ContainsValue, IndexOfValue and Values compare or copy values and are not here.
+M:System.Collections.Generic.SortedList`2.#ctor;for=TValue
+M:System.Collections.Generic.SortedList`2.#ctor(System.Int32);for=TValue
+M:System.Collections.Generic.SortedList`2.#ctor(System.Collections.Generic.IComparer{`0});for=TValue
+M:System.Collections.Generic.SortedList`2.#ctor(System.Int32,System.Collections.Generic.IComparer{`0});for=TValue
+M:System.Collections.Generic.SortedList`2.Add(`0,`1);for=TValue
+M:System.Collections.Generic.SortedList`2.Clear;for=TValue
+M:System.Collections.Generic.SortedList`2.ContainsKey(`0);for=TValue
+M:System.Collections.Generic.SortedList`2.GetEnumerator;for=TValue
+M:System.Collections.Generic.SortedList`2.GetKeyAtIndex(System.Int32);for=TValue
+M:System.Collections.Generic.SortedList`2.GetValueAtIndex(System.Int32);for=TValue
+M:System.Collections.Generic.SortedList`2.IndexOfKey(`0);for=TValue
+M:System.Collections.Generic.SortedList`2.Remove(`0);for=TValue
+M:System.Collections.Generic.SortedList`2.RemoveAt(System.Int32);for=TValue
+M:System.Collections.Generic.SortedList`2.SetValueAtIndex(System.Int32,`1);for=TValue
+M:System.Collections.Generic.SortedList`2.TrimExcess;for=TValue
+M:System.Collections.Generic.SortedList`2.TryGetValue(`0,`1@);for=TValue
+P:System.Collections.Generic.SortedList`2.Capacity;for=TValue
+P:System.Collections.Generic.SortedList`2.Comparer;for=TValue
+P:System.Collections.Generic.SortedList`2.Count;for=TValue
+P:System.Collections.Generic.SortedList`2.Item(`0);for=TValue
+P:System.Collections.Generic.SortedList`2.Keys;for=TValue
+
+# System.Collections.Frozen.FrozenDictionary`2 (safe for a non-copyable TValue only): keys and values are two arrays, and only
+# the keys are compared. Making one copies every value of its source, so none of the ways to make one is here, and neither are
+# Values and CopyTo.
+M:System.Collections.Frozen.FrozenDictionary`2.ContainsKey(`0);for=TValue
+M:System.Collections.Frozen.FrozenDictionary`2.TryGetValue(`0,`1@);for=TValue
+M:System.Collections.Frozen.FrozenDictionary`2.GetValueRefOrNullRef(`0);for=TValue
+M:System.Collections.Frozen.FrozenDictionary`2.GetEnumerator;for=TValue
+M:System.Collections.Frozen.FrozenDictionary`2.Enumerator.MoveNext;for=TValue
+P:System.Collections.Frozen.FrozenDictionary`2.Enumerator.Current;for=TValue
+M:System.Collections.Frozen.FrozenDictionary`2.GetAlternateLookup``1;for=TValue
+M:System.Collections.Frozen.FrozenDictionary`2.TryGetAlternateLookup``1(System.Collections.Frozen.FrozenDictionary{`0,`1}.AlternateLookup{``0}@);for=TValue
+P:System.Collections.Frozen.FrozenDictionary`2.Comparer;for=TValue
+P:System.Collections.Frozen.FrozenDictionary`2.Count;for=TValue
+P:System.Collections.Frozen.FrozenDictionary`2.Empty;for=TValue
+P:System.Collections.Frozen.FrozenDictionary`2.Item(`0);for=TValue
+P:System.Collections.Frozen.FrozenDictionary`2.Keys;for=TValue
+M:System.Collections.Frozen.FrozenDictionary`2.AlternateLookup`1.ContainsKey(`2);for=TValue
+M:System.Collections.Frozen.FrozenDictionary`2.AlternateLookup`1.TryGetValue(`2,`1@);for=TValue
+P:System.Collections.Frozen.FrozenDictionary`2.AlternateLookup`1.Dictionary;for=TValue
+P:System.Collections.Frozen.FrozenDictionary`2.AlternateLookup`1.Item(`2);for=TValue
+
+# System.Runtime.CompilerServices.StrongBox`1: the constructors. Its value is a public field, which a list cannot name.
+M:System.Runtime.CompilerServices.StrongBox`1.#ctor
+M:System.Runtime.CompilerServices.StrongBox`1.#ctor(`0)
+
+# ============================================================================
+# Hand-over between tasks and threads (basic members only)
+# ============================================================================
+#
+# Every member here was read in the runtime source for what it does with a value. A write moves the value into one place: the
+# buffer, a reader that is waiting, or, in a bounded channel that drops, the callback for dropped items. A read takes it out, and
+# nothing is left behind that another read could hand out, so those are marked "new". A peek and an enumerator hand out a copy
+# of what the collection still holds, so they are listed with no marker and are reported on a stored collection.
+#
+# A write that fails has not taken the value: TryWrite and TryAdd return false, and WriteAsync and Add throw.
+#
+# A sequence that takes each element out as it is enumerated is marked "drains": ChannelReader`1.ReadAllAsync is an iterator
+# around WaitToReadAsync and TryRead, and BlockingCollection`1.GetConsumingEnumerable one around the TryTake of the collection
+# that it wraps. Nothing is left behind that a second enumeration could hand out again, so the sequence is a new container
+# whatever it was called on. An enumerator of such a sequence holds its current element until it moves on, like any other.
+#
+# Not here: what copies every element (ToArray, CopyTo, the constructors from a sequence, PushRange), and what compares values
+# with the default comparer, which boxes a copy of each (TryUpdate, TryRemove of a pair, AddOrUpdate).
+
+# System.Threading.Channels.Channel (generic statics)
+M:System.Threading.Channels.Channel.CreateUnbounded``1
+M:System.Threading.Channels.Channel.CreateUnbounded``1(System.Threading.Channels.UnboundedChannelOptions)
+M:System.Threading.Channels.Channel.CreateBounded``1(System.Int32)
+M:System.Threading.Channels.Channel.CreateBounded``1(System.Threading.Channels.BoundedChannelOptions)
+# The callback is given each item that the channel drops, once.
+M:System.Threading.Channels.Channel.CreateBounded``1(System.Threading.Channels.BoundedChannelOptions,System.Action{``0})
+
+# System.Threading.Channels.Channel`2 (Channel`1 adds nothing)
+P:System.Threading.Channels.Channel`2.Reader
+P:System.Threading.Channels.Channel`2.Writer
+M:System.Threading.Channels.Channel`2.op_Implicit(System.Threading.Channels.Channel{`0,`1})~System.Threading.Channels.ChannelReader{`1}
+M:System.Threading.Channels.Channel`2.op_Implicit(System.Threading.Channels.Channel{`0,`1})~System.Threading.Channels.ChannelWriter{`0}
+
+# System.Threading.Channels.ChannelReader`1
+M:System.Threading.Channels.ChannelReader`1.TryRead(`0@);new
+M:System.Threading.Channels.ChannelReader`1.ReadAsync(System.Threading.CancellationToken);new
+M:System.Threading.Channels.ChannelReader`1.TryPeek(`0@)
+M:System.Threading.Channels.ChannelReader`1.WaitToReadAsync(System.Threading.CancellationToken)
+M:System.Threading.Channels.ChannelReader`1.ReadAllAsync(System.Threading.CancellationToken);drains
+P:System.Threading.Channels.ChannelReader`1.Completion
+P:System.Threading.Channels.ChannelReader`1.Count
+P:System.Threading.Channels.ChannelReader`1.CanCount
+P:System.Threading.Channels.ChannelReader`1.CanPeek
+
+# System.Threading.Channels.ChannelWriter`1
+M:System.Threading.Channels.ChannelWriter`1.TryWrite(`0)
+M:System.Threading.Channels.ChannelWriter`1.WriteAsync(`0,System.Threading.CancellationToken)
+M:System.Threading.Channels.ChannelWriter`1.WaitToWriteAsync(System.Threading.CancellationToken)
+M:System.Threading.Channels.ChannelWriter`1.TryComplete(System.Exception)
+M:System.Threading.Channels.ChannelWriter`1.Complete(System.Exception)
+
+# System.Collections.Concurrent.ConcurrentQueue`1
+M:System.Collections.Concurrent.ConcurrentQueue`1.#ctor
+M:System.Collections.Concurrent.ConcurrentQueue`1.Enqueue(`0)
+M:System.Collections.Concurrent.ConcurrentQueue`1.TryDequeue(`0@);new
+M:System.Collections.Concurrent.ConcurrentQueue`1.TryPeek(`0@)
+P:System.Collections.Concurrent.ConcurrentQueue`1.Count
+P:System.Collections.Concurrent.ConcurrentQueue`1.IsEmpty
+M:System.Collections.Concurrent.ConcurrentQueue`1.Clear
+M:System.Collections.Concurrent.ConcurrentQueue`1.GetEnumerator
+
+# System.Collections.Concurrent.ConcurrentStack`1
+# TryPopRange takes the values out into the array, which it does not keep.
+M:System.Collections.Concurrent.ConcurrentStack`1.#ctor
+M:System.Collections.Concurrent.ConcurrentStack`1.Push(`0)
+M:System.Collections.Concurrent.ConcurrentStack`1.TryPop(`0@);new
+M:System.Collections.Concurrent.ConcurrentStack`1.TryPopRange(`0[]);borrows
+M:System.Collections.Concurrent.ConcurrentStack`1.TryPopRange(`0[],System.Int32,System.Int32);borrows
+M:System.Collections.Concurrent.ConcurrentStack`1.TryPeek(`0@)
+P:System.Collections.Concurrent.ConcurrentStack`1.Count
+P:System.Collections.Concurrent.ConcurrentStack`1.IsEmpty
+M:System.Collections.Concurrent.ConcurrentStack`1.Clear
+M:System.Collections.Concurrent.ConcurrentStack`1.GetEnumerator
+
+# System.Collections.Concurrent.ConcurrentBag`1
+M:System.Collections.Concurrent.ConcurrentBag`1.#ctor
+M:System.Collections.Concurrent.ConcurrentBag`1.Add(`0)
+M:System.Collections.Concurrent.ConcurrentBag`1.TryTake(`0@);new
+M:System.Collections.Concurrent.ConcurrentBag`1.TryPeek(`0@)
+P:System.Collections.Concurrent.ConcurrentBag`1.Count
+P:System.Collections.Concurrent.ConcurrentBag`1.IsEmpty
+M:System.Collections.Concurrent.ConcurrentBag`1.Clear
+M:System.Collections.Concurrent.ConcurrentBag`1.GetEnumerator
+
+# System.Collections.Concurrent.ConcurrentDictionary`2 (safe for a non-copyable TValue only, as Dictionary`2 is)
+# GetOrAdd hands out a copy of the value that the dictionary holds afterwards, whether it was there or has just been added.
+# Keys is a snapshot of the keys as a collection of TKey: no value is in it.
+M:System.Collections.Concurrent.ConcurrentDictionary`2.#ctor;for=TValue
+M:System.Collections.Concurrent.ConcurrentDictionary`2.#ctor(System.Int32,System.Int32);for=TValue
+M:System.Collections.Concurrent.ConcurrentDictionary`2.#ctor(System.Collections.Generic.IEqualityComparer{`0});for=TValue
+M:System.Collections.Concurrent.ConcurrentDictionary`2.#ctor(System.Int32,System.Int32,System.Collections.Generic.IEqualityComparer{`0});for=TValue
+M:System.Collections.Concurrent.ConcurrentDictionary`2.TryAdd(`0,`1);for=TValue
+M:System.Collections.Concurrent.ConcurrentDictionary`2.TryRemove(`0,`1@);new;for=TValue
+M:System.Collections.Concurrent.ConcurrentDictionary`2.TryGetValue(`0,`1@);for=TValue
+M:System.Collections.Concurrent.ConcurrentDictionary`2.GetOrAdd(`0,`1);for=TValue
+P:System.Collections.Concurrent.ConcurrentDictionary`2.Item(`0);for=TValue
+M:System.Collections.Concurrent.ConcurrentDictionary`2.ContainsKey(`0);for=TValue
+P:System.Collections.Concurrent.ConcurrentDictionary`2.Keys;for=TValue
+P:System.Collections.Concurrent.ConcurrentDictionary`2.Count;for=TValue
+P:System.Collections.Concurrent.ConcurrentDictionary`2.IsEmpty;for=TValue
+M:System.Collections.Concurrent.ConcurrentDictionary`2.Clear;for=TValue
+M:System.Collections.Concurrent.ConcurrentDictionary`2.GetEnumerator;for=TValue
+P:System.Collections.Concurrent.ConcurrentDictionary`2.Comparer;for=TValue
+M:System.Collections.Concurrent.ConcurrentDictionary`2.GetAlternateLookup``1;for=TValue
+M:System.Collections.Concurrent.ConcurrentDictionary`2.TryGetAlternateLookup``1(System.Collections.Concurrent.ConcurrentDictionary{`0,`1}.AlternateLookup{``0}@);for=TValue
+P:System.Collections.Concurrent.ConcurrentDictionary`2.AlternateLookup`1.Dictionary;for=TValue
+P:System.Collections.Concurrent.ConcurrentDictionary`2.AlternateLookup`1.Item(`2);for=TValue
+M:System.Collections.Concurrent.ConcurrentDictionary`2.AlternateLookup`1.ContainsKey(`2);for=TValue
+M:System.Collections.Concurrent.ConcurrentDictionary`2.AlternateLookup`1.TryAdd(`2,`1);for=TValue
+M:System.Collections.Concurrent.ConcurrentDictionary`2.AlternateLookup`1.TryGetValue(`2,`1@);for=TValue
+M:System.Collections.Concurrent.ConcurrentDictionary`2.AlternateLookup`1.TryGetValue(`2,`0@,`1@);for=TValue
+M:System.Collections.Concurrent.ConcurrentDictionary`2.AlternateLookup`1.TryRemove(`2,`1@);new;for=TValue
+M:System.Collections.Concurrent.ConcurrentDictionary`2.AlternateLookup`1.TryRemove(`2,`0@,`1@);new;for=TValue
+
+# System.Collections.Concurrent.BlockingCollection`1 over its own queue. The constructors that wrap another collection are not
+# here: what Add and Take then do is what that collection does.
+M:System.Collections.Concurrent.BlockingCollection`1.#ctor
+M:System.Collections.Concurrent.BlockingCollection`1.#ctor(System.Int32)
+M:System.Collections.Concurrent.BlockingCollection`1.Add(`0)
+M:System.Collections.Concurrent.BlockingCollection`1.Add(`0,System.Threading.CancellationToken)
+M:System.Collections.Concurrent.BlockingCollection`1.TryAdd(`0)
+M:System.Collections.Concurrent.BlockingCollection`1.TryAdd(`0,System.TimeSpan)
+M:System.Collections.Concurrent.BlockingCollection`1.TryAdd(`0,System.Int32)
+M:System.Collections.Concurrent.BlockingCollection`1.TryAdd(`0,System.Int32,System.Threading.CancellationToken)
+M:System.Collections.Concurrent.BlockingCollection`1.Take;new
+M:System.Collections.Concurrent.BlockingCollection`1.Take(System.Threading.CancellationToken);new
+M:System.Collections.Concurrent.BlockingCollection`1.GetConsumingEnumerable;drains
+M:System.Collections.Concurrent.BlockingCollection`1.GetConsumingEnumerable(System.Threading.CancellationToken);drains
+M:System.Collections.Concurrent.BlockingCollection`1.TryTake(`0@);new
+M:System.Collections.Concurrent.BlockingCollection`1.TryTake(`0@,System.TimeSpan);new
+M:System.Collections.Concurrent.BlockingCollection`1.TryTake(`0@,System.Int32);new
+M:System.Collections.Concurrent.BlockingCollection`1.TryTake(`0@,System.Int32,System.Threading.CancellationToken);new
+M:System.Collections.Concurrent.BlockingCollection`1.CompleteAdding
+P:System.Collections.Concurrent.BlockingCollection`1.IsAddingCompleted
+P:System.Collections.Concurrent.BlockingCollection`1.IsCompleted
+P:System.Collections.Concurrent.BlockingCollection`1.Count
+P:System.Collections.Concurrent.BlockingCollection`1.BoundedCapacity
+M:System.Collections.Concurrent.BlockingCollection`1.Dispose
+
+# ============================================================================
+# Interfaces (basic members only, judged by their specification)
+# ============================================================================
+
+M:System.Collections.Generic.IEnumerable`1.GetEnumerator
+P:System.Collections.Generic.IEnumerator`1.Current
+M:System.Collections.IEnumerator.MoveNext
+M:System.IDisposable.Dispose
+P:System.Collections.Generic.ICollection`1.Count
+P:System.Collections.Generic.ICollection`1.IsReadOnly
+M:System.Collections.Generic.ICollection`1.Add(`0)
+M:System.Collections.Generic.ICollection`1.Clear
+P:System.Collections.Generic.IList`1.Item(System.Int32)
+M:System.Collections.Generic.IList`1.Insert(System.Int32,`0)
+M:System.Collections.Generic.IList`1.RemoveAt(System.Int32)
+P:System.Collections.Generic.IReadOnlyCollection`1.Count
+P:System.Collections.Generic.IReadOnlyList`1.Item(System.Int32)
+P:System.Collections.Generic.IDictionary`2.Item(`0);for=TValue
+M:System.Collections.Generic.IDictionary`2.Add(`0,`1);for=TValue
+M:System.Collections.Generic.IDictionary`2.Remove(`0);for=TValue
+M:System.Collections.Generic.IDictionary`2.TryGetValue(`0,`1@);for=TValue
+M:System.Collections.Generic.IDictionary`2.ContainsKey(`0);for=TValue
+P:System.Collections.Generic.IReadOnlyDictionary`2.Item(`0);for=TValue
+M:System.Collections.Generic.IReadOnlyDictionary`2.TryGetValue(`0,`1@);for=TValue
+M:System.Collections.Generic.IReadOnlyDictionary`2.ContainsKey(`0);for=TValue
+M:System.Collections.Generic.IAsyncEnumerable`1.GetAsyncEnumerator(System.Threading.CancellationToken)
+P:System.Collections.Generic.IAsyncEnumerator`1.Current
+M:System.Collections.Generic.IAsyncEnumerator`1.MoveNextAsync
+M:System.IAsyncDisposable.DisposeAsync
+
+# What an 'await foreach' binds behind ConfigureAwait and WithCancellation. Each wraps the sequence or its enumerator and hands out
+# what it does, so what comes out is as new as what went in: a drained sequence stays new, and a stored one stays stored.
+M:System.Threading.Tasks.TaskAsyncEnumerableExtensions.ConfigureAwait``1(System.Collections.Generic.IAsyncEnumerable{``0},System.Boolean)
+M:System.Threading.Tasks.TaskAsyncEnumerableExtensions.WithCancellation``1(System.Collections.Generic.IAsyncEnumerable{``0},System.Threading.CancellationToken)
+M:System.Runtime.CompilerServices.ConfiguredCancelableAsyncEnumerable`1.ConfigureAwait(System.Boolean)
+M:System.Runtime.CompilerServices.ConfiguredCancelableAsyncEnumerable`1.WithCancellation(System.Threading.CancellationToken)
+M:System.Runtime.CompilerServices.ConfiguredCancelableAsyncEnumerable`1.GetAsyncEnumerator
+M:System.Runtime.CompilerServices.ConfiguredCancelableAsyncEnumerable`1.Enumerator.MoveNextAsync
+P:System.Runtime.CompilerServices.ConfiguredCancelableAsyncEnumerable`1.Enumerator.Current
+M:System.Runtime.CompilerServices.ConfiguredCancelableAsyncEnumerable`1.Enumerator.DisposeAsync
+
+# ============================================================================
+# Generic structs (none of these is a view)
+# ============================================================================
+
+# System.Nullable`1
+M:System.Nullable`1.#ctor(`0)
+P:System.Nullable`1.HasValue
+P:System.Nullable`1.Value
+M:System.Nullable`1.GetValueOrDefault
+M:System.Nullable`1.GetValueOrDefault(`0)
+M:System.Nullable`1.op_Implicit(`0)~System.Nullable{`0}
+# The conversion only reads its operand, but "borrows" would also let a stored nullable of a non-copyable type be passed to it
+# by value, and what comes out is the value: it stays without the marker.
+M:System.Nullable`1.op_Explicit(System.Nullable{`0})~`0
+
+# System.Collections.Generic.KeyValuePair`2
+M:System.Collections.Generic.KeyValuePair`2.#ctor(`0,`1)
+P:System.Collections.Generic.KeyValuePair`2.Key
+P:System.Collections.Generic.KeyValuePair`2.Value
+M:System.Collections.Generic.KeyValuePair`2.Deconstruct(`0@,`1@)
+M:System.Collections.Generic.KeyValuePair.Create``2(``0,``1)
+
+# System.ValueTuple
+M:System.ValueTuple`1.#ctor(`0)
+M:System.ValueTuple`2.#ctor(`0,`1)
+M:System.ValueTuple`3.#ctor(`0,`1,`2)
+M:System.ValueTuple`4.#ctor(`0,`1,`2,`3)
+M:System.ValueTuple`5.#ctor(`0,`1,`2,`3,`4)
+M:System.ValueTuple`6.#ctor(`0,`1,`2,`3,`4,`5)
+M:System.ValueTuple`7.#ctor(`0,`1,`2,`3,`4,`5,`6)
+M:System.ValueTuple`8.#ctor(`0,`1,`2,`3,`4,`5,`6,`7)
+M:System.ValueTuple.Create``1(``0)
+M:System.ValueTuple.Create``2(``0,``1)
+M:System.ValueTuple.Create``3(``0,``1,``2)
+M:System.ValueTuple.Create``4(``0,``1,``2,``3)
+M:System.ValueTuple.Create``5(``0,``1,``2,``3,``4)
+M:System.ValueTuple.Create``6(``0,``1,``2,``3,``4,``5)
+M:System.ValueTuple.Create``7(``0,``1,``2,``3,``4,``5,``6)
+M:System.ValueTuple.Create``8(``0,``1,``2,``3,``4,``5,``6,``7)
+
+# ============================================================================
+# Opaque and untyped sinks: the member does not reach into the elements
+# ============================================================================
+
+# System.Object
+M:System.Object.GetType
+M:System.Object.ReferenceEquals(System.Object,System.Object)
+
+# Argument and state checks
+M:System.ArgumentNullException.ThrowIfNull(System.Object,System.String)
+M:System.ObjectDisposedException.ThrowIf(System.Boolean,System.Object)
+
+# GC and identity
+M:System.GC.KeepAlive(System.Object)
+M:System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(System.Object)
+
+# System.Threading.Monitor (and the lock statement on a container)
+M:System.Threading.Monitor.Enter(System.Object)
+M:System.Threading.Monitor.Enter(System.Object,System.Boolean@)
+M:System.Threading.Monitor.TryEnter(System.Object)
+M:System.Threading.Monitor.TryEnter(System.Object,System.Boolean@)
+M:System.Threading.Monitor.TryEnter(System.Object,System.Int32)
+M:System.Threading.Monitor.TryEnter(System.Object,System.Int32,System.Boolean@)
+M:System.Threading.Monitor.TryEnter(System.Object,System.TimeSpan)
+M:System.Threading.Monitor.TryEnter(System.Object,System.TimeSpan,System.Boolean@)
+M:System.Threading.Monitor.Exit(System.Object)
+M:System.Threading.Monitor.IsEntered(System.Object)
+M:System.Threading.Monitor.Wait(System.Object)
+M:System.Threading.Monitor.Wait(System.Object,System.Int32)
+M:System.Threading.Monitor.Wait(System.Object,System.TimeSpan)
+M:System.Threading.Monitor.Pulse(System.Object)
+M:System.Threading.Monitor.PulseAll(System.Object)
+
+# System.Threading.Tasks.Task (members used on a Task<T>)
+P:System.Threading.Tasks.Task.IsCompleted
+P:System.Threading.Tasks.Task.IsCompletedSuccessfully
+P:System.Threading.Tasks.Task.IsFaulted
+P:System.Threading.Tasks.Task.IsCanceled
+P:System.Threading.Tasks.Task.Status
+P:System.Threading.Tasks.Task.Exception
+P:System.Threading.Tasks.Task.Id
+P:System.Threading.Tasks.Task.AsyncState
+P:System.Threading.Tasks.Task.CreationOptions
+M:System.Threading.Tasks.Task.Wait
+M:System.Threading.Tasks.Task.Wait(System.TimeSpan)
+M:System.Threading.Tasks.Task.Wait(System.TimeSpan,System.Threading.CancellationToken)
+M:System.Threading.Tasks.Task.Wait(System.Threading.CancellationToken)
+M:System.Threading.Tasks.Task.Wait(System.Int32)
+M:System.Threading.Tasks.Task.Wait(System.Int32,System.Threading.CancellationToken)
+M:System.Threading.Tasks.Task.WaitAsync(System.Threading.CancellationToken)
+M:System.Threading.Tasks.Task.WaitAsync(System.TimeSpan)
+M:System.Threading.Tasks.Task.WaitAsync(System.TimeSpan,System.TimeProvider)
+M:System.Threading.Tasks.Task.WaitAsync(System.TimeSpan,System.Threading.CancellationToken)
+M:System.Threading.Tasks.Task.WaitAsync(System.TimeSpan,System.TimeProvider,System.Threading.CancellationToken)
+M:System.Threading.Tasks.Task.GetAwaiter
+M:System.Threading.Tasks.Task.ConfigureAwait(System.Boolean)
+M:System.Threading.Tasks.Task.ConfigureAwait(System.Threading.Tasks.ConfigureAwaitOptions)
+M:System.Threading.Tasks.Task.Dispose
+
+# Task.WhenAll, WhenAny, WaitAll, WaitAny (the overloads that take non-generic tasks)
+M:System.Threading.Tasks.Task.WhenAll(System.Threading.Tasks.Task[])
+M:System.Threading.Tasks.Task.WhenAll(System.Collections.Generic.IEnumerable{System.Threading.Tasks.Task})
+M:System.Threading.Tasks.Task.WhenAll(System.ReadOnlySpan{System.Threading.Tasks.Task})  # net9+
+M:System.Threading.Tasks.Task.WhenAny(System.Threading.Tasks.Task[])
+M:System.Threading.Tasks.Task.WhenAny(System.Threading.Tasks.Task,System.Threading.Tasks.Task)
+M:System.Threading.Tasks.Task.WhenAny(System.Collections.Generic.IEnumerable{System.Threading.Tasks.Task})
+M:System.Threading.Tasks.Task.WhenAny(System.ReadOnlySpan{System.Threading.Tasks.Task})  # net9+
+# The generic WhenAny returns one of the tasks that it is given and copies no result, so what it hands out follows its inputs.
+M:System.Threading.Tasks.Task.WhenAny``1(System.Threading.Tasks.Task{``0}[])
+M:System.Threading.Tasks.Task.WhenAny``1(System.Threading.Tasks.Task{``0},System.Threading.Tasks.Task{``0})
+M:System.Threading.Tasks.Task.WhenAny``1(System.Collections.Generic.IEnumerable{System.Threading.Tasks.Task{``0}})
+M:System.Threading.Tasks.Task.WhenAny``1(System.ReadOnlySpan{System.Threading.Tasks.Task{``0}})  # net9+
+M:System.Threading.Tasks.Task.WaitAll(System.Threading.Tasks.Task[])
+M:System.Threading.Tasks.Task.WaitAll(System.ReadOnlySpan{System.Threading.Tasks.Task})  # net9+
+M:System.Threading.Tasks.Task.WaitAll(System.Threading.Tasks.Task[],System.TimeSpan)
+M:System.Threading.Tasks.Task.WaitAll(System.Threading.Tasks.Task[],System.Int32)
+M:System.Threading.Tasks.Task.WaitAll(System.Threading.Tasks.Task[],System.Threading.CancellationToken)
+M:System.Threading.Tasks.Task.WaitAll(System.Threading.Tasks.Task[],System.Int32,System.Threading.CancellationToken)
+M:System.Threading.Tasks.Task.WaitAll(System.Collections.Generic.IEnumerable{System.Threading.Tasks.Task},System.Threading.CancellationToken)  # net9+
+M:System.Threading.Tasks.Task.WaitAny(System.Threading.Tasks.Task[])
+M:System.Threading.Tasks.Task.WaitAny(System.Threading.Tasks.Task[],System.TimeSpan)
+M:System.Threading.Tasks.Task.WaitAny(System.Threading.Tasks.Task[],System.Threading.CancellationToken)
+M:System.Threading.Tasks.Task.WaitAny(System.Threading.Tasks.Task[],System.Int32)
+M:System.Threading.Tasks.Task.WaitAny(System.Threading.Tasks.Task[],System.Int32,System.Threading.CancellationToken)

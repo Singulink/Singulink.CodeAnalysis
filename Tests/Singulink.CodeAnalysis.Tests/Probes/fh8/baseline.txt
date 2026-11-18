@@ -1,0 +1,4 @@
+Knobs.cs(10,23): SCA1001
+Knobs.cs(18,9): SCA1006
+Locks.cs(106,57): SCA1030
+Locks.cs(142,13): SCA1020

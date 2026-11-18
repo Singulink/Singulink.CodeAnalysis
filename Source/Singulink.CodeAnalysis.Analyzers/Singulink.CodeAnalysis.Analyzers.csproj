@@ -1,0 +1,36 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <IsRoslynComponent>true</IsRoslynComponent>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+
+    <PackageTags>Analyzer, Roslyn, NonCopyable, Struct, Copy, Lock, Guard</PackageTags>
+    <Description>Roslyn analyzers that check code against the Singulink.CodeAnalysis attributes, such as copies of structs marked [NonCopyable]. Has no runtime assembly.</Description>
+    <DevelopmentDependency>true</DevelopmentDependency>
+
+    <!-- The package holds the analyzer under analyzers/ only: no lib/ assembly and no dependencies. -->
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+
+    <!-- RS2008: the rules are documented in the README; the project keeps no release tracking files. -->
+    <NoWarn>$(NoWarn);RS2008</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" PrivateAssets="all" />
+    <PackageReference Include="PolySharp" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The safe list for the framework, in the format of the NonCopyableSymbols.txt files that a project can add. -->
+    <EmbeddedResource Include="NonCopyableSymbols.txt" LogicalName="Singulink.CodeAnalysis.Analyzers.NonCopyableSymbols.txt" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="$(TargetPath)" Pack="true" PackagePath="analyzers\dotnet\cs" Visible="false" />
+    <None Include="build\Singulink.CodeAnalysis.Analyzers.props" Pack="true" PackagePath="build;buildTransitive" />
+    <None Include="build\Singulink.CodeAnalysis.Analyzers.targets" Pack="true" PackagePath="build;buildTransitive" />
+    <None Include="..\..\THIRD-PARTY-NOTICES.md" Link="THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

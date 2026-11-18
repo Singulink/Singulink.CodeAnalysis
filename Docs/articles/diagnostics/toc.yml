@@ -1,0 +1,86 @@
+- name: "SCA1001: Copy by Assignment"
+  href: sca1001.md
+
+- name: "SCA1002: Copy by Return"
+  href: sca1002.md
+
+- name: "SCA1003: Use Where the Value May Be Copied"
+  href: sca1003.md
+
+- name: "SCA1004: Boxing a Stored Value"
+  href: sca1004.md
+
+- name: "SCA1005: MemberwiseClone of a Non-copyable Value"
+  href: sca1005.md
+
+- name: "SCA1006: Member Run on a Copy Through a Read-only Reference"
+  href: sca1006.md
+
+- name: "SCA1010: Field in a Copyable Struct or a Record"
+  href: sca1010.md
+
+- name: "SCA1011: Auto-property of a Non-copyable Type"
+  href: sca1011.md
+
+- name: "SCA1012: By-value Parameter of an Iterator"
+  href: sca1012.md
+
+- name: "SCA1013: Interface Member Left to Its Default Implementation"
+  href: sca1013.md
+
+- name: "SCA1014: Async or Iterator Member of a Non-copyable Struct"
+  href: sca1014.md
+
+- name: "SCA1015: Awaiter of a Non-copyable Type"
+  href: sca1015.md
+
+- name: "SCA1020: Unlisted Member of an Unmarked Generic"
+  href: sca1020.md
+
+- name: "SCA1021: Member That Requires a Copyable Type"
+  href: sca1021.md
+
+- name: "SCA1022: Container Used as an Untyped Collection"
+  href: sca1022.md
+
+- name: "SCA1023: Container Used as a Type That Hides Its Values"
+  href: sca1023.md
+
+- name: "SCA1030: By-value Read From a Stored Container"
+  href: sca1030.md
+
+- name: "SCA1031: Return of a Container the Method Does Not Own"
+  href: sca1031.md
+
+- name: "SCA1032: Container Parameter Kept Without the Kept Mark"
+  href: sca1032.md
+
+- name: "SCA1033: Container Moved Out of Something the Method Does Not Own"
+  href: sca1033.md
+
+- name: "SCA1040: Mark Not Kept Against a Base Member"
+  href: sca1040.md
+
+- name: "SCA1041: MovedFrom Used Wrongly"
+  href: sca1041.md
+
+- name: "SCA1042: Line of a Symbol List"
+  href: sca1042.md
+
+- name: "SCA1043: Type That Does Not Stay Erasable"
+  href: sca1043.md
+
+- name: "SCA1044: Conditional Attribute of the Analyzer"
+  href: sca1044.md
+
+- name: "SCA1045: NonCopyableAttribute Outside Its Namespace"
+  href: sca1045.md
+
+- name: "SCA1046: NotNullRef Where It Does Not Count"
+  href: sca1046.md
+
+- name: "SCA1047: NotNullRef on a Method of the Project"
+  href: sca1047.md
+
+- name: "SCA1048: Member Nested Too Deeply"
+  href: sca1048.md

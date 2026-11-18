@@ -1,0 +1,11 @@
+M:System.Collections.Generic.Stack`1.Peek;new
+M:System.Collections.Generic.Dictionary`2.Add(`0,`1)
+M:System.Collections.Generic.Dictionary`2.TryAdd(`0,`1);for=TKey,TValue
+T:System.Threading.Tasks.ValueTask`1;view
+T:System.Span`1;erasable
+M:System.Linq.Enumerable.First``1(System.Collections.Generic.IEnumerable{``0});for=TSource
+M:Bogus.Type.Method;for=X
+M:System.Collections.Generic.List`1.Add(`0);for=Q
+M:System.Collections.Generic.List`1.Add(`0);new # trailing comment
+T:System.Collections.Generic.List`1;erasable
+M:System.Collections.Generic.HashSet`1.Add(`0)

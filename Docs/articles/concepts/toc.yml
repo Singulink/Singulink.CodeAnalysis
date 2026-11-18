@@ -1,0 +1,38 @@
+- name: New Values and Stored Values
+  href: new-and-stored-values.md
+
+- name: Non-copyable Types
+  href: non-copyable-types.md
+
+- name: The Last Use of a Variable
+  href: last-use.md
+
+- name: What a Listed Member Hands Out
+  href: listed-members.md
+
+- name: Returning a Container
+  href: returning-containers.md
+
+- name: Keeping a Container That Is Passed In
+  href: keeping-containers.md
+
+- name: Containers and Conversions
+  href: conversions.md
+
+- name: Variance and Erasable Types
+  href: variance-and-erasable-types.md
+
+- name: Patterns, Deconstruction and Tuples
+  href: patterns.md
+
+- name: Read-only References and Temporary Copies
+  href: read-only-references.md
+
+- name: Where the Compiler Uses One Value Twice
+  href: compiler-copies.md
+
+- name: What Is Not Covered
+  href: not-covered.md
+
+- name: Differences From Roslyn's Rule
+  href: roslyn-differences.md

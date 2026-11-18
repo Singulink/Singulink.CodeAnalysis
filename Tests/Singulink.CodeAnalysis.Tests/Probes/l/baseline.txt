@@ -1,0 +1,8 @@
+L01.cs(11,19): SCA1030
+L01.cs(12,9): SCA1020
+L01.cs(13,9): SCA1020
+L01.cs(15,19): SCA1030
+L01.cs(15,19): SCA1032
+L01.cs(21,19): SCA1030
+NonCopyableSymbols.txt(5,1): SCA1042
+NonCopyableSymbols.txt(8,1): SCA1042

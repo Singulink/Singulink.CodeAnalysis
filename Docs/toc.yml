@@ -1,0 +1,9 @@
+- name: Home
+  href: index.md
+- name: Articles
+  href: articles/
+- name: API Documentation
+  # The API is in one namespace, so it opens on that namespace (see "Links to Sections and the API" in the article conventions).
+  href: api/
+- name: GitHub Repository
+  href: https://github.com/Singulink/Singulink.CodeAnalysis/

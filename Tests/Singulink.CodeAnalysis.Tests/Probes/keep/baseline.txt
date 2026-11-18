@@ -1,0 +1,8 @@
+Probe.cs(20,53): SCA1032
+Probe.cs(21,86): SCA1032
+Probe.cs(22,33): SCA1030
+Probe.cs(48,29): SCA1030
+Probe.cs(56,19): SCA1030
+Probe.cs(59,39): SCA1031
+Probe.cs(60,65): SCA1031
+Probe.cs(60,86): SCA1033

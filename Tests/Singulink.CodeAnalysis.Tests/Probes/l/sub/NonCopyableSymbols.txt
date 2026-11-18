@@ -1,0 +1,3 @@
+M:System.Collections.Generic.HashSet`1.Add(`0);new
+M:System.Collections.Generic.HashSet`1.#ctor
+M:System.Collections.Generic.Queue`1.Dequeue

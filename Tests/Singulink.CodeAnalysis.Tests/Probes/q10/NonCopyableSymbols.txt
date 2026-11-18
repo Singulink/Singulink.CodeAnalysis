@@ -1,0 +1,10 @@
+M:UL.Src`1.#ctor
+P:UL.Src`1.Task;owned
+M:UL.Src`1.Set(`0)
+P:UL.BadList`1.Items;owned
+M:UL.Src`1.Set2(`0);owned
+P:UL.GuardSrc.Task;owned
+P:UL.ClassSrc.Task;owned
+P:UL.StaticSrc.Task;owned
+P:UL.IdxSrc.Item(System.Int32);owned
+P:UL.ValueSrc.Task;owned

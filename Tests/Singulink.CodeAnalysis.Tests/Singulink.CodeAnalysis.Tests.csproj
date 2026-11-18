@@ -1,0 +1,30 @@
+﻿<Project Sdk="MSTest.Sdk/4.5.1">
+  <PropertyGroup>
+    <!--
+      The tests run against two compilers. The first target has the oldest compiler that the analyzer supports, which is the one
+      that the analyzer is built against. The second has the compiler of the newest SDK, which binds what the language has added
+      since (see Directory.Packages.props), and is there only where that SDK builds the project.
+    -->
+    <TargetFrameworks>net10.0</TargetFrameworks>
+    <TargetFrameworks Condition="$([MSBuild]::VersionGreaterThanOrEquals('$(NETCoreSdkVersion)', '11.0'))">net10.0;net11.0</TargetFrameworks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Source\Singulink.CodeAnalysis\Singulink.CodeAnalysis.csproj" />
+    <ProjectReference Include="..\..\Source\Singulink.CodeAnalysis.Analyzers\Singulink.CodeAnalysis.Analyzers.csproj" />
+  </ItemGroup>
+
+  <!-- The probe projects of the test passes are test data, built by ProbeTests: they are not part of this project's code. -->
+  <ItemGroup>
+    <Compile Remove="Probes/**" />
+    <None Remove="Probes/**" />
+    <Content Include="Probes/**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Analyzer.Testing" />
+    <PackageReference Include="PrefixClassName.MsTest" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" />
+  </ItemGroup>
+</Project>

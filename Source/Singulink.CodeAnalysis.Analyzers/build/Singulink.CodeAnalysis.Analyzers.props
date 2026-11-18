@@ -1,0 +1,12 @@
+<Project>
+  <!--
+    Makes the properties of the package visible to the compiler, which passes them to the analyzer as build_property.<name>:
+    NonCopyableIncludeBuiltInTypes turns the built-in non-copyable types on or off, where the targets file of the package sets it if the
+    project has not, and NonCopyableAllowImplicitMoves turns off the move of a variable at its last use. The package has this file under build and under buildTransitive, so that the properties also work in a
+    project that gets the analyzer through another package.
+  -->
+  <ItemGroup>
+    <CompilerVisibleProperty Include="NonCopyableIncludeBuiltInTypes" />
+    <CompilerVisibleProperty Include="NonCopyableAllowImplicitMoves" />
+  </ItemGroup>
+</Project>

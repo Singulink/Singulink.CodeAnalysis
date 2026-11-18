@@ -1,0 +1,657 @@
+using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Text;
+
+namespace Singulink.CodeAnalysis.Analyzers;
+
+/// <summary>
+/// The members that are known to be safe to use with a non-copyable type bound to a type parameter that is not marked, and the types that are
+/// views, non-copyable or erasable: the list that ships in the analyzer, merged with the additional files named <see cref="FileName"/> of a
+/// compilation.
+/// </summary>
+/// <remarks>
+/// Entries are looked up by the documentation comment ID of a symbol's original definition, so an entry that names something the compilation does
+/// not reference is never asked for and needs no resolving.
+/// </remarks>
+internal sealed class SafeMemberList
+{
+    /// <summary>
+    /// The name of the additional files that are safe lists.
+    /// </summary>
+    public const string FileName = "NonCopyableSymbols.txt";
+
+    private const string ForKeyword = "for";
+    private const string OwnedIsForATask = "the marker 'owned' is for an instance property of a class whose type is 'Task<TResult>'";
+
+    private const string DrainsIsForASequence = "the marker 'drains' is for a method that returns a sequence, an IEnumerable<T> or an IAsyncEnumerable<T>";
+    private const string BuiltInResourceName = "Singulink.CodeAnalysis.Analyzers." + FileName;
+
+    private static readonly Lazy<Dictionary<string, SafeListEntry>> s_builtInEntries = new(() => ToEntryMap(ParseBuiltIn()));
+
+    // The built-in list without the framework structs that it names as non-copyable, for a project that leaves them out.
+    private static readonly Lazy<Dictionary<string, SafeListEntry>> s_builtInEntriesWithoutNonCopyableTypes = new(
+        () => ToEntryMap([.. ParseBuiltIn().Where(e => e.Marker is not SafeListMarker.NonCopyable)]));
+
+    private readonly Dictionary<string, SafeListEntry> _entries;
+
+    // The IDs of the structs that a 'copyable' line of a user file takes out, which no 'noncopyable' line of a user file names.
+    private readonly HashSet<string> _copyable;
+
+    // Null for a symbol that has no entry.
+    private readonly ConcurrentDictionary<ISymbol, SafeListEntry?> _entriesBySymbol = new(SymbolEqualityComparer.Default);
+
+    private SafeMemberList(Dictionary<string, SafeListEntry> entries, HashSet<string>? copyable = null)
+    {
+        _entries = entries;
+        _copyable = copyable ?? [];
+    }
+
+    /// <summary>
+    /// Creates the list of a compilation from the built-in list and the given user files. Where two entries for the same ID disagree, the one
+    /// that claims less applies, whether they are in two user files or in a user file and the built-in list. So a user file can add entries and
+    /// can tighten a built-in one, but cannot loosen it, and the order of the files does not matter.
+    /// </summary>
+    /// <param name="userFiles">The list files of the project.</param>
+    /// <param name="includeBuiltInNonCopyableTypes">False to leave out the entries of the built-in list that name a framework struct as
+    /// non-copyable. The entries of the user files that do so still apply.</param>
+    /// <param name="compilation">The compilation. A line of a user file that does not fit what it names there is reported for the file
+    /// and left out here, like a line that cannot be parsed, and so is a 'copyable' line that has no effect there.</param>
+    /// <remarks>
+    /// A 'copyable' line is not merged with the other entries for its type: it takes the type out of the non-copyable types and leaves
+    /// whatever else the list says of it. It overrides the built-in list, which is what it is for, and loses to a 'noncopyable' line
+    /// of a user file, as the stricter line does everywhere in the list.
+    /// </remarks>
+    public static SafeMemberList Create(IReadOnlyList<SourceText> userFiles, bool includeBuiltInNonCopyableTypes, Compilation compilation)
+    {
+        var builtInEntries = (includeBuiltInNonCopyableTypes ? s_builtInEntries : s_builtInEntriesWithoutNonCopyableTypes).Value;
+
+        if (userFiles.Count is 0)
+            return new SafeMemberList(builtInEntries);
+
+        var parsed = new List<SafeListEntry>();
+
+        foreach (var file in userFiles)
+            Parse(file, parsed, errors: null);
+
+        var entries = new Dictionary<string, SafeListEntry>(builtInEntries, StringComparer.Ordinal);
+        var copyable = new HashSet<string>(StringComparer.Ordinal);
+        var userNonCopyable = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var entry in parsed)
+        {
+            if (GetErrorInCompilation(entry, compilation) is not null)
+                continue;
+
+            if (entry.Marker is SafeListMarker.Copyable)
+            {
+                if (GetWhyCopyableHasNoEffect(entry, compilation) is null)
+                    copyable.Add(entry.Id);
+
+                continue;
+            }
+
+            if (entry.Marker is SafeListMarker.NonCopyable)
+                userNonCopyable.Add(entry.Id);
+
+            entries[entry.Id] = entries.TryGetValue(entry.Id, out var existing) ? Combine(existing, entry) : entry;
+        }
+
+        copyable.ExceptWith(userNonCopyable);
+        return new SafeMemberList(entries, copyable);
+    }
+
+    /// <summary>
+    /// Gets the entries of the list that ships in the analyzer.
+    /// </summary>
+    public static IReadOnlyList<SafeListEntry> ParseBuiltIn(List<SafeListError>? errors = null)
+    {
+        using var stream = typeof(SafeMemberList).Assembly.GetManifestResourceStream(BuiltInResourceName)
+            ?? throw new InvalidOperationException($"Resource '{BuiltInResourceName}' is missing.");
+
+        var entries = new List<SafeListEntry>();
+        Parse(SourceText.From(stream), entries, errors);
+        return entries;
+    }
+
+    /// <summary>
+    /// Parses a list file: one documentation comment ID per line, with an optional marker after a semicolon and, for a member, an optional
+    /// <c>for=</c> with the names of the type parameters that the entry vouches for. A line that starts with <c>#</c> is a comment, and a
+    /// <c>#</c> after white space starts a comment that runs to the end of the line.
+    /// </summary>
+    /// <remarks>
+    /// What can only be told once the member or the type is found in a compilation is left to <see cref="GetErrorInCompilation"/>.
+    /// </remarks>
+    public static void Parse(SourceText text, List<SafeListEntry> entries, List<SafeListError>? errors)
+    {
+        foreach (var line in text.Lines)
+        {
+            string content = RemoveComment(line.ToString()).Trim();
+
+            if (content.Length is 0)
+                continue;
+
+            if (TryParseEntry(content, line, out var entry, out string? reason))
+                entries.Add(entry);
+            else
+                errors?.Add(new SafeListError(line, reason));
+        }
+    }
+
+    /// <summary>
+    /// Gets what is wrong with an entry that parses but does not fit what it names in a compilation: a name after <c>for=</c> that is not a type
+    /// parameter of the member or of a type that contains it, the marker <c>view</c> or <c>noncopyable</c> on something that is not a struct,
+    /// the marker <c>erasable</c> on something that is not a generic class or interface, or the marker <c>owned</c> on something that is
+    /// not an instance property of a class whose type is <c>Task&lt;TResult&gt;</c>. Null if nothing is wrong, or if the compilation does
+    /// not have what the entry names.
+    /// </summary>
+    public static string? GetErrorInCompilation(SafeListEntry entry, Compilation compilation)
+    {
+        if (entry.TypeParameterNames is null && entry.Marker is SafeListMarker.None or SafeListMarker.New)
+            return null;
+
+        var symbols = DocumentationCommentId.GetSymbolsForDeclarationId(entry.Id, compilation);
+
+        if (symbols.IsEmpty)
+            return null;
+
+        if (entry.Marker is SafeListMarker.Erasable && !symbols.Any(s => CanBeErasable(s)))
+            return "the marker 'erasable' is for a generic class or interface";
+
+        if (entry.Marker is SafeListMarker.View or SafeListMarker.NonCopyable or SafeListMarker.Copyable &&
+            !symbols.Any(s => s is INamedTypeSymbol { TypeKind: TypeKind.Struct }))
+        {
+            string name = entry.Marker switch { SafeListMarker.View => "view", SafeListMarker.NonCopyable => "noncopyable", _ => "copyable" };
+            return $"the marker '{name}' is for a struct";
+        }
+
+        if (entry.Marker is SafeListMarker.Owned && !symbols.Any(CanBeOwned))
+            return OwnedIsForATask;
+
+        if (entry.Marker is SafeListMarker.Drains && !symbols.Any(ReturnsSequence))
+            return DrainsIsForASequence;
+
+        foreach (string name in entry.TypeParameterNames ?? [])
+        {
+            if (!symbols.Any(s => CountTypeParameters(s, name) > 0))
+                return $"'{name}' is not a type parameter of the member or of a type that contains it";
+
+            // The entry goes by the name alone, so it would vouch for every type parameter that has it.
+            if (!symbols.Any(s => CountTypeParameters(s, name) == 1))
+                return $"'{name}' names more than one type parameter of the member and of the types that contain it";
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Gets why a 'copyable' line of a user file has no effect in a compilation: it names no type there, it names a struct that the project
+    /// declares itself, whose attribute is what to take off, or it names a struct that nothing makes non-copyable by itself, neither the
+    /// built-in list nor an attribute, such as ValueTask&lt;TResult&gt;, which is non-copyable only through what it holds. Null if the line
+    /// takes a type out, and for a line that does not fit what it names, which <see cref="GetErrorInCompilation"/> reports.
+    /// </summary>
+    public static string? GetWhyCopyableHasNoEffect(SafeListEntry entry, Compilation compilation)
+    {
+        var symbols = DocumentationCommentId.GetSymbolsForDeclarationId(entry.Id, compilation);
+
+        if (symbols.IsEmpty)
+            return "the compilation has no type of that ID";
+
+        var structs = symbols.OfType<INamedTypeSymbol>().Where(s => s.TypeKind is TypeKind.Struct).ToList();
+
+        if (structs.Count is 0)
+            return null;
+
+        if (structs.All(s => SymbolEqualityComparer.Default.Equals(s.ContainingAssembly, compilation.Assembly)))
+            return "the project declares the type itself, so take its [NonCopyable] attribute off instead";
+
+        // The built-in entry counts whether the built-in non-copyable types are on or not: the same file serves both kinds of project.
+        bool isNonCopyableByItself = structs.Any(s =>
+            (s_builtInEntries.Value.TryGetValue(entry.Id, out var builtIn) && builtIn.Marker is SafeListMarker.NonCopyable) ||
+            s.GetAttributes().Any(a => NonCopyableTypes.IsNonCopyableMark(a.AttributeClass, ofAnyNamespace: true)));
+
+        return isNonCopyableByItself
+            ? null
+            : "nothing makes the type non-copyable by itself, neither the built-in list nor an attribute; a struct that holds a non-copyable value stays non-copyable through it";
+    }
+
+    /// <summary>
+    /// Gets the entry of a member (a method, a property or an event) by its original definition, or null if the list does not have the member.
+    /// </summary>
+    public SafeListEntry? GetMember(ISymbol definition) => GetEntry(definition) is { } entry && IsForMember(entry.Marker) ? entry : null;
+
+    /// <summary>
+    /// Gets the entry of a member by its documentation comment ID, or null if the list does not have the member.
+    /// </summary>
+    public SafeListEntry? GetMember(string id) => _entries.TryGetValue(id, out var entry) && IsForMember(entry.Marker) ? entry : null;
+
+    private static bool IsForMember(SafeListMarker marker) =>
+        marker is SafeListMarker.None or SafeListMarker.New or SafeListMarker.Borrows or SafeListMarker.Drains or SafeListMarker.Owned;
+
+    // The marker 'drains' says that the sequence which the method returns takes each element out of its source as it hands it
+    // out. That can be said only of a sequence: a list or an array that a method returns holds its elements. And it is said of
+    // a method: a property exposes state, and a container that is read from one is stored whatever the list says.
+    private static bool ReturnsSequence(ISymbol symbol) => symbol is IMethodSymbol method && IsSequence(method.ReturnType);
+
+    /// <summary>
+    /// Gets a value indicating whether a type is <c>IEnumerable&lt;T&gt;</c> or <c>IAsyncEnumerable&lt;T&gt;</c> itself, and gets
+    /// the type of its elements.
+    /// </summary>
+    public static bool IsSequence(ITypeSymbol? type, [NotNullWhen(true)] out ITypeSymbol? elementType)
+    {
+        elementType = type is INamedTypeSymbol { TypeArguments: [var element], OriginalDefinition: var definition } &&
+            (definition.SpecialType is SpecialType.System_Collections_Generic_IEnumerable_T ||
+                (definition is { Name: "IAsyncEnumerable", Arity: 1, ContainingType: null } && NonCopyableTypes.IsInNamespace(definition, "System.Collections.Generic")))
+            ? element
+            : null;
+
+        return elementType is not null;
+    }
+
+    private static bool IsSequence(ITypeSymbol? type) => IsSequence(type, out _);
+
+    // The marker 'owned' says that the task belongs to the object alone. It is not accepted for a property that hands out anything else:
+    // what a list holds can be used in place by another holder of the object while the one that made it reads it by value. Nor is it
+    // accepted on a property of a struct: a call on a struct local can replace the whole local ('this = other'), and a copy of the struct
+    // shares the task, so the task cannot belong to one object alone. A static property and one of an interface have no object that a
+    // method could have just made.
+    private static bool CanBeOwned(ISymbol symbol) =>
+        symbol is IPropertySymbol { IsStatic: false, ContainingType.TypeKind: TypeKind.Class } property && IsTaskOfResult(property.Type);
+
+    private static bool IsTaskOfResult(ITypeSymbol type) =>
+        type is INamedTypeSymbol { Name: "Task", Arity: 1, ContainingType: null } && NonCopyableTypes.IsInNamespace(type, "System.Threading.Tasks");
+
+    /// <summary>
+    /// Gets a value indicating whether the list names the type as a view by its original definition.
+    /// </summary>
+    public bool IsView(INamedTypeSymbol definition) => GetEntry(definition)?.Marker is SafeListMarker.View;
+
+    /// <summary>
+    /// Gets a value indicating whether the list names the type as non-copyable by its original definition.
+    /// </summary>
+    public bool IsNonCopyable(INamedTypeSymbol definition) => GetEntry(definition)?.Marker is SafeListMarker.NonCopyable;
+
+    /// <summary>
+    /// Gets a value indicating whether a 'copyable' line of a user file takes the type out of the non-copyable types, by its original
+    /// definition, whatever the built-in list or an attribute says of it.
+    /// </summary>
+    public bool IsCopyable(INamedTypeSymbol definition) =>
+        _copyable.Count > 0 && definition.GetDocumentationCommentId() is { } id && _copyable.Contains(id);
+
+    /// <summary>
+    /// Gets a value indicating whether the list names the type as erasable by its original definition: a generic class or interface of which no
+    /// base type and no interface hands out a value of its type arguments.
+    /// </summary>
+    public bool IsErasable(INamedTypeSymbol definition) => CanBeErasable(definition) && GetEntry(definition)?.Marker is SafeListMarker.Erasable;
+
+    private static bool CanBeErasable(ISymbol symbol) => symbol is INamedTypeSymbol { IsGenericType: true, TypeKind: TypeKind.Class or TypeKind.Interface };
+
+    private static Dictionary<string, SafeListEntry> ToEntryMap(IReadOnlyList<SafeListEntry> entries)
+    {
+        var result = new Dictionary<string, SafeListEntry>(entries.Count, StringComparer.Ordinal);
+
+        foreach (var entry in entries)
+            result[entry.Id] = entry;
+
+        return result;
+    }
+
+    /// <summary>
+    /// Gets the number of type parameters of a member and of the types that contain it that have a name. A member and a containing
+    /// type, or two containing types, can have type parameters of the same name.
+    /// </summary>
+    private static int CountTypeParameters(ISymbol member, string name)
+    {
+        int count = member is IMethodSymbol method ? method.TypeParameters.Count(p => p.Name == name) : 0;
+
+        for (var type = member.ContainingType; type is not null; type = type.ContainingType)
+            count += type.TypeParameters.Count(p => p.Name == name);
+
+        return count;
+    }
+
+    private static SafeListEntry Combine(SafeListEntry first, SafeListEntry second)
+    {
+        // A member hands out a new value, may be passed a stored value, drains its source, or has a task that is its object's alone, only if both say so, and
+        // is vouched for only where both vouch for it. A type that one of them calls non-copyable is non-copyable, and one that only one of
+        // them calls erasable is not erasable.
+        var marker = (first.Marker, second.Marker) switch {
+            var (one, other) when one == other => one,
+            (SafeListMarker.NonCopyable, _) or (_, SafeListMarker.NonCopyable) => SafeListMarker.NonCopyable,
+            (SafeListMarker.View, _) or (_, SafeListMarker.View) => SafeListMarker.View,
+            _ => SafeListMarker.None,
+        };
+
+        string[]? typeParameterNames = (first.TypeParameterNames, second.TypeParameterNames) switch {
+            (null, var names) => names,
+            (var names, null) => names,
+            (var firstNames, var secondNames) => firstNames.Intersect(secondNames).ToArray(),
+        };
+
+        return new SafeListEntry(first.Id, marker, typeParameterNames, first.Line);
+    }
+
+    private static string RemoveComment(string line)
+    {
+        // A '#' inside an ID is part of it, as in "M:System.Collections.Generic.List`1.#ctor", so only one at the start of the line or after white
+        // space starts a comment.
+        for (int i = 0; i < line.Length; i++)
+        {
+            if (line[i] is '#' && (i is 0 || char.IsWhiteSpace(line[i - 1])))
+                return line[..i];
+        }
+
+        return line;
+    }
+
+    private static bool TryParseEntry(string content, TextLine line, [NotNullWhen(true)] out SafeListEntry? entry, out string reason)
+    {
+        entry = null;
+        string[] parts = content.Split(';');
+        string id = parts[0].Trim();
+
+        if (id.Length < 3 || id[1] is not ':' || id[0] is not ('M' or 'P' or 'E' or 'T'))
+        {
+            reason = "expected a documentation comment ID that starts with 'M:', 'P:', 'E:' or 'T:'";
+            return false;
+        }
+
+        if (id.Any(char.IsWhiteSpace))
+        {
+            reason = "a documentation comment ID has no white space";
+            return false;
+        }
+
+        if (GetErrorInId(id) is { } errorInId)
+        {
+            reason = errorInId;
+            return false;
+        }
+
+        bool isType = id[0] is 'T';
+        var marker = SafeListMarker.None;
+        string[]? typeParameterNames = null;
+
+        for (int i = 1; i < parts.Length; i++)
+        {
+            string part = parts[i].Trim();
+
+            // 'for=' ends the entry, and a marker comes first and only once.
+            if (typeParameterNames is not null)
+            {
+                reason = "'for=' is the last part of an entry";
+                return false;
+            }
+
+            // White space is allowed around every part, so also around the '=' of 'for='.
+            if (part.StartsWith(ForKeyword, StringComparison.Ordinal) && part[ForKeyword.Length..].TrimStart() is ['=', .. var names])
+            {
+                if (isType)
+                {
+                    reason = "'for=' is for a member";
+                    return false;
+                }
+
+                typeParameterNames = names.Split(',');
+
+                for (int n = 0; n < typeParameterNames.Length; n++)
+                {
+                    string name = typeParameterNames[n] = typeParameterNames[n].Trim();
+
+                    if (name.Length is 0 || name.Any(char.IsWhiteSpace))
+                    {
+                        reason = "'for=' takes one or more type parameter names, separated by commas";
+                        return false;
+                    }
+                }
+
+                continue;
+            }
+
+            if (marker is not SafeListMarker.None)
+            {
+                reason = "an entry has one marker, which 'for=' can follow";
+                return false;
+            }
+
+            switch (part)
+            {
+                case "new" when !isType:
+                    marker = SafeListMarker.New;
+                    break;
+
+                case "borrows" when !isType:
+                    marker = SafeListMarker.Borrows;
+                    break;
+
+                case "drains" when id[0] is 'M':
+                    marker = SafeListMarker.Drains;
+                    break;
+
+                case "drains" when !isType:
+                    reason = DrainsIsForASequence;
+                    return false;
+
+                case "owned" when id[0] is 'P':
+                    marker = SafeListMarker.Owned;
+                    break;
+
+                case "owned":
+                    reason = OwnedIsForATask;
+                    return false;
+
+                case "view" when isType:
+                    marker = SafeListMarker.View;
+                    break;
+
+                case "noncopyable" when isType:
+                    marker = SafeListMarker.NonCopyable;
+                    break;
+
+                case "copyable" when isType:
+                    marker = SafeListMarker.Copyable;
+                    break;
+
+                case "erasable" when isType:
+                    marker = SafeListMarker.Erasable;
+                    break;
+
+                case "new" or "borrows" or "drains":
+                    reason = $"the marker '{part}' is for a member; a type takes 'view', 'noncopyable', 'copyable' or 'erasable'";
+                    return false;
+
+                case "view" or "noncopyable" or "copyable" or "erasable":
+                    reason = $"the marker '{part}' is for a type; a member takes 'new', 'borrows', 'drains', 'owned' or no marker";
+                    return false;
+
+                default:
+                    reason = $"unknown marker '{part}'; the markers are 'new', 'borrows', 'drains', 'owned', 'view', 'noncopyable', 'copyable' and 'erasable'";
+                    return false;
+            }
+        }
+
+        if (isType && marker is SafeListMarker.None)
+        {
+            reason = "a type needs the marker 'view', 'noncopyable', 'copyable' or 'erasable'; there is no entry for every member of a type";
+            return false;
+        }
+
+        entry = new SafeListEntry(id, marker, typeParameterNames, line);
+        reason = string.Empty;
+        return true;
+    }
+
+    /// <summary>
+    /// Gets what makes an ID one that cannot be a documentation comment ID at all, so that a typing error is not taken for the name of
+    /// something that the compilation does not reference. Null if the ID has the shape of one.
+    /// </summary>
+    private static string? GetErrorInId(string id)
+    {
+        const string Unbalanced = "the parentheses, braces and brackets of a documentation comment ID come in pairs";
+        var open = new Stack<char>();
+        int parameterLists = 0;
+
+        for (int i = 2; i < id.Length; i++)
+        {
+            char c = id[i];
+
+            switch (c)
+            {
+                case '(' or '{' or '[':
+                    if (c is '(' && open.Count is 0 && ++parameterLists > 1)
+                        return "a documentation comment ID has one parameter list";
+
+                    open.Push(c);
+                    break;
+
+                case ')' or '}' or ']':
+                    if (open.Count is 0 || open.Pop() != (c is ')' ? '(' : c is '}' ? '{' : '['))
+                        return Unbalanced;
+
+                    break;
+
+                // A name has no empty part, before the parameter list or inside it.
+                case '.' when i is 2 || i == id.Length - 1 || id[i - 1] is '.' or '(' or ',' || id[i + 1] is '(' or ')' or ',':
+                    return "a name in a documentation comment ID has no empty part";
+            }
+        }
+
+        if (open.Count > 0)
+            return Unbalanced;
+
+        return parameterLists > 0 && id[0] is 'T' or 'E' ? "only a method or a property has a parameter list" : null;
+    }
+
+    /// <summary>
+    /// Gets the method that the compiler makes for a member of an extension block: a static method of the class that the block is
+    /// in, with the receiver as its first parameter and the type parameters of the block before its own. For a property that is
+    /// the method of its getter, or of its setter if it has no getter. Null for anything that is no member of an extension block.
+    /// </summary>
+    /// <remarks>
+    /// The compiler can give the method with the type parameters of the block in place of its own, so its definition is taken:
+    /// that is what has the ID.
+    /// </remarks>
+    public static IMethodSymbol? GetExtensionImplementation(ISymbol definition) => definition switch {
+        { ContainingType.IsExtension: not true } => null,
+        IMethodSymbol method => method.AssociatedExtensionImplementation?.OriginalDefinition,
+        IPropertySymbol property => (property.GetMethod ?? property.SetMethod)?.AssociatedExtensionImplementation?.OriginalDefinition,
+        _ => null,
+    };
+
+    private SafeListEntry? GetEntry(ISymbol definition)
+    {
+        if (_entriesBySymbol.TryGetValue(definition, out var entry))
+            return entry;
+
+        if (definition.GetDocumentationCommentId() is { } id)
+            _entries.TryGetValue(id, out entry);
+
+        // A member of an extension block is listed under the ID of its implementation method as well: the ID of the member itself
+        // has the name that the compiler gives the block, which changes with the declaration of the receiver.
+        if (entry is null && GetExtensionImplementation(definition)?.GetDocumentationCommentId() is { } implementationId)
+            _entries.TryGetValue(implementationId, out entry);
+
+        // An entry with a name after 'for=' that the member does not have, or that names more than one of its type parameters, is a
+        // line that cannot be parsed, which is reported for the file. It vouches for nothing.
+        if (entry?.TypeParameterNames is { } names && !names.All(name => CountTypeParameters(definition, name) == 1))
+            entry = null;
+
+        _entriesBySymbol[definition] = entry;
+        return entry;
+    }
+}
+
+/// <summary>
+/// What an entry of a safe list says about the member or type it names.
+/// </summary>
+internal enum SafeListMarker
+{
+    /// <summary>
+    /// A member that is safe to use. What it hands out is as new as what it was called on and with.
+    /// </summary>
+    None,
+
+    /// <summary>
+    /// A member that is safe to use and that hands out a new value, whatever it was called on.
+    /// </summary>
+    New,
+
+    /// <summary>
+    /// A member that is safe to use and that a stored value of a non-copyable type may be passed to by value: it reads the copy during the
+    /// call and keeps nothing of it. It is the one marker that is of use on a member that is not generic.
+    /// </summary>
+    Borrows,
+
+    /// <summary>
+    /// A member that is safe to use and that returns a sequence which takes each element out of its source as it hands it out, so
+    /// that nothing hands out an element twice. The sequence is a new container, whatever the member was called on.
+    /// </summary>
+    Drains,
+
+    /// <summary>
+    /// An instance property of a class, of type Task&lt;TResult&gt;, that is safe to use and whose task belongs to its object alone: it is
+    /// made with the object, no constructor takes it from somewhere else, and no other member hands it out. Its one read on an object
+    /// that a member has just made is a new value.
+    /// </summary>
+    Owned,
+
+    /// <summary>
+    /// A struct whose copies share the elements instead of copying them.
+    /// </summary>
+    View,
+
+    /// <summary>
+    /// A struct that is a non-copyable type.
+    /// </summary>
+    NonCopyable,
+
+    /// <summary>
+    /// A struct that is an ordinary struct for the project, though the built-in list or an attribute in a referenced assembly makes it a
+    /// non-copyable type.
+    /// </summary>
+    Copyable,
+
+    /// <summary>
+    /// A generic class or interface of which no base type and no interface hands out a value of its type arguments, so that a container of the
+    /// type may be converted to one of them.
+    /// </summary>
+    Erasable,
+}
+
+/// <summary>
+/// An entry of a safe list: the documentation comment ID of a member or a type, its marker, and for a member optionally the type parameters that
+/// the entry vouches for.
+/// </summary>
+internal sealed class SafeListEntry(string id, SafeListMarker marker, string[]? typeParameterNames, TextLine line)
+{
+    public string Id { get; } = id;
+
+    public SafeListMarker Marker { get; } = marker;
+
+    /// <summary>
+    /// Gets the names after <c>for=</c>: the type parameters of the member or of a type that contains it that the entry vouches for. Null if the
+    /// entry covers every type parameter.
+    /// </summary>
+    public string[]? TypeParameterNames { get; } = typeParameterNames;
+
+    /// <summary>
+    /// Gets the line of the file that the entry is on.
+    /// </summary>
+    public TextLine Line { get; } = line;
+
+    /// <summary>
+    /// Gets a value indicating whether the entry vouches for the member when a non-copyable type or a container is bound to the given type parameter
+    /// of the member or of a type that contains it. If it does not, the member counts as not listed for that use.
+    /// </summary>
+    public bool Covers(ITypeParameterSymbol typeParameter) => TypeParameterNames is null || Array.IndexOf(TypeParameterNames, typeParameter.Name) >= 0;
+}
+
+/// <summary>
+/// A line of a safe list file that cannot be parsed.
+/// </summary>
+internal readonly struct SafeListError(TextLine line, string reason)
+{
+    public TextLine Line { get; } = line;
+
+    public string Reason { get; } = reason;
+}

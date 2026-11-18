@@ -1,0 +1,34 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <ItemGroup Label="Analyzers">
+    <PackageVersion Include="DotNetAnalyzers.DocumentationAnalyzers" Version="1.0.0-beta.59" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="3.11.0" />
+    <PackageVersion Include="PolySharp" Version="1.15.0" />
+    <PackageVersion Include="Roslynator.Analyzers" Version="5.0.1" />
+    <PackageVersion Include="StyleCop.Analyzers" Version="1.2.0-beta.556" />
+  </ItemGroup>
+
+  <ItemGroup Label="Roslyn">
+    <!-- The oldest compiler the analyzer supports: the one of the .NET 10 SDK. The analyzer does not load in an older one. -->
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
+  </ItemGroup>
+
+  <ItemGroup Label="Runtime">
+    <PackageVersion Include="System.Runtime.CompilerServices.Unsafe" Version="6.1.2" />
+  </ItemGroup>
+
+  <ItemGroup Label="Testing">
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Analyzer.Testing" Version="1.1.2" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="5.0.0" />
+    <PackageVersion Include="PrefixClassName.MsTest" Version="2.0.0" />
+  </ItemGroup>
+
+  <!-- The second target of the tests runs them against the compiler of the newest SDK: the .NET 11 SDK ships version 5.12. -->
+  <ItemGroup Label="Roslyn of the newest SDK" Condition="'$(TargetFramework)' == 'net11.0'">
+    <PackageVersion Update="Microsoft.CodeAnalysis.CSharp" Version="5.12.0" />
+    <PackageVersion Update="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="5.12.0" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,51 @@
+name: build and test
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+# The test project has a net10.0 target, with the compiler that the analyzers are built against, and a net11.0 target, with the compiler
+# of the newest SDK, which it adds only when an SDK of 11 or later builds it. Both SDKs are installed, so both targets build and run.
+jobs:
+  debug-windows:
+
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v7
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v6
+      with:
+        dotnet-version: |
+          10.0.x
+          11.0.x
+    - name: Clean
+      run: dotnet clean --configuration Debug && dotnet nuget locals all --clear
+    - name: Install dependencies
+      run: dotnet restore
+    - name: Build
+      run: dotnet build --configuration Debug --no-restore
+    - name: Test
+      run: dotnet test --configuration Debug --no-build
+
+  release-windows:
+
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v7
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v6
+      with:
+        dotnet-version: |
+          10.0.x
+          11.0.x
+    - name: Clean
+      run: dotnet clean --configuration Release && dotnet nuget locals all --clear
+    - name: Install dependencies
+      run: dotnet restore
+    - name: Build
+      run: dotnet build --configuration Release --no-restore
+    - name: Test
+      run: dotnet test --configuration Release --no-build
