@@ -12,6 +12,9 @@
     <IncludeBuildOutput>false</IncludeBuildOutput>
     <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
 
+    <!-- The debug symbols are inside the assembly, since the package has no place beside it that a compiler would read them from. -->
+    <DebugType>embedded</DebugType>
+
     <!-- RS2008: the rules are documented in the README; the project keeps no release tracking files. -->
     <NoWarn>$(NoWarn);RS2008</NoWarn>
   </PropertyGroup>

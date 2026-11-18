@@ -4,14 +4,14 @@
 [![View nuget packages](https://img.shields.io/nuget/v/Singulink.CodeAnalysis.svg)](https://www.nuget.org/packages/Singulink.CodeAnalysis/)
 [![Build and Test](https://github.com/Singulink/Singulink.CodeAnalysis/workflows/build%20and%20test/badge.svg)](https://github.com/Singulink/Singulink.CodeAnalysis/actions?query=workflow%3A%22build+and+test%22)
 
-**Singulink.CodeAnalysis** is a set of Roslyn analyzers that check code against rules you opt into with attributes. There are no style or opinion
-rules. A project that gets the analyzers only through a library that uses them sees findings only where it uses what that library marks. A
-project that references one of the two packages itself also gets ten framework structs, such as `GCHandle` and `SpinLock`, as non-copyable
-types; see [Non-copyable types](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/concepts/non-copyable-types.html) and [Leaving out the built-in non-copyable types](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/guides/symbol-list.html#the-built-in-non-copyable-types).
+**Singulink.CodeAnalysis** is a set of Roslyn analyzers that find every place where code copies a struct that must never be copied. A lock
+guard, a handle or a pooled buffer is a struct where each instance owns something that only one instance may own: copy it, and two instances
+release the same lock or free the same handle. Mark such a struct with `[NonCopyable]`, and the build warns wherever it is copied, including
+the copies that are easy to miss: a read out of a list or a task, a value passed through generic code, and the copies that the compiler makes
+by itself for patterns, iterators and read-only references.
 
-The first set of rules, the [SCA1000s](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/guides/getting-started.html#the-diagnostics), reports code that copies a struct which must not be copied, such as a lock guard, a handle, or any
-other struct where each instance owns something that only one copy may own. Mark the struct with `[NonCopyable]`, and copying it becomes a warning,
-also where the copy is made by a collection, a task or other generic code.
+The analyzers check only what is marked, and there are no style or opinion rules. All the rules so far, the
+[SCA1000s](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/guides/getting-started.html#the-diagnostics), are about non-copyable structs.
 
 ```cs
 using Singulink.CodeAnalysis;
@@ -225,6 +225,11 @@ no runtime dependency:
 ```xml
 <PackageReference Include="Singulink.CodeAnalysis.Analyzers" Version="0.5.0" PrivateAssets="all" />
 ```
+
+A project that references one of the two packages itself also has ten framework structs checked as non-copyable types, such as `GCHandle` and
+`SpinLock`. A project that only gets the analyzers through a library does not. See
+[Non-copyable types](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/concepts/non-copyable-types.html) and
+[Leaving out the built-in non-copyable types](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/guides/symbol-list.html#the-built-in-non-copyable-types).
 
 The analyzers package is marked as a development dependency, so `dotnet add package` and Visual Studio add it with `PrivateAssets="all"`, which keeps it
 to your own project. To let it reach the projects that use your library, see [Libraries](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/guides/libraries.html).

@@ -2,14 +2,14 @@
 
 # Singulink.CodeAnalysis
 
-**Singulink.CodeAnalysis** is a set of Roslyn analyzers that check code against rules you opt into with attributes. There are no style or opinion
-rules. A project that gets the analyzers only through a library that uses them sees findings only where it uses what that library marks. A
-project that references one of the two packages itself also gets ten framework structs, such as <xref:System.Runtime.InteropServices.GCHandle>
-and <xref:System.Threading.SpinLock>, as non-copyable types.
+**Singulink.CodeAnalysis** is a set of Roslyn analyzers that find every place where code copies a struct that must never be copied. A lock
+guard, a handle or a pooled buffer is a struct where each instance owns something that only one instance may own: copy it, and two instances
+release the same lock or free the same handle. Mark such a struct with `[NonCopyable]`, and the build warns wherever it is copied, including
+the copies that are easy to miss: a read out of a list or a task, a value passed through generic code, and the copies that the compiler makes
+by itself for patterns, iterators and read-only references.
 
-The first set of rules, the SCA1000s, reports code that copies a struct which must not be copied, such as a lock guard, a handle, or any other
-struct where each instance owns something that only one copy may own. Mark the struct with `[NonCopyable]`, and copying it becomes a warning,
-also where the copy is made by a collection, a task or other generic code.
+The analyzers check only what is marked, and there are no style or opinion rules. All the rules so far, the SCA1000s, are about non-copyable
+structs.
 
 **Singulink.CodeAnalysis** is part of the **Singulink Libraries** collection. Visit https://github.com/Singulink/ to see our full list of publicly
 available libraries and other open-source projects.
@@ -20,6 +20,10 @@ The analyzers come in two packages on NuGet:
 
 - `Singulink.CodeAnalysis` - the attributes and the <xref:Singulink.CodeAnalysis.NonCopyable> helpers, which bring the analyzers with them.
 - `Singulink.CodeAnalysis.Analyzers` - the analyzers only, for a project that declares the attributes itself.
+
+A project that references one of the two packages itself also has ten framework structs checked as non-copyable types, such as
+<xref:System.Runtime.InteropServices.GCHandle> and <xref:System.Threading.SpinLock>. A project that only gets the analyzers through a library
+does not. See [Non-copyable Types](articles/concepts/non-copyable-types.md).
 
 **Requirements**: C# projects built with the .NET 10 SDK or later.
 
