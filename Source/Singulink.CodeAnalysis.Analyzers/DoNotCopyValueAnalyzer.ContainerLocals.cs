@@ -406,6 +406,9 @@ public sealed partial class DoNotCopyValueAnalyzer
             if (judged is ReceivedContainer.KeptByUncheckedCode or ReceivedContainer.KeptByUnlistedCode)
                 return $"it is passed to '{target}', which is taken to keep it: the type of its parameter mentions a type parameter that is not marked";
 
+            if (judged is ReceivedContainer.KeptByUnmarkedAssembly)
+                return $"it is passed to '{target}', which is taken to keep it: the member is of an assembly that was not built with the analyzer, and the list does not mark it 'borrows'";
+
             if (call is IInvocationOperation { TargetMethod: var method } invocation &&
                 (method.ReturnsByRef || method.ReturnsByRefReadonly || types.IsView(invocation.Type) || invocation.Type is { IsRefLikeType: true }))
             {
@@ -424,9 +427,51 @@ public sealed partial class DoNotCopyValueAnalyzer
         /// that use. So the text says "anywhere in the method" and names the line of the use: it does not read as if the use had
         /// come first.
         /// </remarks>
-        private string GetNotOwnHint(IOperation? source) => GetWhyNotOwn(source, out var local) is { } because
-            ? $": '{local!.Name}' is not the method's own anywhere in the method, because {because}"
-            : string.Empty;
+        private string GetNotOwnHint(IOperation? source)
+        {
+            if (GetWhyNotOwn(source, out var local) is { } because)
+                return $": '{local!.Name}' is not the method's own anywhere in the method, because {because}";
+
+            // A container that a member of an assembly that was not built with the analyzer hands out is stored, unless the list says 'new'.
+            while (source is IParenthesizedOperation or IConversionOperation { OperatorMethod: null })
+                source = source is IConversionOperation conversion ? conversion.Operand : ((IParenthesizedOperation)source).Operand;
+
+            // An object of a class of such an assembly that derives from a container is never new, wherever it comes from.
+            if (source is not null && types.IsUncheckedDerivedContainer(source.Type))
+                return GetUncheckedDerivedContainerHint(source.Type);
+
+            ISymbol? member = source switch {
+                IInvocationOperation invocation => invocation.TargetMethod,
+                IPropertyReferenceOperation property => property.Property,
+                IAwaitOperation { Syntax: AwaitExpressionSyntax awaitSyntax } awaited => awaited.SemanticModel?.GetAwaitExpressionInfo(awaitSyntax).GetResultMethod,
+                _ => null,
+            };
+
+            if (member is not null && types.HandsOutUncheckedContainer(member, source!.Type, GetDeclaredResultType(member)))
+                return GetUncheckedSourceHint(member, source.Type);
+
+            return string.Empty;
+        }
+
+        /// <summary>
+        /// Gets what a message adds about a container that a member of an assembly that was not built with the analyzer hands out, which
+        /// counts as stored: a list entry marked 'new' says otherwise, except for an object of a class of such an assembly that derives
+        /// from a container, for which no entry helps.
+        /// </summary>
+        private string GetUncheckedSourceHint(ISymbol member, ITypeSymbol? handedOut)
+        {
+            if (types.IsUncheckedDerivedContainer(handedOut))
+                return GetUncheckedDerivedContainerHint(handedOut);
+
+            var definition = NonCopyableTypes.GetListDefinition(member);
+            return $": '{Display(definition)}' is a member of an assembly that was not built with the analyzer, so the container that it " +
+                $"hands out counts as held by something else; if it hands out a container that nothing else holds, add " +
+                $"'{GetListId(definition)};new' to a NonCopyableSymbols.txt file";
+        }
+
+        private static string GetUncheckedDerivedContainerHint(ITypeSymbol type) =>
+            $": '{type}' is of an assembly that was not built with the analyzer and is a container only through what it derives from or " +
+            "implements, so nothing checks what its own code puts in it, and an object of it is never a new container";
 
         /// <summary>
         /// Gets what made a local that holds a container not the method's own, in words that go after "because" and start with

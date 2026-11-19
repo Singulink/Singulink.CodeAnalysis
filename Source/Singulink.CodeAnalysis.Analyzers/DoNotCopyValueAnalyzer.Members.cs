@@ -352,7 +352,14 @@ public sealed partial class DoNotCopyValueAnalyzer
             switch (use.Kind)
             {
                 case MemberUseKind.UnlistedNonCopyable:
-                    Report(Rules.UnlistedMember, syntax, Display(use.Definition!), use.TypeArgument, use.TypeParameter!.Name, GetListId(use.Definition!));
+                    // A type parameter that is marked in an assembly that was not built with the analyzer cannot be marked any better.
+                    Report(
+                        NonCopyableTypes.HasUncountedNonCopyableMark(use.TypeParameter!) ? Rules.UnlistedMemberOfUncheckedCode : Rules.UnlistedMember,
+                        syntax,
+                        Display(use.Definition!),
+                        use.TypeArgument,
+                        use.TypeParameter!.Name,
+                        GetListId(use.Definition!));
                     break;
 
                 case MemberUseKind.UnlistedContainer:
@@ -381,7 +388,22 @@ public sealed partial class DoNotCopyValueAnalyzer
                     break;
             }
 
+            CheckUncheckedInbound(syntax, member);
             return use;
+        }
+
+        /// <summary>
+        /// Reports a member of an assembly that was not built with the analyzer and that gets at a non-copyable value other than by value.
+        /// Returns whether it was reported.
+        /// </summary>
+        private bool CheckUncheckedInbound(SyntaxNode syntax, ISymbol member)
+        {
+            if (types.FindUncheckedInbound(member) is not { } gettingAt)
+                return false;
+
+            var definition = NonCopyableTypes.GetListDefinition(member);
+            Report(Rules.UncheckedMember, syntax, Display(definition), gettingAt.Name, gettingAt.Type, GetListId(definition));
+            return true;
         }
 
         /// <summary>
@@ -513,15 +535,17 @@ public sealed partial class DoNotCopyValueAnalyzer
             ITypeSymbol? result,
             bool report,
             IOperation? from = null,
-            string? advice = null)
+            string? advice = null,
+            ISymbol? receiverFrom = null)
         {
             var use = report ? CheckMemberUse(syntax, member) : types.GetUse(member);
 
             if (report)
                 CheckReceiverType(syntax, receiverType, member);
 
-            // What a generic hands out of a container that is bound to a marked type parameter is stored.
-            if (types.HandsOutBoundContainer(member, handedOutType))
+            // What a generic hands out of a container that is bound to a marked type parameter is stored, and so is a container that a
+            // member of an assembly that was not built with the analyzer hands out, as for the member written out.
+            if (types.HandsOutBoundContainer(member, handedOutType) || types.HandsOutUncheckedContainer(member, handedOutType, GetDeclaredResultType(member)))
                 return false;
 
             // The result of checked code is a new value, and so is a non-copyable value from a member marked 'new'. What has just been reported
@@ -533,20 +557,32 @@ public sealed partial class DoNotCopyValueAnalyzer
             if (types.IsNonCopyableType(handedOutType))
             {
                 // The finding names what the construct gives in the end, which says more than the type of an awaiter or an enumerator.
+                // Where what it was called on says nothing, the member of unchecked code that handed it out does.
                 if (report)
+                {
+                    string hint = GetNotOwnHint(from);
+
+                    if (hint.Length is 0 && receiverFrom is not null)
+                        hint = GetUncheckedSourceHint(receiverFrom, receiverType);
+
                     Report(
                         Rules.ReadFromStoredContainer,
                         syntax,
                         construct,
                         types.IsNonCopyableType(result) ? result : handedOutType,
-                        GetNotOwnHint(from),
+                        hint,
                         advice ?? GetAdviceForStoredSource(from, isRead: true));
+                }
 
                 return true;
             }
 
             return false;
         }
+
+        // The member, if it is one of an assembly that was not built with the analyzer and hands out a container that is so stored.
+        private ISymbol? GetUncheckedSource(ISymbol member, ITypeSymbol? handedOut) =>
+            types.HandsOutUncheckedContainer(member, handedOut, GetDeclaredResultType(member)) ? member : null;
 
         /// <summary>
         /// Reports an 'await' whose awaiter is of a non-copyable type, whatever is awaited: when the 'await' suspends, the compiler
@@ -596,14 +632,21 @@ public sealed partial class DoNotCopyValueAnalyzer
             if (report)
                 CheckAwaiter(operation);
 
-            // The result of an awaitable that is checked code is a new value.
-            if (!types.Carries(awaited.Type))
+            var syntax = operation.Syntax as AwaitExpressionSyntax;
+            var info = syntax is null ? default : operation.SemanticModel?.GetAwaitExpressionInfo(syntax);
+
+            // The result of an awaitable that is checked code is a new value, unless a member of an assembly that was not built with the
+            // analyzer hands out a container on the way, which is stored, as for the members written out.
+            if (!types.Carries(awaited.Type) &&
+                (info is not { GetAwaiterMethod: { } awaiterOf, GetResultMethod: { } resultOf } ||
+                    (GetUncheckedSource(awaiterOf, awaiterOf.ReturnType) is null && GetUncheckedSource(resultOf, resultOf.ReturnType) is null)))
+            {
                 return true;
+            }
 
             bool isNew = IsNew(awaited);
 
-            if (operation.Syntax is not AwaitExpressionSyntax syntax ||
-                operation.SemanticModel?.GetAwaitExpressionInfo(syntax) is not { GetAwaiterMethod: { } getAwaiter, GetResultMethod: { } getResult } info)
+            if (syntax is null || info is not { GetAwaiterMethod: { } getAwaiter, GetResultMethod: { } getResult } awaitInfo)
             {
                 // A dynamic await is not covered: the result is as new as what is awaited.
                 return isNew;
@@ -623,7 +666,7 @@ public sealed partial class DoNotCopyValueAnalyzer
             var awaiterType = getAwaiter.ReturnType;
             isNew = FollowMember(syntax, getAwaiter, awaited.Type, awaiterType, isNew, "'await'", operation.Type, report, awaited);
 
-            if (report && info.IsCompletedProperty is { } isCompleted)
+            if (report && awaitInfo.IsCompletedProperty is { } isCompleted)
             {
                 CheckMemberUse(syntax, isCompleted);
                 CheckReceiverType(syntax, awaiterType, isCompleted);
@@ -637,7 +680,8 @@ public sealed partial class DoNotCopyValueAnalyzer
                 CheckReceiverType(syntax, awaiterType, onCompleted);
             }
 
-            return FollowMember(syntax, getResult, awaiterType, getResult.ReturnType, isNew, "'await'", operation.Type, report, awaited);
+            return FollowMember(
+                syntax, getResult, awaiterType, getResult.ReturnType, isNew, "'await'", operation.Type, report, awaited, receiverFrom: GetUncheckedSource(getAwaiter, awaiterType));
         }
 
         /// <summary>
@@ -790,6 +834,10 @@ public sealed partial class DoNotCopyValueAnalyzer
             var elementType = info.ElementType;
             bool elementIsNew;
 
+            // The user-defined conversions of each element to the type of the variable, with nothing written for them.
+            CheckMemberUse(collection.Syntax, info.CurrentConversion.MethodSymbol);
+            CheckMemberUse(collection.Syntax, info.ElementConversion.MethodSymbol);
+
             // An 'await foreach' awaits what MoveNextAsync and DisposeAsync return, with members that the compiler binds as for a
             // written 'await'. The compiler that the analyzer is built against does not give them, so an awaitable of the project's
             // own over a non-copyable type or a container is a use that is not known to be safe, whatever the loop is over.
@@ -863,7 +911,8 @@ public sealed partial class DoNotCopyValueAnalyzer
 
                 // A reference to an element is a stored value. Read by value it is copied, and no member needs to be listed for that to be known.
                 elementIsNew = ReturnsByValue(current) &&
-                    FollowMember(site, current, enumeratorType, current.Type, enumeratorIsNew, Construct, elementType, report: true, collection, advice);
+                    FollowMember(
+                        site, current, enumeratorType, current.Type, enumeratorIsNew, Construct, elementType, report: true, collection, advice, GetUncheckedSource(getEnumerator, enumeratorType));
 
                 if (!ReturnsByValue(current))
                 {
@@ -1030,10 +1079,15 @@ public sealed partial class DoNotCopyValueAnalyzer
         /// non-copyable struct: the clone is a shallow copy, field by field. A field that holds a reference to a container does not count,
         /// since the clone shares the container.
         /// </summary>
-        private void CheckMemberwiseClone(IInvocationOperation operation)
+        /// <remarks>
+        /// Where the class has no such field, the object that is cloned can be of a derived class that has one: one of the compilation is
+        /// reported as the definite copy that it is, and a class that another assembly can derive from as a possible one (SCA1008). A
+        /// sealed class and a struct have no derived class.
+        /// </remarks>
+        private void CheckMemberwiseClone(IOperation operation, IOperation? instance)
         {
             // 'base.MemberwiseClone()' has the base type as the type of its instance, and clones the object all the same.
-            var type = operation.Instance is { } instance && SkipParentheses(instance) is not IInstanceReferenceOperation
+            var type = instance is not null && SkipParentheses(instance) is not IInstanceReferenceOperation
                 ? SkipParentheses(instance).Type
                 : context.OwningSymbol.ContainingType;
 
@@ -1043,18 +1097,74 @@ public sealed partial class DoNotCopyValueAnalyzer
                 return;
             }
 
+            // C# allows the call on an object of a type parameter only where it is constrained to the class or to one derived from it,
+            // and the object is of that class or of one derived from it.
+            if (type is ITypeParameterSymbol typeParameter)
+                type = GetConstraintClass(typeParameter);
+
             for (var current = type; current is not null; current = current.BaseType)
             {
                 foreach (var member in current.GetMembers())
                 {
                     if (member is IFieldSymbol { IsStatic: false, RefKind: RefKind.None } field && types.IsNonCopyableType(field.Type))
                     {
-                        Report(Rules.MemberwiseCloneCall, operation.Syntax, type, field.Type, field.AssociatedSymbol?.Name ?? field.Name);
+                        Report(Rules.MemberwiseCloneCall, operation.Syntax, type, field.Type, DisplayField(field));
                         return;
                     }
                 }
             }
+
+            if (type is not INamedTypeSymbol { TypeKind: TypeKind.Class, IsSealed: false } named)
+                return;
+
+            if (types.FindDerivedClassWithNonCopyableField(named) is { } derived)
+            {
+                var field = derived.Field;
+                Report(Rules.MemberwiseCloneOfDerivedClass, operation.Syntax, named, derived.Class, field.Type, DisplayField(field));
+            }
+            else if (types.CanBeDerivedFromElsewhere(named))
+            {
+                Report(Rules.MemberwiseCloneOfOpenClass, operation.Syntax, named);
+            }
         }
+
+        // The class that a type parameter is constrained to, through the type parameters that it is constrained to. Null if it has none.
+        private static INamedTypeSymbol? GetConstraintClass(ITypeParameterSymbol typeParameter)
+        {
+            foreach (var constraint in typeParameter.ConstraintTypes)
+            {
+                if (constraint is INamedTypeSymbol { TypeKind: TypeKind.Class } constraintClass)
+                    return constraintClass;
+
+                if (constraint is ITypeParameterSymbol other && GetConstraintClass(other) is { } throughOther)
+                    return throughOther;
+            }
+
+            return null;
+        }
+
+        // A field as the message names it: "field 'Guard'" by the property that it backs, and "parameter 'g'" for the field that holds a
+        // captured parameter of a primary constructor, which the compiler names '<g>P'.
+        private static string DisplayField(IFieldSymbol field)
+        {
+            if (field.AssociatedSymbol is { } associated)
+                return $"field '{associated.Name}'";
+
+            if (field is { IsImplicitlyDeclared: true, Name: { Length: > 3 } name } && name.StartsWith("<", StringComparison.Ordinal) && name.EndsWith(">P", StringComparison.Ordinal))
+                return $"parameter '{name[1..^2]}'";
+
+            return $"field '{field.Name}'";
+        }
+
+        // The clone of object, and the one of MarshalByRefObject that Stream and Component inherit, which clones the object as well.
+        private static bool IsMemberwiseClone(IMethodSymbol method) => method is { Name: nameof(MemberwiseClone) } &&
+            ((method.Parameters.IsEmpty && method.ContainingType.SpecialType is SpecialType.System_Object) ||
+             (method.Parameters is [{ Type.SpecialType: SpecialType.System_Boolean }] &&
+                method.ContainingType is { Name: nameof(MarshalByRefObject) } owner && NonCopyableTypes.IsInNamespace(owner, "System")));
+
+        private static bool IsGetObjectValue(IMethodSymbol method) =>
+            method is { Name: nameof(RuntimeHelpers.GetObjectValue), ContainingType: { Name: nameof(RuntimeHelpers) } owner } &&
+            NonCopyableTypes.IsInNamespace(owner, "System.Runtime.CompilerServices");
 
         /// <summary>
         /// Gets the Add methods of a collection type that take an element of a collection expression: what the compiler binds for each element

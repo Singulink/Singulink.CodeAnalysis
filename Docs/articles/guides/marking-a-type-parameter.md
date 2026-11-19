@@ -3,7 +3,9 @@
 # Marking a Type Parameter
 
 A generic that does not copy the values of a type parameter says so with `[NonCopyable]` on it. Inside the generic the type parameter is then a
-non-copyable type and is checked like one, and code that uses the generic with a non-copyable type is trusted, also from another assembly.
+non-copyable type and is checked like one, and code that uses the generic with a non-copyable type is trusted, also from another assembly
+that was built with the analyzer. On a generic of an assembly that was not, the mark counts as absent: see
+[Code Not Built With the Analyzer](../concepts/unchecked-code.md).
 
 ## An Example
 

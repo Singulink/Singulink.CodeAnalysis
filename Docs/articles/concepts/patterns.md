@@ -121,7 +121,9 @@ its type and `Add` for each element: these are member uses like the ones that ar
 by-value parameter that is not used again after the `with` is a new value there, as at any other
 [last use](last-use.md).
 <xref:System.Object.MemberwiseClone> is reported (`SCA1005`) in a class that has an instance field of a non-copyable type, its own or inherited, and in a
-non-copyable struct. A field that holds a container, such as a `List<LockGuard>`, does not count: the clone shares the list.
+non-copyable struct. A field that holds a container, such as a `List<LockGuard>`, does not count: the clone shares the list. A class with
+no such field is reported too where a derived class of the compilation has one, and with an ID of its own (`SCA1008`) where another
+assembly can derive from it.
 
 ```cs
 var changed = _options with { Size = 1 };        // SCA1003: copies the stored '_options'

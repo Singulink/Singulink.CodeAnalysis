@@ -53,9 +53,13 @@ This package is part of our **Singulink Libraries** collection. Visit https://gi
 
 You may not have added these analyzers yourself. A library whose public API has structs that must not be copied, such as lock guards or
 handles, can bring the analyzers with it, so that the projects which use the library are warned when they copy those structs. The
-analyzers then check the types that the library marked, and nothing else: with nothing marked in your own code, a finding appears only
-where your code copies one of the library's structs, or a collection or a task that holds one. The ten framework structs that the
-analyzers know as non-copyable stay off in such a project.
+analyzers then check the types that the library marked: with nothing marked in your own code, a finding appears where your code copies
+one of the library's structs, or a collection or a task that holds one. The ten framework structs that the analyzers know as
+non-copyable stay off in such a project.
+
+Three findings are about code that can copy such a struct where no copy shows, so they can appear in a project that copies nothing:
+`MemberwiseClone` in a class that another assembly can derive from (`SCA1008`), any use of `RuntimeHelpers.GetObjectValue`
+(`SCA1007`), and a referenced assembly that uses the library's structs and was not built with the analyzers (`SCA1025`).
 
 Each finding has an ID of the form `SCA1001`, and its message names the value, says what takes the copy and what to do instead. The ID
 links to the article of the finding on the [documentation site](https://www.singulink.com/Docs/Singulink.CodeAnalysis/index.html), with an example that is reported and the forms
@@ -216,14 +220,14 @@ There are two packages:
 Install **`Singulink.CodeAnalysis`** if you want to use the attributes from the package:
 
 ```xml
-<PackageReference Include="Singulink.CodeAnalysis" Version="0.5.0" />
+<PackageReference Include="Singulink.CodeAnalysis" Version="0.6.0" />
 ```
 
 Install **`Singulink.CodeAnalysis.Analyzers`** alone if you declare the attributes yourself (see [Marking a Struct of Your Own](#marking-a-struct-of-your-own) above) and want
 no runtime dependency:
 
 ```xml
-<PackageReference Include="Singulink.CodeAnalysis.Analyzers" Version="0.5.0" PrivateAssets="all" />
+<PackageReference Include="Singulink.CodeAnalysis.Analyzers" Version="0.6.0" PrivateAssets="all" />
 ```
 
 A project that references one of the two packages itself also has ten framework structs checked as non-copyable types, such as `GCHandle` and

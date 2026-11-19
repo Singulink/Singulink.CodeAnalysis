@@ -6,38 +6,26 @@ What the analyzer cannot see, and what it takes on trust.
 
 ## The Gaps
 
-- **<xref:System.Object.MemberwiseClone> called in a base class** that has no field of a non-copyable type, on an object of a derived class that has one.
-- **<xref:System.Runtime.CompilerServices.RuntimeHelpers.GetObjectValue*?displayProperty=nameWithType>,** which clones a boxed struct.
-
-  A project that wants these two ruled out can ban the calls with the
-  [Microsoft.CodeAnalysis.BannedApiAnalyzers](https://www.nuget.org/packages/Microsoft.CodeAnalysis.BannedApiAnalyzers) package, which
-  reports every use of a symbol that its `BannedSymbols.txt` file names (`RS0030`):
-
-  ```
-  M:System.Object.MemberwiseClone;Copies the fields of an object, non-copyable ones included, with no diagnostic in a base class
-  M:System.Runtime.CompilerServices.RuntimeHelpers.GetObjectValue(System.Object);Clones a boxed struct
-  ```
-
-  That bans the calls in the code of the project itself, a <xref:System.Object.MemberwiseClone> inside one of its classes included. A base class in another
-  assembly is not seen.
+- **A base class of an assembly that was not built with the analyzer and that clones itself.** <xref:System.Text.Encoding>,
+  <xref:System.Globalization.CultureInfo> and <xref:System.Globalization.Calendar> are examples from the framework: each has a `Clone`
+  that calls <xref:System.Object.MemberwiseClone>. A class of the project that derives from one and holds a non-copyable value is copied
+  by that call, in code that the analyzer does not see. A call in the code of the project is reported: see [SCA1005](../diagnostics/sca1005.md)
+  and [SCA1008](../diagnostics/sca1008.md).
+- **What code that was not built with the analyzer does with what it is given.** Such an assembly can copy what it is given, and no rule
+  sees that. A value that is passed to it by value is its business from then on, and so is what a `borrows` or a `new` entry vouches for.
+  See [Code Not Built With the Analyzer](unchecked-code.md).
+- **Code that was not built with the analyzer and runs behind a type of checked code or of the framework, for the built-in non-copyable
+  types.** A call is judged by the member that it binds to, so the code that runs behind it is not seen: a class of checked code with a
+  field of a non-copyable type that another assembly can read, or a member that returns a reference to one, given to unchecked code; an
+  interface or an abstract class of checked code that unchecked code implements; and a delegate or a function pointer that unchecked code
+  made. For a type that a project or a library declares, the reference of the unchecked assembly to the one that declares it is reported
+  ([SCA1025](../diagnostics/sca1025.md)); for the built-in types, which every assembly can name, and for a struct of unchecked code that
+  only a list line makes non-copyable, nothing is. See [What Stays Out of Reach](unchecked-code.md#what-stays-out-of-reach).
 - **Two value tasks made from one source and token.** The contract of <xref:System.Threading.Tasks.Sources.IValueTaskSource`1> forbids it. The read of the result inside the
   source is reported and suppressed there: see [What a listed member hands out](listed-members.md).
 - **A handle rebuilt from its value.** `GCHandle.FromIntPtr(GCHandle.ToIntPtr(handle))`, a cast of an <xref:System.IntPtr> to a <xref:System.Runtime.InteropServices.GCHandle>, and the same
   for the generic handle types make a second owner of one handle. The analyzer cannot follow an <xref:System.IntPtr>.
 - **A struct with an explicit layout** that lays another field over a field of a non-copyable type with `[FieldOffset]`.
-- **Code that keeps a container without saying so:** a method of an assembly that was built without the analyzer and has no `[Kept]`. A
-  caller takes the container to be still its own. What the other holder reads from it is a read from a stored container all the same.
-- **A method that stores `this`** into a field or a collection keeps the object that it is called on, and no mark says so. No copy follows
-  from that where the members of the object are checked code, as those of a marked generic are: what they hand out is a value that they
-  moved out, whoever else holds the object. A class that derives from a listed container is never a new container for the members that
-  it inherits: see [What a listed member hands out](listed-members.md). What remains is a type whose members a list file
-  of the project vouches for, a class of another assembly that derives from a listed container among them: an entry says that the
-  member hands out what the object holds as new as the object is, which is wrong for a type that stores itself.
-- **An instance method that is called with a null `this`,** which reflection and IL can do and C# cannot. A field of `this` is taken to be
-  reachable after a [commit](last-use.md).
-- **An entry for a member of an interface is a statement about every implementation of it.** An implementation in checked code cannot
-  break it without a finding of its own, and an unlisted generic one is reported where it is created. An object from an assembly that
-  was not built with the analyzer is trusted to keep to it.
 - **Interceptors.** A method with `[InterceptsLocation]` replaces the method that a call binds to after the analyzer has looked at the
   call. Every rule that goes by the method that is called (a `[NotNullRef]` parameter, <xref:Singulink.CodeAnalysis.NonCopyable.Move*?displayProperty=nameWithType>, `[Kept]`, the safe list)
   judges the method that is written at the call.
@@ -67,10 +55,11 @@ What the analyzer cannot see, and what it takes on trust.
 - **Live views.** A span from `CollectionsMarshal.AsSpan(list)` that outlives a `list.Add`, a reference from
   <xref:System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault*?displayProperty=nameWithType> or `GetValueRefOrNullRef` that outlives a change of the dictionary, and a memory from
   <xref:System.Runtime.InteropServices.ImmutableCollectionsMarshal.AsMemory*?displayProperty=nameWithType> that outlives a change of the builder.
-- **What the language rules out and the runtime does not,** for [the last use](last-use.md): a method that reads its `out`
+- **What the language rules out and the runtime does not:** for [the last use](last-use.md), a method that reads its `out`
   parameter before it writes it, which only code that is not C# can do, and a method that keeps a pointer to something that it was passed
-  by reference.
-- **A list entry that is wrong,** and a library with a marked type parameter whose own build did not run the analyzer.
+  by reference; and an instance method that is called with a null `this`, which reflection and IL can do and C# cannot: a field of
+  `this` is taken to be reachable after a [commit](last-use.md).
+- **A list entry that is wrong.**
 - **A compiler newer than the ones tested.** The analyzers are tested with the compilers of the .NET 10 and .NET 11 SDKs. With a newer SDK,
   new syntax that the analyzers do not know is reported as a use that is not known to be safe. "Not known" covers an operation of a kind
   that the analyzers have no judgment for, where it is used by value, and a pattern of a kind that they have no judgment for, where it

@@ -87,7 +87,8 @@ the call. It is a call, so it goes before the read of a `[MovedFrom]` parameter 
 - **The analyzer does not check the method.** The mark is a statement of its author, like a line of [the safe list](symbol-list.md):
   no body is looked at, and no method is known by its name. So every mark that a project declares is reported once, where the
   attribute stands (`SCA1047`), and the author suppresses that finding there once the method is verified and tested. A method of a
-  referenced assembly is not reported.
+  referenced assembly is not reported, and its mark counts only if that assembly was built with the analyzer (see
+  [Code Not Built With the Analyzer](../concepts/unchecked-code.md)).
 
 The attributes package has two such methods, next to <xref:Singulink.CodeAnalysis.NonCopyable.Move*?displayProperty=nameWithType>:
 

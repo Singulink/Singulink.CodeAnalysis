@@ -1,7 +1,8 @@
-# Built-in safe list for the non-copyable analyzer.
-# Format: one documentation-comment ID per line, optional ";new", ";borrows", ";drains", ";owned", ";view", ";noncopyable" or ";erasable" marker, optional ";for=" type parameter names.
+# The built-in list of the non-copyable analyzer.
+# Format: one documentation-comment ID per line, with an optional marker (";new", ";borrows", ";drains", ";owned", ";view", ";noncopyable", ";copyable" or ";erasable") and optional ";for=" type parameter names.
+# A list file of a project can also vouch for an assembly, with a line of the form "A:Assembly.Name;trusted".
 # Runtime source read: dotnet/runtime d757c03be2c3.
-# Lines ending in "# net9+" or "# net10+" do not resolve against the .NET 8 reference assemblies.
+# A line ending in "# net9+", "# net10+" or "# net11+" names a member that exists from that version of .NET on. It does not resolve in a project that targets an earlier one.
 #
 #
 # "borrows" also answers who keeps a container. A parameter whose type mentions a type parameter that is not marked is taken to
@@ -71,6 +72,27 @@ M:System.Runtime.InteropServices.GCHandleExtensions.GetAddressOfStringData(Syste
 M:System.Threading.AsyncFlowControl.Equals(System.Threading.AsyncFlowControl);borrows
 M:System.Threading.AsyncFlowControl.op_Equality(System.Threading.AsyncFlowControl,System.Threading.AsyncFlowControl);borrows
 M:System.Threading.AsyncFlowControl.op_Inequality(System.Threading.AsyncFlowControl,System.Threading.AsyncFlowControl);borrows
+
+# ============================================================================
+# Members of the framework that get at a built-in non-copyable type other than by value
+# ============================================================================
+
+# A member of an assembly that was not built with the analyzer and that takes a non-copyable value by 'ref', 'in' or 'ref readonly',
+# in a container, in a view or through a pointer is reported unless it is here with "borrows". FrameworkScanTests finds every such
+# member of the shared frameworks. Each was read in the runtime source:
+# - String.Create: returns handler.ToStringAndClear() (String.cs 352-361 at d757c03).
+# - HybridCache.GetOrCreateAsync: passes key.Text on and clears the key before it returns (HybridCache.cs 100-139 at d757c03; the
+#   two overloads with a HybridCacheEntryContext at v11.0.0, 283-320, through ClearAndReturn).
+# - JavaMarshal.FinishCrossReferenceProcessing: pins the span and passes it to the runtime, which destroys each handle in place and
+#   keeps nothing (JavaMarshal.cs 61-78, interoplibinterface_java.cpp 111-135 at d757c03). It copies no handle: it ends each one,
+#   as GCHandle.Free does.
+M:System.String.Create(System.IFormatProvider,System.Runtime.CompilerServices.DefaultInterpolatedStringHandler@);borrows
+M:System.String.Create(System.IFormatProvider,System.Span{System.Char},System.Runtime.CompilerServices.DefaultInterpolatedStringHandler@);borrows
+M:Microsoft.Extensions.Caching.Hybrid.HybridCache.GetOrCreateAsync``1(System.Runtime.CompilerServices.DefaultInterpolatedStringHandler@,System.Func{System.Threading.CancellationToken,System.Threading.Tasks.ValueTask{``0}},Microsoft.Extensions.Caching.Hybrid.HybridCacheEntryOptions,System.Collections.Generic.IEnumerable{System.String},System.Threading.CancellationToken);borrows  # net10+
+M:Microsoft.Extensions.Caching.Hybrid.HybridCache.GetOrCreateAsync``2(System.Runtime.CompilerServices.DefaultInterpolatedStringHandler@,``0,System.Func{``0,System.Threading.CancellationToken,System.Threading.Tasks.ValueTask{``1}},Microsoft.Extensions.Caching.Hybrid.HybridCacheEntryOptions,System.Collections.Generic.IEnumerable{System.String},System.Threading.CancellationToken);borrows  # net10+
+M:Microsoft.Extensions.Caching.Hybrid.HybridCache.GetOrCreateAsync``1(System.Runtime.CompilerServices.DefaultInterpolatedStringHandler@,System.Func{Microsoft.Extensions.Caching.Hybrid.HybridCacheEntryContext,System.Threading.CancellationToken,System.Threading.Tasks.ValueTask{``0}},Microsoft.Extensions.Caching.Hybrid.HybridCacheEntryOptions,System.Collections.Generic.IEnumerable{System.String},System.Threading.CancellationToken);borrows  # net11+
+M:Microsoft.Extensions.Caching.Hybrid.HybridCache.GetOrCreateAsync``2(System.Runtime.CompilerServices.DefaultInterpolatedStringHandler@,``0,System.Func{``0,Microsoft.Extensions.Caching.Hybrid.HybridCacheEntryContext,System.Threading.CancellationToken,System.Threading.Tasks.ValueTask{``1}},Microsoft.Extensions.Caching.Hybrid.HybridCacheEntryOptions,System.Collections.Generic.IEnumerable{System.String},System.Threading.CancellationToken);borrows  # net11+
+M:System.Runtime.InteropServices.Java.JavaMarshal.FinishCrossReferenceProcessing(System.Runtime.InteropServices.Java.MarkCrossReferencesArgs*,System.ReadOnlySpan{System.Runtime.InteropServices.GCHandle});borrows  # net10+
 
 # ============================================================================
 # Erasable types: no base type or interface hands out a value of the type arguments

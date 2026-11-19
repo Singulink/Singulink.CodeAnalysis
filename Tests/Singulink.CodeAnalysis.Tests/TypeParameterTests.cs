@@ -477,6 +477,9 @@ public class TypeParameterTests
         library.Sources.Add("""
             using Singulink.CodeAnalysis;
 
+            // The project is built with the analyzer.
+            [assembly: System.Reflection.AssemblyMetadata("Singulink.CodeAnalysis.Analyzed", "1")]
+
             namespace Library
             {
                 public sealed class Pool<[NonCopyable] T>

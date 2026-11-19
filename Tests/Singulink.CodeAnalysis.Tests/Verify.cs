@@ -18,6 +18,45 @@ internal static class Verify
 {
     public const string ListFileName = "NonCopyableSymbols.txt";
 
+    /// <summary>
+    /// The marker that the targets file of the package adds to an assembly that was built with the analyzer.
+    /// </summary>
+    public const string AnalyzedMarker = """[assembly: System.Reflection.AssemblyMetadata("Singulink.CodeAnalysis.Analyzed", "1")]""";
+
+    /// <summary>
+    /// Compiles a library as an assembly that a test references, with the marker of a build with the analyzer or without it. The
+    /// analyzer does not run on it: an assembly without the marker is what a library looks like that was built without the analyzer.
+    /// </summary>
+    /// <param name="referenceAssemblies">The reference assemblies of the test.</param>
+    /// <param name="source">The source of the library. The markup of the places of findings is taken out.</param>
+    /// <param name="analyzed">Whether the library carries the marker of a build with the analyzer.</param>
+    /// <param name="assemblyName">The simple name of the library.</param>
+    /// <param name="libraries">Other libraries that the library references.</param>
+    public static async Task<MetadataReference> CompileLibraryAsync(
+        ReferenceAssemblies referenceAssemblies, string source, bool analyzed, string assemblyName = "Library", params MetadataReference[] libraries)
+    {
+        var references = (await referenceAssemblies.ResolveAsync(LanguageNames.CSharp, CancellationToken.None))
+            .Add(MetadataReference.CreateFromFile(typeof(NonCopyableAttribute).Assembly.Location))
+            .AddRange(libraries);
+
+        source = System.Text.RegularExpressions.Regex.Replace(source, @"\{\|#\d+:|\|\}", string.Empty);
+        var trees = new List<SyntaxTree> { CSharpSyntaxTree.ParseText(source, new CSharpParseOptions(LanguageVersion.Latest)) };
+
+        if (analyzed)
+            trees.Add(CSharpSyntaxTree.ParseText(AnalyzedMarker, new CSharpParseOptions(LanguageVersion.Latest)));
+
+        var compilation = CSharpCompilation.Create(
+            assemblyName, trees, references, new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, allowUnsafe: true));
+
+        using var stream = new MemoryStream();
+        var result = compilation.Emit(stream);
+
+        if (!result.Success)
+            throw new InvalidOperationException(string.Join(Environment.NewLine, result.Diagnostics));
+
+        return MetadataReference.CreateFromImage(stream.ToArray());
+    }
+
     private const string ListFileAdvice = "a NonCopyableSymbols.txt file if the member makes no copy, or avoid the use.";
 
     public static Task AnalyzerAsync([StringSyntax("C#-test")] string source, params DiagnosticResult[] expected)
@@ -251,11 +290,28 @@ internal static class Verify
     public static DiagnosticResult Boxing(int location, string type, string targetType) =>
         Diagnostic(DiagnosticIds.Boxing, location, $"Converting a stored value of non-copyable type '{type}' to '{targetType}' boxes a copy of it");
 
-    public static DiagnosticResult MemberwiseCloneCall(int location, string type, string fieldType, string field) => Diagnostic(
-        DiagnosticIds.MemberwiseCloneCall, location, $"MemberwiseClone of '{type}' copies its field '{field}' of non-copyable type '{fieldType}'");
+    public static DiagnosticResult MemberwiseCloneCall(int location, string type, string fieldType, string field, bool isParameter = false) => Diagnostic(
+        DiagnosticIds.MemberwiseCloneCall, location, $"MemberwiseClone of '{type}' copies its {(isParameter ? "parameter" : "field")} '{field}' of non-copyable type '{fieldType}'");
 
     public static DiagnosticResult MemberwiseCloneCallOnValue(int location, string type) =>
         Diagnostic(DiagnosticIds.MemberwiseCloneCall, location, $"MemberwiseClone copies a value of non-copyable type '{type}'");
+
+    public static DiagnosticResult MemberwiseCloneOfDerivedClass(int location, string type, string derived, string fieldType, string field, bool isParameter = false) => Diagnostic(
+        DiagnosticIds.MemberwiseCloneCall,
+        location,
+        $"MemberwiseClone of '{type}' clones an object of '{derived}' as well, which derives from it, and copies its {(isParameter ? "parameter" : "field")} '{field}' of non-copyable type '{fieldType}'");
+
+    public static DiagnosticResult MemberwiseCloneOfOpenClass(int location, string type) => Diagnostic(
+        DiagnosticIds.MemberwiseCloneOfOpenClass,
+        location,
+        $"MemberwiseClone of '{type}' clones an object of whatever class derives from it, and '{type}' can be derived from in another assembly, " +
+        "where a derived class can hold a non-copyable value that the clone copies. Seal the class, copy its fields in a constructor " +
+        "instead, or suppress this finding as a rule that no derived class may hold a non-copyable value.");
+
+    public static DiagnosticResult GetObjectValueCall(int location) => Diagnostic(
+        DiagnosticIds.GetObjectValue,
+        location,
+        "RuntimeHelpers.GetObjectValue clones a boxed struct field by field, a non-copyable value included. Use the object as it is.");
 
     public static DiagnosticResult FieldOfCopyableType(int location, string type, string field) =>
         Diagnostic(DiagnosticIds.FieldOfCopyableType, location, $"Copyable field '{field}' cannot have non-copyable type '{type}'");
@@ -320,10 +376,16 @@ internal static class Verify
         "machine: what it changes is lost, and it runs later, on a copy that is out of date by then, also where the member is 'readonly'. Do " +
         "the work in a member that is neither async nor an iterator, or in a static method that is given what it needs.");
 
+    public static DiagnosticResult UnlistedMemberOfUncheckedCode(int location, string member, string type, string typeParameter, string id) => Diagnostic(
+        DiagnosticIds.UnlistedMember,
+        location,
+        $"'{member}' may copy non-copyable type '{type}': type parameter '{typeParameter}' is marked [NonCopyable], but the mark does not count in " +
+        $"an assembly that was not built with the analyzer, and the member is not on the symbol list. Add '{id}' to {ListFileAdvice}");
+
     public static DiagnosticResult UnlistedMember(int location, string member, string type, string typeParameter, string id) => Diagnostic(
         DiagnosticIds.UnlistedMember,
         location,
-        $"'{member}' may copy non-copyable type '{type}': type parameter '{typeParameter}' is not marked [NonCopyable] and the member is not on the safe " +
+        $"'{member}' may copy non-copyable type '{type}': type parameter '{typeParameter}' is not marked [NonCopyable] and the member is not on the symbol " +
         $"list. Mark the type parameter, add '{id}' to {ListFileAdvice}");
 
     public static DiagnosticResult RequiresCopyableMember(int location, string member, string type, string typeParameter) => Diagnostic(
@@ -335,7 +397,7 @@ internal static class Verify
         DiagnosticIds.UntypedCollection,
         location,
         $"Container {Container(container, through)} is converted to untyped collection '{targetType}', which hands out copies of its elements. " +
-        "Keep the element type visible, for example with a generic interface, or pass the container only to a member on the safe list.");
+        "Keep the element type visible, for example with a generic interface, or pass the container only to a member on the symbol list.");
 
     public static DiagnosticResult UntypedCollectionVariance(int location, string container, string hidingType, string sourceType, string targetType) =>
         Diagnostic(
@@ -349,7 +411,7 @@ internal static class Verify
         DiagnosticIds.UntypedCollection,
         location,
         $"'{member}' uses container '{container}' as untyped collection '{declaringType}', which hands out copies of its elements, and is not on the " +
-        $"safe list. Add '{id}' to {ListFileAdvice}");
+        $"symbol list. Add '{id}' to {ListFileAdvice}");
 
     public static DiagnosticResult UntypedCollectionReturn(int location, string container, string targetType, string member, string overridden) =>
         Diagnostic(
@@ -378,7 +440,7 @@ internal static class Verify
         DiagnosticIds.OpaqueType,
         location,
         $"Container {Container(container, through)} is converted to '{targetType}', which hides its non-copyable elements from the analyzer. " +
-        "Keep the element type visible, or pass the container only to a member on the safe list.");
+        "Keep the element type visible, or pass the container only to a member on the symbol list.");
 
     public static DiagnosticResult OpaqueVariance(int location, string container, string hidingType, string sourceType, string targetType) => Diagnostic(
         DiagnosticIds.OpaqueType,
@@ -391,7 +453,7 @@ internal static class Verify
         DiagnosticIds.OpaqueType,
         location,
         $"'{member}' uses container '{container}' as '{declaringType}', which hides its non-copyable elements from the analyzer, and is not on the " +
-        $"safe list. Add '{id}' to {ListFileAdvice}");
+        $"symbol list. Add '{id}' to {ListFileAdvice}");
 
     public static DiagnosticResult OpaqueReturn(int location, string container, string targetType, string member, string overridden) => Diagnostic(
         DiagnosticIds.OpaqueType,
@@ -437,7 +499,7 @@ internal static class Verify
         DiagnosticIds.OpaqueType,
         location,
         $"Container '{container}' is bound to type parameter '{typeParameter}' of '{member}', which is not marked [NonCopyable], and the member is not " +
-        $"on the safe list. Mark the type parameter, add '{id}' to {ListFileAdvice}");
+        $"on the symbol list. Mark the type parameter, add '{id}' to {ListFileAdvice}");
 
     /// <summary>
     /// The finding for a by-value read from a stored container. <paramref name="source"/> is the member or the construct that reads, in quotes.
@@ -492,6 +554,14 @@ internal static class Verify
         $"The result of this lambda, a container of type {Container(container, through)}, is converted to '{targetType}', which hides its " +
         "non-copyable elements from the analyzer. If the result is not meant to be returned, give the lambda a statement body, as in " +
         "'() => { Call(); }'. Otherwise keep the element type visible.");
+
+    public static DiagnosticResult UncheckedMember(int location, string member, string parameter, string type, string id) => Diagnostic(
+        DiagnosticIds.UncheckedMember,
+        location,
+        $"'{member}' is a member of an assembly that was not built with the analyzer, and gets at a value of a non-copyable type other than " +
+        $"by value, through its parameter '{parameter}' of type '{type}': nothing checks what it does with that value. If the member uses " +
+        $"what it is given during the call and keeps nothing of it, add '{id};borrows' to a NonCopyableSymbols.txt file; otherwise avoid " +
+        "the use.");
 
     /// <summary>
     /// The finding for a container that a method returns while something else still holds it.
@@ -639,6 +709,12 @@ internal static class Verify
         "parameter: generic code passes it a slot of its own, which with a container bound may hold a container that something else still " +
         "holds. Use a method or a lambda that uses the container in place.");
 
+    public static DiagnosticResult MovedFromAddedOverUncheckedMark(int location, string parameter, string member, string giver) => Diagnostic(
+        DiagnosticIds.MarkNotKept,
+        location,
+        $"Parameter '{parameter}' of '{member}' cannot be marked [MovedFrom] because {giver} is of an assembly that was not built with the " +
+        "analyzer, where its own mark does not count: a caller through that passes anything, and not only what it owns");
+
     public static DiagnosticResult MovedFromAdded(int location, string parameter, string member, string giver) => Diagnostic(
         DiagnosticIds.MarkNotKept,
         location,
@@ -724,7 +800,8 @@ internal static class Verify
         location,
         $"Between the read of [MovedFrom] parameter '{parameter}' and its assignment the method reads or writes through '{reference}', which " +
         $"can be a null reference: if that fails, the value is in two places. Check the reference before the read of '{parameter}', with " +
-        $"NonCopyable.ThrowIfNullRef(in {reference}) or with a method of the project whose parameter is marked [NotNullRef].");
+        $"NonCopyable.ThrowIfNullRef(in {reference}) or with a method whose parameter is marked [NotNullRef], which counts only in an " +
+        "assembly that was built with the analyzer.");
 
     public const string NotNullRefByValue =
         "the parameter is passed by value, and the mark is for a reference, which a 'ref', 'in', 'ref readonly' or 'out' parameter is";
@@ -812,10 +889,22 @@ internal static class Verify
     /// <summary>
     /// The finding for a line of the list file that cannot be parsed. The line and columns are one-based, as in an editor.
     /// </summary>
+    public static DiagnosticResult UncheckedAssembly(string assembly, string referenced, string type) =>
+        new DiagnosticResult(DiagnosticIds.UncheckedAssembly, DiagnosticSeverity.Warning).WithMessage(
+            $"Assembly '{assembly}' was not built with the analyzer, and it references '{referenced}' and with it non-copyable type '{type}': its " +
+            "code can copy a value of that type where it implements an interface, makes a delegate or reads an object of a type of checked " +
+            $"code, which no call shows. Build '{assembly}' with the analyzer, or, if its code makes no copy of the non-copyable values that it " +
+            $"gets at, vouch for it with the line 'A:{assembly};trusted' in a NonCopyableSymbols.txt file.");
+
+    public static DiagnosticResult SafeListTrustedHasNoEffect(int line, int startColumn, int endColumn, string assembly, string reason) =>
+        new DiagnosticResult(DiagnosticIds.SafeListLine, DiagnosticSeverity.Warning)
+            .WithSpan(ListFileName, line, startColumn, line, endColumn)
+            .WithMessage($"This line of the list file vouches for assembly '{assembly}'. It has no effect, because {reason}.");
+
     public static DiagnosticResult SafeListLine(int line, int startColumn, int endColumn, string reason) =>
         new DiagnosticResult(DiagnosticIds.SafeListLine, DiagnosticSeverity.Warning)
             .WithSpan(ListFileName, line, startColumn, line, endColumn)
-            .WithMessage($"This line of the safe list cannot be parsed: {reason}");
+            .WithMessage($"This line of the list file cannot be parsed: {reason}");
 
     /// <summary>
     /// The finding for a 'noncopyable' line of the list file that names no type of the compilation.
@@ -824,7 +913,7 @@ internal static class Verify
         new DiagnosticResult(DiagnosticIds.SafeListLine, DiagnosticSeverity.Warning)
             .WithSpan(ListFileName, line, startColumn, line, endColumn)
             .WithMessage(
-                $"This line of the safe list marks '{id}' as non-copyable, and the compilation has no type of that ID: the type stays copyable. " +
+                $"This line of the list file marks '{id}' as non-copyable, and the compilation has no type of that ID: the type stays copyable. " +
                 "Fix the ID, or take the line out of the file of a project that does not reference the type.");
 
     /// <summary>
@@ -833,7 +922,7 @@ internal static class Verify
     public static DiagnosticResult SafeListCopyableHasNoEffect(int line, int startColumn, int endColumn, string id, string because) =>
         new DiagnosticResult(DiagnosticIds.SafeListLine, DiagnosticSeverity.Warning)
             .WithSpan(ListFileName, line, startColumn, line, endColumn)
-            .WithMessage($"This line of the safe list marks '{id}' as copyable. It has no effect, because {because}.");
+            .WithMessage($"This line of the list file marks '{id}' as copyable. It has no effect, because {because}.");
 
     public static DiagnosticResult NonCopyableAwaiter(int location, string type) => Diagnostic(
         DiagnosticIds.NonCopyableAwaiter,
@@ -902,7 +991,8 @@ internal static class Verify
         (not null, _) when variable.Split('\u0001') is [var stored, var reference] =>
             $": '{stored}' is not used again after this, but a 'catch', a 'finally' or an exception filter that uses it can still run, because " +
             $"the 'try' block then reads or writes through '{reference}', which can be a null reference. Check the reference first, with " +
-            $"NonCopyable.ThrowIfNullRef(in {reference}) or with a method of the project whose parameter is marked [NotNullRef]",
+            $"NonCopyable.ThrowIfNullRef(in {reference}) or with a method whose parameter is marked [NotNullRef], which counts only in an " +
+            "assembly that was built with the analyzer",
         (not null, _) => $": '{variable}' is not used again after this, but a 'catch', a 'finally' or an exception filter that uses it can still run",
         _ => $": '{afterFinally}' is not used again after this, but it is used after a 'finally' that can still run, written or added by the " +
             "compiler for a 'foreach', a 'using' or a 'lock', and what follows a 'finally' counts as following an exception as well",

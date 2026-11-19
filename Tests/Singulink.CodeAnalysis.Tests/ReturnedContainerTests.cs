@@ -404,6 +404,9 @@ public class ReturnedContainerTests
         library.Sources.Add("""
             using System.Collections.Generic;
 
+            // The project is built with the analyzer.
+            [assembly: System.Reflection.AssemblyMetadata("Singulink.CodeAnalysis.Analyzed", "1")]
+
             namespace Singulink.CodeAnalysis
             {
                 // The library declares the attribute itself: it is recognised by its full name.

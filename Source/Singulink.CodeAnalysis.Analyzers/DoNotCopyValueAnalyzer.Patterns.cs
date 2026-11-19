@@ -735,6 +735,9 @@ public sealed partial class DoNotCopyValueAnalyzer
         {
             RuntimeHelpers.EnsureSufficientExecutionStack();
 
+            // A user-defined conversion of what a Deconstruct method hands out to the type of its target, with nothing written for it.
+            CheckMemberUse((value ?? target).Syntax, info?.Conversion?.MethodSymbol);
+
             target = SkipParentheses(target);
 
             if (target is IDeclarationExpressionOperation { Expression: ITupleOperation declaredTuple })

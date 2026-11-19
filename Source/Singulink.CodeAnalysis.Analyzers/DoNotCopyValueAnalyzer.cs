@@ -51,9 +51,12 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
         context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.Analyze | GeneratedCodeAnalysisFlags.ReportDiagnostics);
 
         context.RegisterCompilationStartAction(context => {
+            // The compilation is checked code whether its assembly carries the marker of an analyzed build or not.
+            AnalyzedAssemblies.AddCompilation(context.Compilation.Assembly);
+
             // The list is built once for the compilation. The two classifiers share it.
-            var list = SafeMemberList.Create(
-                GetListFiles(context.Options, context.CancellationToken), IncludesBuiltInNonCopyableTypes(context.Options), context.Compilation);
+            var listFiles = GetListFiles(context.Options, context.CancellationToken);
+            var list = SafeMemberList.Create([.. listFiles.Select(f => f.Text)], IncludesBuiltInNonCopyableTypes(context.Options), context.Compilation);
             var typesInCopyingMember = new NonCopyableTypes(list, context.Compilation.Assembly, typeParametersAreCopyable: true);
             var types = new NonCopyableTypes(list, context.Compilation.Assembly, typeParametersAreCopyable: false, definitions: typesInCopyingMember);
             var marks = new MarkCache();
@@ -61,6 +64,7 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
             bool allowsImplicitMoves = AllowsImplicitMoves(context.Options);
 
             context.RegisterCompilationEndAction(moves.Report);
+            context.RegisterCompilationEndAction(context => AnalyzeUncheckedReferences(context, list, listFiles));
 
             context.RegisterOperationBlockAction(context => {
                 // In the body of a member marked [RequiresCopyable] the marked type parameters count as copyable.
@@ -116,17 +120,17 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
         return name.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase) && name.EndsWith(Extension, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static IReadOnlyList<SourceText> GetListFiles(AnalyzerOptions options, CancellationToken cancellationToken)
+    private static IReadOnlyList<(AdditionalText File, SourceText Text)> GetListFiles(AnalyzerOptions options, CancellationToken cancellationToken)
     {
-        List<SourceText>? files = null;
+        List<(AdditionalText File, SourceText Text)>? files = null;
 
         foreach (var file in options.AdditionalFiles)
         {
             if (IsListFile(file) && file.GetText(cancellationToken) is { } text)
-                (files ??= []).Add(text);
+                (files ??= []).Add((file, text));
         }
 
-        return files ?? (IReadOnlyList<SourceText>)[];
+        return files ?? (IReadOnlyList<(AdditionalText File, SourceText Text)>)[];
     }
 
     /// <summary>

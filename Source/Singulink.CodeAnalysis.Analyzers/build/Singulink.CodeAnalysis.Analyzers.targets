@@ -18,6 +18,20 @@
   </ItemGroup>
 
   <!--
+    The marker of an assembly that was built with the analyzer. Marks that promise a checked body, such as [NonCopyable] on a type
+    parameter, are trusted only from an assembly that has it, and a member of an assembly without it needs a list entry where it gets
+    at a non-copyable value other than by value. A build that does not run analyzers does not get it. A project with
+    GenerateAssemblyInfo false gets nothing from this item, and writes the attribute itself:
+    [assembly: System.Reflection.AssemblyMetadata("Singulink.CodeAnalysis.Analyzed", "1")]
+  -->
+  <ItemGroup Condition="'$(RunAnalyzers)' != 'false' and '$(RunAnalyzersDuringBuild)' != 'false'">
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>Singulink.CodeAnalysis.Analyzed</_Parameter1>
+      <_Parameter2>1</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <!--
     The built-in non-copyable types are on in a project that references one of the two packages itself, and off in one that only gets the
     analyzer through a library: a library that marks its guards brings the analyzer to everyone who uses it, and must not bring findings
     about their own GCHandle code with it. A project that sets NonCopyableIncludeBuiltInTypes keeps its value. The items of the project

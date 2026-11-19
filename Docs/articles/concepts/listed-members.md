@@ -79,7 +79,9 @@ IReadOnlyList<LockGuard> list = new Guards();
 LockGuard b = list[0];                                // SCA1030
 ```
 
-That goes for a class that is declared in the project, and for one of another assembly that has no member on the list. A `List<LockGuard>`
+That goes for a class that is declared in the project, and for one of another assembly that has no member on the list, and it goes for a
+class or an interface of an assembly that was not built with the analyzer that is a container only through what it derives from or
+implements (see [Code Not Built With the Analyzer](unchecked-code.md)). A `List<LockGuard>`
 itself keeps its rule, and so does a type that has no container among its base classes: what its own members hand out is checked in
 their bodies if it is checked code, as with a marked generic such as `Bag<LockGuard>`, which hands out only what it moved out, or is
 reported where an unlisted member is used.

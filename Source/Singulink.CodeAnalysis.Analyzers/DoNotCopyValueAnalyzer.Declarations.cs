@@ -783,9 +783,13 @@ public sealed partial class DoNotCopyValueAnalyzer
 
             if (NonCopyableTypes.ChangesMovedFrom(parameter, baseParameter))
             {
+                var rule = !isMarked ? Rules.MovedFromDropped
+                    : NonCopyableTypes.HasUncountedMovedFrom(baseParameter) ? Rules.MovedFromAddedOverUncheckedMark
+                    : Rules.MovedFromAdded;
+
                 context.ReportDiagnostic(CreateDiagnostic(
                     reportedForParameter,
-                    isMarked ? Rules.MovedFromAdded : Rules.MovedFromDropped,
+                    rule,
                     parameter.Name,
                     Display(member),
                     $"'{Display(baseMember)}', which the member overrides or implements,"));

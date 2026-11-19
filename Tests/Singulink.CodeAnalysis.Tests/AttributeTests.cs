@@ -54,11 +54,14 @@ public class AttributeTests
 
     // A library that declares the five attributes itself and uses each of them. '{0}' is the namespace of the attributes, and '{1}'
     // that of 'NonCopyableAttribute'.
+    // A library that was built with the analyzer, so its marks on type parameters, [MovedFrom] and [NotNullRef] are trusted.
     private const string LibraryWithItsOwnAttributes = """
         using System;
         using System.Collections.Generic;
         using {0};
         using {1};
+
+        [assembly: System.Reflection.AssemblyMetadata("Singulink.CodeAnalysis.Analyzed", "1")]
 
         namespace {1}
         {
@@ -301,7 +304,7 @@ public class AttributeTests
     {
         var test = new Verify.Test { TestCode = LibraryWithItsOwnAttributes.Replace("{0}", Ours).Replace("{1}", Ours) + UsesOfTheLibrary };
         test.TestState.AdditionalReferences.Clear();
-        test.ExpectedDiagnostics.AddRange(GetMarksSeenByTheUser(73));
+        test.ExpectedDiagnostics.AddRange(GetMarksSeenByTheUser(75));
 
         return test.RunAsync();
     }

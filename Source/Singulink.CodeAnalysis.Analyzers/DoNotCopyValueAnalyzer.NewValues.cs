@@ -374,6 +374,10 @@ public sealed partial class DoNotCopyValueAnalyzer
             if (KeepsWhatItReturns(member) || types.IsOpenWithListedMembers(type))
                 return RefKind.RefReadOnly;
 
+            // A member of an assembly that was not built with the analyzer is not checked to hand out a container that nothing else holds.
+            if (types.HandsOutUncheckedContainer(member, type, GetDeclaredResultType(member)))
+                return RefKind.RefReadOnly;
+
             // With a container bound to a marked type parameter, what the generic hands out through a type that mentions it is stored,
             // whatever the member was called on and with. The one exception is a pure move of locals that the method owns: the only
             // thing that went in is a reference that nobody else holds, and the body is checked to hand out nothing else.
@@ -401,11 +405,21 @@ public sealed partial class DoNotCopyValueAnalyzer
             if (KeepsWhatItReturns(member) || types.IsOpenWithListedMembers(type) || types.HandsOutBoundContainer(member, type))
                 return RefKind.RefReadOnly;
 
+            if (types.HandsOutUncheckedContainer(member, type, GetDeclaredResultType(member)))
+                return RefKind.RefReadOnly;
+
             if (inputsAreNew || !types.FollowsInputs(types.GetUse(member), type))
                 return RefKind.None;
 
             return RefKind.RefReadOnly;
         }
+
+        // The type that the member's own declaration gives what it hands out, before any type argument is filled in.
+        private static ITypeSymbol? GetDeclaredResultType(ISymbol member) => NonCopyableTypes.GetListDefinition(member) switch {
+            IMethodSymbol method => method.ReturnType,
+            IPropertySymbol property => property.Type,
+            _ => null,
+        };
 
         /// <summary>
         /// Gets a value indicating whether the return value of a method is marked [Borrowed]: the method keeps the container that it returns,

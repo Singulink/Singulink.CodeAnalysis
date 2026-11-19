@@ -36,6 +36,17 @@ public static class DiagnosticIds
     public const string MemberOnReadOnlyReference = "SCA1006";
 
     /// <summary>
+    /// <c>RuntimeHelpers.GetObjectValue</c> is used, which clones a boxed struct.
+    /// </summary>
+    public const string GetObjectValue = "SCA1007";
+
+    /// <summary>
+    /// <c>MemberwiseClone</c> is called on an object of a class that can be derived from in another assembly, where a derived class
+    /// can hold a non-copyable value.
+    /// </summary>
+    public const string MemberwiseCloneOfOpenClass = "SCA1008";
+
+    /// <summary>
     /// A copyable struct or a record has a field of a non-copyable type.
     /// </summary>
     public const string FieldOfCopyableType = "SCA1010";
@@ -84,6 +95,18 @@ public static class DiagnosticIds
     /// A container of non-copyable values is used as a type that hides them from the analyzer.
     /// </summary>
     public const string OpaqueType = "SCA1023";
+
+    /// <summary>
+    /// A member of an assembly that was not built with the analyzer gets at a non-copyable value other than by value, and the list does
+    /// not mark it 'borrows'.
+    /// </summary>
+    public const string UncheckedMember = "SCA1024";
+
+    /// <summary>
+    /// An assembly that the compilation references was not built with the analyzer, and references an assembly that declares a
+    /// non-copyable type, and no list vouches for it.
+    /// </summary>
+    public const string UncheckedAssembly = "SCA1025";
 
     /// <summary>
     /// A non-copyable value is read by value from a stored container.

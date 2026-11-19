@@ -8,10 +8,10 @@ copy your structs. Reference the analyzers package with `PrivateAssets="none"`:
 ## Passing the Analyzers On
 
 ```xml
-<PackageReference Include="Singulink.CodeAnalysis.Analyzers" Version="0.5.0" PrivateAssets="none" />
+<PackageReference Include="Singulink.CodeAnalysis.Analyzers" Version="0.6.0" PrivateAssets="none" />
 ```
 
-Your package then depends on the analyzers package with all its assets (`<dependency id="Singulink.CodeAnalysis.Analyzers" version="0.5.0"
+Your package then depends on the analyzers package with all its assets (`<dependency id="Singulink.CodeAnalysis.Analyzers" version="0.6.0"
 include="All" />`), and a project that references your package gets the analyzer. If you reference `Singulink.CodeAnalysis` instead, keep it a normal
 reference and the same holds: the attributes package already passes the analyzers on.
 
@@ -19,6 +19,11 @@ The analyzer also reaches projects further down the chain. A project that refere
 whatever that package's own reference to yours says. The .NET SDK (checked with the .NET 10 and 11 SDKs) applies the analyzers of every package in the
 restore graph and does not honor an `exclude="Analyzers"` in a dependency or `ExcludeAssets="analyzers"` on a reference. The only way to keep the
 analyzer from flowing past your library is `PrivateAssets="all"`, which leaves the dependency out of your package altogether.
+
+**A library that keeps the analyzer to itself leaves the projects that use it unchecked.** Their code can copy your structs where it
+implements one of your interfaces, makes a delegate that you call or reads an object of one of your classes, and nothing in your library
+or in a project further down sees that. A project that references both your library and such an assembly is told so, once for each
+assembly ([SCA1025](../diagnostics/sca1025.md)). `PrivateAssets="none"` is what keeps the assemblies that use your structs checked.
 
 ## Shipping a List With a Library
 

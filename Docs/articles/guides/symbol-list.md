@@ -26,7 +26,7 @@ The second form is for a file that is named after what it describes, and it is t
 ## The Format
 
 A file has one [documentation comment ID](https://learn.microsoft.com/dotnet/csharp/language-reference/xmldoc/#id-strings) per line, with an
-optional marker after a semicolon. A line that starts with `#` is a comment, and so is the rest of a line after white space and `#`. The message of
+optional marker after a semicolon, or the simple name of an assembly after `A:` with the marker `trusted`. A line that starts with `#` is a comment, and so is the rest of a line after white space and `#`. The message of
 `SCA1020` gives the ID to add.
 
 ```
@@ -65,6 +65,9 @@ T:System.Runtime.InteropServices.GCHandle;copyable
 
 # erasable: no base type or interface of the type hands out a value of its type arguments
 T:ThirdParty.Promise`1;erasable
+
+# trusted: an assembly that was not built with the analyzer, and whose code makes no copy of the non-copyable values that it gets at
+A:Contoso.Plugins;trusted
 ```
 
 | Entry | Marker | Meaning |
@@ -78,6 +81,7 @@ T:ThirdParty.Promise`1;erasable
 | A struct (`T:`) | `view` | Copying the struct copies no elements, as for <xref:System.Span`1>. It is a container and not a non-copyable type. |
 | A struct (`T:`) | `noncopyable` | The struct is a non-copyable type. |
 | A struct (`T:`) | `copyable` | The struct is an ordinary struct for the project, though the built-in list or an attribute in a referenced assembly makes it a non-copyable type: one of the ten that the project copies on purpose, or a struct that a library marked, for this analyzer or, with an attribute of another namespace, for another one. Its fields, the generic structs over it, its containers and a marked type parameter that it is bound to all follow. It is the project's decision, and nothing that the analyzer guarantees holds for the type. |
+| An assembly (`A:` and its simple name) | `trusted` | The assembly was not built with the analyzer, and its code makes no copy of the non-copyable values that it gets at, also where it runs behind a type of checked code or of the framework. It turns off `SCA1025` for the assembly and changes nothing else: its members stay unchecked code for every other rule. The name is matched in any case, as the runtime binds it. See [SCA1025](../diagnostics/sca1025.md). |
 | A generic class or interface (`T:`) | `erasable` | No base type or interface of the type hands out a value of its type arguments, so a container of the type may be converted to one of them. See [Variance and erasable types](../concepts/variance-and-erasable-types.md). |
 
 ## Rules for Entries
@@ -104,6 +108,10 @@ T:ThirdParty.Promise`1;erasable
 - A `copyable` line is reported (`SCA1042`) where it has no effect: on anything but a struct, where it names no type, for a struct that the
   project declares itself, whose `[NonCopyable]` attribute is what to take off, and for a struct that nothing makes non-copyable by itself,
   neither the built-in list nor an attribute, such as <xref:System.Threading.Tasks.ValueTask`1>, which is non-copyable only through what it holds.
+- A `trusted` line is reported (`SCA1042`) where it has no effect: for an assembly that the project does not reference, for the
+  project's own, for one that was built with the analyzer, and for one that references no assembly which declares a non-copyable type.
+  An assembly takes no other marker, and `trusted` is for an assembly alone; a display name with a version, or a file name, is a line
+  that cannot be parsed.
 - Where two entries for the same ID disagree, the one that claims less applies, whether they are in two files of the project or in a file
   and the built-in list: `noncopyable` wins over `view`, no marker wins over `new`, over `borrows`, over `drains` and over `owned`, and of two `for=`
   limits only the type parameters that both name are covered. So a file can add entries and can tighten a built-in one, but cannot
@@ -115,7 +123,12 @@ T:ThirdParty.Promise`1;erasable
   object is created with no argument that carries a non-copyable type, and that check sees nothing where the type is not generic:
   `new Promise(shared)` with a constructor that takes over the task of another object gives the same task to every caller. A struct
   cannot keep the promise at all, because a copy of it shares the task and a call on it can replace it, so the marker is not accepted
-  there.
+  there. An entry for a member of a type also says that the type never hands itself to another holder, as a method that stores `this` in
+  a field or a collection would.
+- **On a member of an assembly that was not built with the analyzer** the two markers say what the analyzer cannot see. `borrows` is what
+  a member needs that gets at a non-copyable value other than by value, by a reference, in a container, in a view or through a pointer:
+  without it the use is reported (`SCA1024`). `new` is what a member needs for a container that it hands out to count as new: without it
+  the container is stored. See [Code Not Built With the Analyzer](../concepts/unchecked-code.md).
 
 ## What Is Built In
 

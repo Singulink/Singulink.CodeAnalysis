@@ -721,4 +721,10 @@ internal enum ReceivedContainer
     /// The same of a member that is not listed, whose use is reported as that wherever it stands.
     /// </summary>
     KeptByUnlistedCode,
+
+    /// <summary>
+    /// It is a member of an assembly that was not built with the analyzer, which the list does not mark 'borrows': nothing checks what
+    /// it does with the container. Its use is reported as that wherever it stands.
+    /// </summary>
+    KeptByUnmarkedAssembly,
 }

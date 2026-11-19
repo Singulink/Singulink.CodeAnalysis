@@ -22,6 +22,7 @@ internal sealed class SafeMemberList
     public const string FileName = "NonCopyableSymbols.txt";
 
     private const string ForKeyword = "for";
+    private const string AssemblyPrefix = "A:";
     private const string OwnedIsForATask = "the marker 'owned' is for an instance property of a class whose type is 'Task<TResult>'";
 
     private const string DrainsIsForASequence = "the marker 'drains' is for a method that returns a sequence, an IEnumerable<T> or an IAsyncEnumerable<T>";
@@ -38,14 +39,29 @@ internal sealed class SafeMemberList
     // The IDs of the structs that a 'copyable' line of a user file takes out, which no 'noncopyable' line of a user file names.
     private readonly HashSet<string> _copyable;
 
+    // The IDs that a 'noncopyable' line of a user file names, and the simple names of the assemblies that a 'trusted' line names.
+    private readonly HashSet<string> _userNonCopyable;
+    private readonly HashSet<string> _trustedAssemblies;
+
     // Null for a symbol that has no entry.
     private readonly ConcurrentDictionary<ISymbol, SafeListEntry?> _entriesBySymbol = new(SymbolEqualityComparer.Default);
 
-    private SafeMemberList(Dictionary<string, SafeListEntry> entries, HashSet<string>? copyable = null)
+    private SafeMemberList(
+        Dictionary<string, SafeListEntry> entries,
+        HashSet<string>? copyable = null,
+        HashSet<string>? userNonCopyable = null,
+        HashSet<string>? trustedAssemblies = null)
     {
         _entries = entries;
         _copyable = copyable ?? [];
+        _userNonCopyable = userNonCopyable ?? [];
+        _trustedAssemblies = trustedAssemblies ?? [];
     }
+
+    /// <summary>
+    /// Gets the IDs that a 'noncopyable' line of a user file names, whether the compilation has the type or not.
+    /// </summary>
+    public IReadOnlyCollection<string> UserNonCopyableIds => _userNonCopyable;
 
     /// <summary>
     /// Creates the list of a compilation from the built-in list and the given user files. Where two entries for the same ID disagree, the one
@@ -77,9 +93,17 @@ internal sealed class SafeMemberList
         var entries = new Dictionary<string, SafeListEntry>(builtInEntries, StringComparer.Ordinal);
         var copyable = new HashSet<string>(StringComparer.Ordinal);
         var userNonCopyable = new HashSet<string>(StringComparer.Ordinal);
+        var trustedAssemblies = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var entry in parsed)
         {
+            // An assembly is no member or type: its line is kept apart.
+            if (entry.Marker is SafeListMarker.Trusted)
+            {
+                trustedAssemblies.Add(GetAssemblyName(entry));
+                continue;
+            }
+
             if (GetErrorInCompilation(entry, compilation) is not null)
                 continue;
 
@@ -98,8 +122,25 @@ internal sealed class SafeMemberList
         }
 
         copyable.ExceptWith(userNonCopyable);
-        return new SafeMemberList(entries, copyable);
+        return new SafeMemberList(entries, copyable, userNonCopyable, trustedAssemblies);
     }
+
+    /// <summary>
+    /// Gets the simple name of the assembly that a 'trusted' line names.
+    /// </summary>
+    public static string GetAssemblyName(SafeListEntry entry) => entry.Id[AssemblyPrefix.Length..];
+
+    /// <summary>
+    /// Gets a value indicating whether a 'trusted' line of a user file vouches for an assembly, by its simple name in any case, as the
+    /// runtime binds it.
+    /// </summary>
+    public bool IsTrusted(IAssemblySymbol assembly) => _trustedAssemblies.Count > 0 && _trustedAssemblies.Contains(assembly.Name);
+
+    /// <summary>
+    /// Gets a value indicating whether the built-in list names a struct as non-copyable: one of the built-in non-copyable types,
+    /// whether a project includes them or not.
+    /// </summary>
+    public static bool IsBuiltInNonCopyable(string id) => s_builtInEntries.Value.TryGetValue(id, out var entry) && entry.Marker is SafeListMarker.NonCopyable;
 
     /// <summary>
     /// Gets the entries of the list that ships in the analyzer.
@@ -147,7 +188,7 @@ internal sealed class SafeMemberList
     /// </summary>
     public static string? GetErrorInCompilation(SafeListEntry entry, Compilation compilation)
     {
-        if (entry.TypeParameterNames is null && entry.Marker is SafeListMarker.None or SafeListMarker.New)
+        if (entry.TypeParameterNames is null && entry.Marker is SafeListMarker.None or SafeListMarker.New or SafeListMarker.Trusted)
             return null;
 
         var symbols = DocumentationCommentId.GetSymbolsForDeclarationId(entry.Id, compilation);
@@ -350,11 +391,14 @@ internal sealed class SafeMemberList
         string[] parts = content.Split(';');
         string id = parts[0].Trim();
 
-        if (id.Length < 3 || id[1] is not ':' || id[0] is not ('M' or 'P' or 'E' or 'T'))
+        if (id.Length < 3 || id[1] is not ':' || id[0] is not ('M' or 'P' or 'E' or 'T' or 'A'))
         {
-            reason = "expected a documentation comment ID that starts with 'M:', 'P:', 'E:' or 'T:'";
+            reason = "expected a documentation comment ID that starts with 'M:', 'P:', 'E:' or 'T:', or the name of an assembly after 'A:'";
             return false;
         }
+
+        if (id[0] is 'A')
+            return TryParseAssemblyEntry(id, parts, line, out entry, out reason);
 
         if (id.Any(char.IsWhiteSpace))
         {
@@ -456,6 +500,10 @@ internal sealed class SafeMemberList
                     marker = SafeListMarker.Erasable;
                     break;
 
+                case "trusted":
+                    reason = "the marker 'trusted' is for an assembly, named after 'A:'";
+                    return false;
+
                 case "new" or "borrows" or "drains":
                     reason = $"the marker '{part}' is for a member; a type takes 'view', 'noncopyable', 'copyable' or 'erasable'";
                     return false;
@@ -465,7 +513,7 @@ internal sealed class SafeMemberList
                     return false;
 
                 default:
-                    reason = $"unknown marker '{part}'; the markers are 'new', 'borrows', 'drains', 'owned', 'view', 'noncopyable', 'copyable' and 'erasable'";
+                    reason = $"unknown marker '{part}'; the markers are 'new', 'borrows', 'drains', 'owned', 'view', 'noncopyable', 'copyable' and 'erasable', and 'trusted' for an assembly";
                     return false;
             }
         }
@@ -477,6 +525,44 @@ internal sealed class SafeMemberList
         }
 
         entry = new SafeListEntry(id, marker, typeParameterNames, line);
+        reason = string.Empty;
+        return true;
+    }
+
+    /// <summary>
+    /// Parses the line of an assembly: 'A:' and its simple name, then the marker 'trusted', which is the only one that it takes.
+    /// </summary>
+    private static bool TryParseAssemblyEntry(string id, string[] parts, TextLine line, [NotNullWhen(true)] out SafeListEntry? entry, out string reason)
+    {
+        entry = null;
+        string name = id[AssemblyPrefix.Length..];
+
+        // A display name ('Contoso, Version=1.0.0.0') or a file name would never match the simple name that the line is looked up by.
+        if (name.Any(c => char.IsWhiteSpace(c) || c is ',' or '=' or '/' or '\\') || name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+        {
+            reason = "an assembly is named by its simple name, as in 'A:Contoso.Plugins;trusted'";
+            return false;
+        }
+
+        if (parts.Length is 1)
+        {
+            reason = "an assembly needs the marker 'trusted'";
+            return false;
+        }
+
+        if (parts.Length > 2)
+        {
+            reason = "an assembly takes the one marker 'trusted' and nothing after it";
+            return false;
+        }
+
+        if (parts[1].Trim() is not "trusted")
+        {
+            reason = $"the marker '{parts[1].Trim()}' is not for an assembly, which takes 'trusted'";
+            return false;
+        }
+
+        entry = new SafeListEntry(id, SafeListMarker.Trusted, null, line);
         reason = string.Empty;
         return true;
     }
@@ -616,6 +702,12 @@ internal enum SafeListMarker
     /// type may be converted to one of them.
     /// </summary>
     Erasable,
+
+    /// <summary>
+    /// An assembly, named by its simple name after 'A:', whose code makes no copy of the non-copyable values that it gets at, also behind a
+    /// type of checked code or of the framework. It turns off the finding for the assembly and changes nothing else.
+    /// </summary>
+    Trusted,
 }
 
 /// <summary>

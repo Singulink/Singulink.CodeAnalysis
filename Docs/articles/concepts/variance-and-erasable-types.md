@@ -50,7 +50,8 @@ marks guarantee what the marker only claims:
   converts toward more derived types only, so an `IComparable<Node<T>>` is no obstacle.
 
 A member that boxes a stored `T`, or hands out a container of it untyped, is then reported inside the type. A type from another assembly is
-trusted on the same conditions.
+trusted on the same conditions if that assembly was built with the analyzer: the marks of one that was not count as absent (see
+[Code Not Built With the Analyzer](unchecked-code.md)).
 
 ```cs
 class Pending<[NonCopyable] T> : PendingBase where T : struct { /* ... */ }

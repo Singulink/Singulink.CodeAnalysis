@@ -16,6 +16,12 @@
 - name: "SCA1006: Member Run on a Copy Through a Read-only Reference"
   href: sca1006.md
 
+- name: "SCA1007: GetObjectValue"
+  href: sca1007.md
+
+- name: "SCA1008: MemberwiseClone of a Class That Can Be Derived From"
+  href: sca1008.md
+
 - name: "SCA1010: Field in a Copyable Struct or a Record"
   href: sca1010.md
 
@@ -45,6 +51,12 @@
 
 - name: "SCA1023: Container Used as a Type That Hides Its Values"
   href: sca1023.md
+
+- name: "SCA1024: Non-copyable Value Given to Unchecked Code"
+  href: sca1024.md
+
+- name: "SCA1025: Unchecked Assembly That Uses a Non-copyable Type"
+  href: sca1025.md
 
 - name: "SCA1030: By-value Read From a Stored Container"
   href: sca1030.md

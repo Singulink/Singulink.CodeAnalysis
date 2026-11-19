@@ -239,4 +239,296 @@ public class RecordAndCloneTests
         """,
         Verify.MemberwiseCloneCall(0, "WithGuard", "Guard", "Guard"),
         Verify.MemberwiseCloneCall(1, "WithGuard", "Guard", "Guard"));
+
+    // MarshalByRefObject.MemberwiseClone(bool), which Stream and Component inherit, clones the object as well, and a method group of
+    // either clones when the delegate is invoked.
+    [TestMethod]
+    public Task MemberwiseClone_OfMarshalByRefObjectAndAsAMethodGroupIsReported() => Verify.AnalyzerAsync(
+        $$"""
+        using System;
+
+        class Holder : MarshalByRefObject
+        {
+            private Guard _guard;
+
+            public object Copy() => {|#0:MemberwiseClone(false)|};
+
+            public Func<object> Cloner() => {|#1:MemberwiseClone|};
+
+            public Func<bool, MarshalByRefObject> RemoteCloner() => {|#2:MemberwiseClone|};
+        }
+
+        {{Sources.Guard}}
+        """,
+        Verify.MemberwiseCloneCall(0, "Holder", "Guard", "_guard"),
+        Verify.MemberwiseCloneCall(1, "Holder", "Guard", "_guard"),
+        Verify.MemberwiseCloneCall(2, "Holder", "Guard", "_guard"));
+
+    // Where the class of the receiver has no field of a non-copyable type, the object that is cloned can be of a derived class that has
+    // one: a derived class of the compilation is a definite copy (SCA1005), a class that another assembly can derive from a possible one
+    // (SCA1008). A sealed class and a struct have no derived class, and a class that no other assembly can derive from has none there.
+    [TestMethod]
+    public Task MemberwiseClone_OfAClassWhoseDerivedClassCanHoldANonCopyableValue() => Verify.AnalyzerAsync(
+        $$"""
+        public class Open
+        {
+            public object Copy() => {|#0:MemberwiseClone()|};
+        }
+
+        public class Base
+        {
+            public object Copy() => {|#1:MemberwiseClone()|};
+        }
+
+        internal class Middle : Base { }
+
+        internal class Derived : Middle
+        {
+            private Guard _guard;
+        }
+
+        public sealed class Sealed
+        {
+            public object Copy() => MemberwiseClone();
+        }
+
+        public struct Plain
+        {
+            public object Copy() => MemberwiseClone();
+        }
+
+        internal class Hidden
+        {
+            public object Copy() => MemberwiseClone();
+        }
+
+        public class OnlyPrivateConstructor
+        {
+            private OnlyPrivateConstructor() { }
+
+            public object Copy() => MemberwiseClone();
+        }
+
+        internal class Outer
+        {
+            public class Nested
+            {
+                public object Copy() => MemberwiseClone();
+            }
+        }
+
+        {{Sources.Guard}}
+        """,
+        Verify.MemberwiseCloneOfOpenClass(0, "Open"),
+        Verify.MemberwiseCloneOfDerivedClass(1, "Base", "Derived", "Guard", "_guard"));
+
+    // An assembly with InternalsVisibleTo counts its internal types and constructors as reachable from another assembly.
+    [TestMethod]
+    public Task MemberwiseClone_OfAnInternalClassOfAnAssemblyWithInternalsVisibleTo() => Verify.AnalyzerAsync(
+        """
+        [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("Friend")]
+
+        internal class Hidden
+        {
+            internal Hidden() { }
+
+            public object Copy() => {|#0:MemberwiseClone()|};
+        }
+        """,
+        Verify.MemberwiseCloneOfOpenClass(0, "Hidden"));
+
+    // An object of a type parameter is of the class that the type parameter is constrained to, or of one derived from it.
+    [TestMethod]
+    public Task MemberwiseClone_OnAnObjectOfATypeParameterIsJudgedByItsConstraintClass() => Verify.AnalyzerAsync(
+        $$"""
+        using System;
+
+        internal class Holder
+        {
+            private Guard _guard;
+
+            public static T Clone<T>(T t) where T : Holder => (T){|#0:t.MemberwiseClone()|};
+
+            public static Func<object> Cloner<T>(T t) where T : Holder => {|#1:t.MemberwiseClone|};
+
+            public static T CloneThrough<T, U>(T t) where T : U where U : Holder => (T){|#2:t.MemberwiseClone()|};
+        }
+
+        public class Open
+        {
+            public static T Clone<T>(T t) where T : Open => (T){|#3:t.MemberwiseClone()|};
+        }
+
+        internal class Closed
+        {
+            public static T Clone<T>(T t) where T : Closed => (T)t.MemberwiseClone();
+        }
+
+        {{Sources.Guard}}
+        """,
+        Verify.MemberwiseCloneCall(0, "Holder", "Guard", "_guard"),
+        Verify.MemberwiseCloneCall(1, "Holder", "Guard", "_guard"),
+        Verify.MemberwiseCloneCall(2, "Holder", "Guard", "_guard"),
+        Verify.MemberwiseCloneOfOpenClass(3, "Open"));
+
+    // A class can be derived from in another assembly through a class of the compilation that derives from it, and a protected nested
+    // class can be reached there only where the class that contains it can be derived from.
+    [TestMethod]
+    public Task MemberwiseClone_OfAClassThatAnotherAssemblyCanDeriveFromThroughASubclass() => Verify.AnalyzerAsync(
+        """
+        public abstract class Node
+        {
+            internal Node() { }
+
+            public Node Clone() => (Node){|#0:MemberwiseClone()|};
+        }
+
+        public class Element : Node { }
+
+        public class Outer
+        {
+            private Outer() { }
+
+            public object Copy() => {|#1:MemberwiseClone()|};
+
+            public class Derived : Outer { }
+        }
+
+        public class Shut
+        {
+            private Shut() { }
+
+            public object Copy() => MemberwiseClone();
+
+            protected class Inner : Shut
+            {
+                public Inner() { }
+
+                public object CopyInner() => MemberwiseClone();
+            }
+
+            protected internal class Both
+            {
+                public object Copy() => MemberwiseClone();
+            }
+        }
+
+        public class Open
+        {
+            protected class Inner
+            {
+                public object Copy() => {|#2:MemberwiseClone()|};
+            }
+        }
+        """,
+        Verify.MemberwiseCloneOfOpenClass(0, "Node"),
+        Verify.MemberwiseCloneOfOpenClass(1, "Outer"),
+        Verify.MemberwiseCloneOfOpenClass(2, "Open.Inner"));
+
+    // A file-local class is never reachable from another assembly, and a private protected nested class only where internals are visible
+    // and the class that contains it can be derived from there.
+    [TestMethod]
+    public Task MemberwiseClone_OfAFileLocalClassOrAShutNestedClassOfAnAssemblyWithInternalsVisibleTo() => Verify.AnalyzerAsync(
+        """
+        [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("Friend")]
+
+        file class Local
+        {
+            public object Copy() => MemberwiseClone();
+        }
+
+        public class Shut
+        {
+            private Shut() { }
+
+            private protected class Inner
+            {
+                public object Copy() => MemberwiseClone();
+            }
+        }
+
+        public class Open
+        {
+            private protected class Inner
+            {
+                public object Copy() => {|#0:MemberwiseClone()|};
+            }
+        }
+        """,
+        Verify.MemberwiseCloneOfOpenClass(0, "Open.Inner"));
+
+    // A derived class holds what its constructed base classes declare, and a captured parameter of a primary constructor is named as
+    // the parameter. A closed constructed base class of another instantiation is not the class that is cloned.
+    [TestMethod]
+    public Task MemberwiseClone_OfAClassWhoseDerivedClassHoldsAValueThroughItsBaseOrItsPrimaryConstructor() => Verify.AnalyzerAsync(
+        $$"""
+        internal class Base
+        {
+            public object Copy() => {|#0:MemberwiseClone()|};
+        }
+
+        internal class Generic<T> : Base
+        {
+            public T Value = default!;
+        }
+
+        internal sealed class Derived : Generic<Guard> { }
+
+        internal class Other
+        {
+            public object Copy() => {|#1:MemberwiseClone()|};
+        }
+
+        internal class Captures(Guard guard) : Other
+        {
+            public override string ToString() => guard.Value.ToString();
+        }
+
+        internal class Own(Guard guard)
+        {
+            public object Copy() => {|#2:MemberwiseClone()|};
+
+            public override string ToString() => guard.Value.ToString();
+        }
+
+        internal class Instantiated<T>
+        {
+            public object Copy(Instantiated<string> other) => other.MemberwiseClone();
+
+            public object CopyAny(Instantiated<T> other) => {|#3:other.MemberwiseClone()|};
+        }
+
+        internal sealed class OfInt : Instantiated<int>
+        {
+            private Guard _guard;
+        }
+
+        {{Sources.Guard}}
+        """,
+        Verify.MemberwiseCloneOfDerivedClass(0, "Base", "Derived", "Guard", "Value"),
+        Verify.MemberwiseCloneOfDerivedClass(1, "Other", "Captures", "Guard", "guard", isParameter: true),
+        Verify.MemberwiseCloneCall(2, "Own", "Guard", "guard", isParameter: true),
+        Verify.MemberwiseCloneOfDerivedClass(3, "Instantiated<T>", "OfInt", "Guard", "_guard"));
+
+    // RuntimeHelpers.GetObjectValue clones a boxed struct: every use is reported, a call and a method group, whatever the argument.
+    [TestMethod]
+    public Task GetObjectValue_EveryUseIsReported() => Verify.AnalyzerAsync(
+        """
+        using System;
+        using System.Runtime.CompilerServices;
+
+        class C
+        {
+            object M(object box, string text)
+            {
+                object a = {|#0:RuntimeHelpers.GetObjectValue(box)|};
+                object b = {|#1:RuntimeHelpers.GetObjectValue(text)|};
+                Func<object, object> clone = {|#2:RuntimeHelpers.GetObjectValue|};
+                return a;
+            }
+        }
+        """,
+        Verify.GetObjectValueCall(0),
+        Verify.GetObjectValueCall(1),
+        Verify.GetObjectValueCall(2));
 }

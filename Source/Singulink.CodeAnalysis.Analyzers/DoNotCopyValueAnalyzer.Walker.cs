@@ -496,6 +496,10 @@ public sealed partial class DoNotCopyValueAnalyzer
         public override void VisitCompoundAssignment(ICompoundAssignmentOperation operation)
         {
             CheckMemberUse(operation.Syntax, operation.OperatorMethod);
+
+            // The user-defined conversions that take the target to the operator and its result back, with nothing written for them.
+            CheckMemberUse(operation.Syntax, operation.InConversion.MethodSymbol);
+            CheckMemberUse(operation.Syntax, operation.OutConversion.MethodSymbol);
             CheckTypeInUnsupportedContext(operation);
             CheckMembersRunOnOneValue(operation);
 
@@ -817,6 +821,10 @@ public sealed partial class DoNotCopyValueAnalyzer
             var instance = operation.Instance;
             var accessor = operation.Parent is IEventAssignmentOperation { Adds: false } ? operation.Event.RemoveMethod : operation.Event.AddMethod;
 
+            // The handler that '+=' or '-=' gives the accessor is a parameter of the accessor, which the event does not show.
+            if (accessor is not null && operation.Parent is IEventAssignmentOperation)
+                CheckUncheckedInbound(operation.Syntax, accessor);
+
             if (instance is not null &&
                 accessor is not null &&
                 IsCalledOnCopy(instance, operation.Event.ContainingType, accessor.IsReadOnly) &&
@@ -1041,11 +1049,14 @@ public sealed partial class DoNotCopyValueAnalyzer
                 use = CheckMemberUse(operation.Syntax, method);
             }
 
-            // MemberwiseClone has its own rule, which looks at the fields that the clone copies.
-            if (method is { Name: nameof(MemberwiseClone), Parameters.IsEmpty: true, ContainingType.SpecialType: SpecialType.System_Object })
-                CheckMemberwiseClone(operation);
+            // MemberwiseClone has its own rule, which looks at the fields that the clone copies, and GetObjectValue clones a boxed struct.
+            if (IsMemberwiseClone(method))
+                CheckMemberwiseClone(operation, operation.Instance);
             else
                 CheckReceiverType(operation.Syntax, instance?.Type, method);
+
+            if (IsGetObjectValue(method))
+                Report(Rules.GetObjectValueCall, operation.Syntax);
 
             if (use.Kind is MemberUseKind.Listed)
             {
@@ -1147,6 +1158,13 @@ public sealed partial class DoNotCopyValueAnalyzer
             var use = CheckMemberUse(operation.Syntax, method);
             CheckReceiverType(operation.Syntax, operation.Instance?.Type, method);
 
+            // A method group of MemberwiseClone or of GetObjectValue clones when the delegate is invoked.
+            if (IsMemberwiseClone(method))
+                CheckMemberwiseClone(operation, operation.Instance);
+
+            if (IsGetObjectValue(method))
+                Report(Rules.GetObjectValueCall, operation.Syntax);
+
             // The delegate can be invoked any number of times, so what it is created on counts as stored. That goes for a member marked 'new'
             // as well: the delegate hands out what the member does, and its callers take a non-copyable value from it for new.
             if (ReturnsByValue(method))
@@ -1237,6 +1255,14 @@ public sealed partial class DoNotCopyValueAnalyzer
             var instance = operation.Instance;
             var use = CheckMemberUse(operation.Syntax, property);
             CheckReceiverType(operation.Syntax, instance?.Type, property);
+
+            // The value that a setter or an init accessor is given is a parameter of the accessor, which the property does not show.
+            if (property.SetMethod is { } setter &&
+                (IsAssignmentTarget(operation, out _) || IsSetMethodInvocation(operation)) &&
+                types.FindUncheckedInbound(property) is null)
+            {
+                CheckUncheckedInbound(operation.Syntax, setter);
+            }
 
             // A property of a pattern is checked with the pattern, which knows what it reads from.
             if (use.Kind is MemberUseKind.Listed &&
@@ -1421,6 +1447,9 @@ public sealed partial class DoNotCopyValueAnalyzer
 
         public override void VisitSpread(ISpreadOperation operation)
         {
+            // A user-defined conversion of each element, with nothing written for it.
+            CheckMemberUse(operation.Syntax, operation.ElementConversion.MethodSymbol);
+
             // A spread element copies every element of a collection into the new one, as a 'foreach' with a by-value variable does.
             // A view never owns its elements, so a spread over one copies them, whatever the view came from.
             if (types.IsNonCopyableType(operation.ElementType) &&

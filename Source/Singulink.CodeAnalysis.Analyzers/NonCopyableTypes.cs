@@ -41,6 +41,9 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
     private readonly ConcurrentDictionary<INamedTypeSymbol, bool> _inheritsListedContainer = new(SymbolEqualityComparer.Default);
     private readonly ConcurrentDictionary<INamedTypeSymbol, bool> _hasListedMembers = new(SymbolEqualityComparer.Default);
 
+    // The classes that the compilation declares, made once.
+    private INamedTypeSymbol[]? _classes;
+
     /// <summary>
     /// Gets a value indicating whether a list names a member by its documentation comment ID.
     /// </summary>
@@ -171,7 +174,22 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
         return false;
     }
 
-    public static bool IsMarkedNonCopyable(ITypeParameterSymbol typeParameter)
+    /// <summary>
+    /// Gets a value indicating whether a type parameter is marked [NonCopyable]. The mark says that the body of the generic is checked
+    /// for copies, which only a build with the analyzer holds: on a generic of an assembly that was not built with it the mark counts
+    /// as absent, and the generic goes by the list.
+    /// </summary>
+    public static bool IsMarkedNonCopyable(ITypeParameterSymbol typeParameter) =>
+        AnalyzedAssemblies.IsOfAnalyzedAssembly(typeParameter) && HasNonCopyableMark(typeParameter);
+
+    /// <summary>
+    /// Gets a value indicating whether a type parameter carries the mark [NonCopyable] in an assembly that was not built with the analyzer,
+    /// where it does not count. A message says so instead of asking for the mark.
+    /// </summary>
+    public static bool HasUncountedNonCopyableMark(ITypeParameterSymbol typeParameter) =>
+        !AnalyzedAssemblies.IsOfAnalyzedAssembly(typeParameter) && HasNonCopyableMark(typeParameter);
+
+    private static bool HasNonCopyableMark(ITypeParameterSymbol typeParameter)
     {
         foreach (var attribute in typeParameter.GetAttributes())
         {
@@ -802,7 +820,162 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
     /// Gets a value indicating whether an object of a type is never new for the members that are used on it: an object of a class
     /// that derives from a listed container, and a value of a marked type parameter that is constrained to a container.
     /// </summary>
-    public bool IsNeverNewForItsMembers([NotNullWhen(true)] ITypeSymbol? type) => DerivesFromListedContainer(type) || IsTypeParameterOverContainer(type);
+    public bool IsNeverNewForItsMembers([NotNullWhen(true)] ITypeSymbol? type) =>
+        DerivesFromListedContainer(type) || IsTypeParameterOverContainer(type) || IsUncheckedDerivedContainer(type);
+
+    /// <summary>
+    /// Gets a value indicating whether a type is a class or an interface of an assembly that was not built with the analyzer, which is a
+    /// container only through what it derives from or implements, as <c>class Leases : List&lt;Lease&gt;</c> in such a library is. Its own
+    /// code decides what it holds and nothing checks that code, so an object of it is never new for the members that it inherits. A
+    /// type whose own members the list names is left to those entries, as for <see cref="DerivesFromListedContainer"/>.
+    /// </summary>
+    public bool IsUncheckedDerivedContainer([NotNullWhen(true)] ITypeSymbol? type) =>
+        type is INamedTypeSymbol { TypeKind: TypeKind.Class or TypeKind.Interface } named &&
+        !AnalyzedAssemblies.IsOfAnalyzedAssembly(named) &&
+        IsContainer(named) &&
+        !GetAllTypeArguments(named).Any(Carries) &&
+        !HasListedMembers(named.OriginalDefinition);
+
+    /// <summary>
+    /// Gets a class of the compilation that derives from a class, at any depth, and declares an instance field of a non-copyable type,
+    /// with that field. Null if there is none.
+    /// </summary>
+    public (INamedTypeSymbol Class, IFieldSymbol Field)? FindDerivedClassWithNonCopyableField(INamedTypeSymbol type)
+    {
+        foreach (var derived in GetClasses())
+        {
+            // The fields of the class and of its constructed base classes below the type: 'class D : G<Guard>' holds the 'T' field of
+            // 'G<T>' as a Guard. The fields of the type and of its own base classes are judged on the type itself.
+            IFieldSymbol? found = null;
+
+            for (var current = derived; current is not null; current = current.BaseType)
+            {
+                if (!ReferenceEquals(current, derived) && IsSameClassAs(current, type))
+                {
+                    if (found is not null)
+                        return (derived, found);
+
+                    break;
+                }
+
+                found ??= current.GetMembers().OfType<IFieldSymbol>().FirstOrDefault(f => f is { IsStatic: false, RefKind: RefKind.None } && IsNonCopyableType(f.Type));
+            }
+        }
+
+        return null;
+    }
+
+    // A base class of a derived class is the type that a call is on where it is of the same class: the same instantiation where both are
+    // closed constructed types of one generic class, 'E3D : E3<int>' is not an 'E3<string>'. A type that mentions a type parameter can
+    // stand for any instantiation.
+    private static bool IsSameClassAs(INamedTypeSymbol baseType, INamedTypeSymbol type) =>
+        SymbolEqualityComparer.Default.Equals(baseType.OriginalDefinition, type.OriginalDefinition) &&
+        (MentionsTypeParameter(baseType) || MentionsTypeParameter(type) || SymbolEqualityComparer.Default.Equals(baseType, type));
+
+    // Every class that the compilation declares, nested ones included, made once.
+    private INamedTypeSymbol[] GetClasses() => _classes ??= [.. GetClasses(compilationAssembly.GlobalNamespace)];
+
+    private static IEnumerable<INamedTypeSymbol> GetClasses(INamespaceOrTypeSymbol container)
+    {
+        foreach (var member in container.GetMembers())
+        {
+            if (member is INamespaceSymbol ns)
+            {
+                foreach (var found in GetClasses(ns))
+                    yield return found;
+            }
+            else if (member is INamedTypeSymbol type)
+            {
+                if (type.TypeKind is TypeKind.Class)
+                    yield return type;
+
+                foreach (var found in GetClasses(type))
+                    yield return found;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether a class can be derived from in another assembly: it, or a class of the compilation that derives
+    /// from it, is not sealed, can be reached from outside its assembly, and has a constructor that a derived class there can call.
+    /// </summary>
+    /// <remarks>
+    /// A nested class that is protected can be reached only from a class that derives from the class that contains it, so only where
+    /// that class can itself be derived from in another assembly. An assembly with any InternalsVisibleTo counts its internal types and
+    /// constructors as reachable. A file-local class is never reachable.
+    /// </remarks>
+    public bool CanBeDerivedFromElsewhere(INamedTypeSymbol type) => CanBeDerivedFromElsewhere(type, []);
+
+    private bool CanBeDerivedFromElsewhere(INamedTypeSymbol type, HashSet<INamedTypeSymbol> judging)
+    {
+        type = type.OriginalDefinition;
+
+        // A class that is judged already, through a class nested in it, gives no route of its own.
+        if (!judging.Add(type))
+            return false;
+
+        try
+        {
+            return CanItselfBeDerivedFromElsewhere(type, judging) ||
+                GetClasses().Any(c => c.BaseType is { } baseType &&
+                    SymbolEqualityComparer.Default.Equals(baseType.OriginalDefinition, type) &&
+                    CanBeDerivedFromElsewhere(c, judging));
+        }
+        finally
+        {
+            judging.Remove(type);
+        }
+    }
+
+    private bool CanItselfBeDerivedFromElsewhere(INamedTypeSymbol type, HashSet<INamedTypeSymbol> judging)
+    {
+        if (type.IsSealed || type.TypeKind is not TypeKind.Class)
+            return false;
+
+        bool internalsVisible = type.ContainingAssembly?.GetAttributes()
+            .Any(a => a.AttributeClass is { Name: "InternalsVisibleToAttribute" } c && IsInNamespace(c, "System.Runtime.CompilerServices")) ?? false;
+
+        for (var current = type; current is not null; current = current.ContainingType)
+        {
+            if (current.IsFileLocal)
+                return false;
+
+            bool reachable = current.DeclaredAccessibility switch {
+                Accessibility.Public => true,
+                Accessibility.Internal => internalsVisible,
+                Accessibility.Protected => IsDerivableContainer(current),
+                Accessibility.ProtectedOrInternal => internalsVisible || IsDerivableContainer(current),
+                Accessibility.ProtectedAndInternal => internalsVisible && IsDerivableContainer(current),
+                _ => false,
+            };
+
+            if (!reachable)
+                return false;
+        }
+
+        return type.InstanceConstructors.Any(constructor => constructor.DeclaredAccessibility switch {
+            Accessibility.Public or Accessibility.Protected or Accessibility.ProtectedOrInternal => true,
+            Accessibility.Internal or Accessibility.ProtectedAndInternal => internalsVisible,
+            _ => false,
+        });
+
+        bool IsDerivableContainer(INamedTypeSymbol nested) =>
+            nested.ContainingType is { } containing && CanBeDerivedFromElsewhere(containing, judging);
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether a member of an assembly that was not built with the analyzer hands out a container that it names
+    /// concretely, which is then stored: nothing checks that nothing else holds it. A list entry marked 'new' says that it does not. A
+    /// constructor makes a new object, a member of the non-copyable type itself is trusted, and a member whose declared type mentions a
+    /// type parameter goes by the rules of generic code.
+    /// </summary>
+    public bool HandsOutUncheckedContainer(ISymbol member, ITypeSymbol? handedOut, ITypeSymbol? declared) =>
+        member is not IMethodSymbol { MethodKind: MethodKind.Constructor or MethodKind.StaticConstructor } &&
+        IsContainer(handedOut) &&
+        declared is not null && !MentionsTypeParameter(declared) &&
+        !AnalyzedAssemblies.IsOfAnalyzedAssembly(member) &&
+        !IsMemberOfNonCopyableType(member) &&
+        list.GetMember(GetListDefinition(member))?.Marker is not SafeListMarker.New;
 
     /// <summary>
     /// Gets a value indicating whether a type is a class of code that the list does not vouch for which derives from a container that
@@ -906,7 +1079,12 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
     /// Gets a value indicating whether a parameter carries the mark <c>[NotNullRef]</c>, wherever it stands. The attribute is
     /// recognised by its full name like the others, and a class that derives from it is not.
     /// </summary>
-    public static bool IsMarkedNotNullRef(IParameterSymbol parameter) => HasAttribute(parameter.OriginalDefinition, NotNullRefAttributeName);
+    /// <remarks>
+    /// The mark promises what only a checked body could hold, so on a member of an assembly that was not built with the analyzer it
+    /// counts as absent.
+    /// </remarks>
+    public static bool IsMarkedNotNullRef(IParameterSymbol parameter) =>
+        HasAttribute(parameter.OriginalDefinition, NotNullRefAttributeName) && AnalyzedAssemblies.IsOfAnalyzedAssembly(parameter);
 
     /// <summary>
     /// Says what keeps the mark <c>[NotNullRef]</c> on a parameter from counting. Null where it counts: on a 'ref', 'in',
@@ -1024,9 +1202,18 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
 
     /// <summary>
     /// Gets a value indicating whether a parameter is a 'ref' parameter marked [MovedFrom]. On any other parameter the mark has no
-    /// meaning, which is reported where it is written.
+    /// meaning, which is reported where it is written. The mark promises what only a checked body can hold, so on a member of an
+    /// assembly that was not built with the analyzer it counts as absent.
     /// </summary>
-    public static bool IsMovedFrom(IParameterSymbol parameter) => parameter.RefKind is RefKind.Ref && HasAttribute(parameter, MovedFromAttributeName);
+    public static bool IsMovedFrom(IParameterSymbol parameter) =>
+        parameter.RefKind is RefKind.Ref && HasAttribute(parameter, MovedFromAttributeName) && AnalyzedAssemblies.IsOfAnalyzedAssembly(parameter);
+
+    /// <summary>
+    /// Gets a value indicating whether a 'ref' parameter carries the mark [MovedFrom] in an assembly that was not built with the analyzer,
+    /// where it does not count. A message says so instead of saying that the parameter is not marked.
+    /// </summary>
+    public static bool HasUncountedMovedFrom(IParameterSymbol parameter) =>
+        parameter.RefKind is RefKind.Ref && HasAttribute(parameter, MovedFromAttributeName) && !AnalyzedAssemblies.IsOfAnalyzedAssembly(parameter);
 
     /// <summary>
     /// Gets the members that a method stands for, which are what a caller can see in its place: the methods that it overrides, and the
@@ -1231,6 +1418,11 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
         if (IsBorrowing(member))
             return ReceivedContainer.Used;
 
+        // Nothing checks what a member of an assembly that was not built with the analyzer does with a container that it gets. Its use
+        // is reported where it stands (SCA1024), and the container is no longer the caller's own.
+        if (IsUncheckedInbound(receiving, member))
+            return ReceivedContainer.KeptByUnmarkedAssembly;
+
         // A constructor keeps by its kind. One of a ref struct that the list vouches for is a call that returns a ref struct:
         // 'new Span<T>(array)' keeps nothing more than 'array.AsSpan()' does. The body of a constructor of checked code is not
         // checked for what it does with its parameters, so that one keeps like any other constructor.
@@ -1256,6 +1448,79 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
             MemberUseKind.Listed or MemberUseKind.ListedNew => ReceivedContainer.KeptByUncheckedCode,
             _ => ReceivedContainer.KeptByUnlistedCode,
         };
+    }
+
+    /// <summary>
+    /// Gets the first parameter, the receiver of an extension included, through which a member of an assembly that was not built with
+    /// the analyzer gets at a value of a non-copyable type other than by value: by 'ref', 'in' or 'ref readonly', inside a container,
+    /// inside a view or through a pointer. Null where there is none, where the member is of an analyzed assembly, or where the list marks
+    /// it 'borrows'. A member of a non-copyable type is trusted with a value of that type, and a parameter whose declared type mentions a
+    /// type parameter goes by the rules of generic code instead. The value of a setter or an init accessor is one of its parameters.
+    /// </summary>
+    public IParameterSymbol? FindUncheckedInbound(ISymbol member)
+    {
+        if (AnalyzedAssemblies.IsOfAnalyzedAssembly(member) || IsBorrowing(member))
+            return null;
+
+        var unreduced = member is IMethodSymbol method ? GetUnreduced(method) : member;
+
+        foreach (var parameter in GetParametersWithReceiver(unreduced))
+        {
+            if (GetsAtNonCopyableValue(parameter) && !IsTrustedWith(member, parameter))
+                return parameter;
+        }
+
+        return null;
+    }
+
+    private bool IsUncheckedInbound(IParameterSymbol receiving, ISymbol member) =>
+        !AnalyzedAssemblies.IsOfAnalyzedAssembly(member) && GetsAtNonCopyableValue(receiving) && !IsTrustedWith(member, receiving);
+
+    // The members of a non-copyable type itself are trusted: 'handle.Free()' on a struct of a library has to work.
+    private bool IsMemberOfNonCopyableType(ISymbol member) => member.ContainingType is { } owner && IsNonCopyableType(owner);
+
+    // A member of a non-copyable type is trusted with a value of that type, by reference or through a pointer, as it is with its receiver:
+    // 'GCHandle.ToIntPtr(GCHandle)' and the operators of the type. Any other non-copyable value, and a container even of its own type, is
+    // judged as for any other member.
+    private bool IsTrustedWith(ISymbol member, IParameterSymbol parameter)
+    {
+        if (!IsMemberOfNonCopyableType(member))
+            return false;
+
+        var declared = parameter.OriginalDefinition.Type;
+
+        while (declared is IPointerTypeSymbol { PointedAtType: var pointedAt })
+            declared = pointedAt;
+
+        return SymbolEqualityComparer.Default.Equals(declared.OriginalDefinition, member.ContainingType.OriginalDefinition);
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether a parameter that names a non-copyable type concretely gets at a value of it other than by value.
+    /// A value that is passed by value is moved, and an 'out' argument gives the callee nothing to read.
+    /// </summary>
+    private bool GetsAtNonCopyableValue(IParameterSymbol parameter)
+    {
+        if (parameter.RefKind is RefKind.Out)
+            return false;
+
+        var declared = parameter.OriginalDefinition.Type;
+
+        // A pointer at a pointer gets at what the innermost one points at.
+        if (declared is IPointerTypeSymbol)
+        {
+            var pointedAt = declared;
+
+            while (pointedAt is IPointerTypeSymbol pointer)
+                pointedAt = pointer.PointedAtType;
+
+            return !MentionsTypeParameter(pointedAt) && (IsNonCopyableType(pointedAt) || IsContainer(pointedAt));
+        }
+
+        if (MentionsTypeParameter(declared))
+            return false;
+
+        return (parameter.RefKind is not RefKind.None && IsNonCopyableType(declared)) || IsContainer(declared);
     }
 
     /// <summary>

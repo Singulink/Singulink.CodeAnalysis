@@ -228,8 +228,8 @@ public sealed partial class DoNotCopyValueAnalyzer
             {
                 return $": '{variable.Name}' is not used again after this, but a 'catch', a 'finally' or an exception filter that uses it can " +
                     $"still run, because the 'try' block then reads or writes through '{failing}', which can be a null reference. Check the " +
-                    $"reference first, with NonCopyable.ThrowIfNullRef(in {failing}) or with a method of the project whose parameter is marked " +
-                    "[NotNullRef]";
+                    $"reference first, with NonCopyable.ThrowIfNullRef(in {failing}) or with a method whose parameter is marked " +
+                    "[NotNullRef], which counts only in an assembly that was built with the analyzer";
             }
 
             return _flow.IsUsedInHandler(reference, variable)

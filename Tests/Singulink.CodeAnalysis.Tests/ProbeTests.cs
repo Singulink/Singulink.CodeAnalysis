@@ -82,7 +82,9 @@ public sealed class ProbeTests
 
         if (Directory.Exists(library))
         {
+            // The library's project was built with the analyzer, so its assembly carries the marker that the package adds.
             var built = Compile("Library", library, OutputKind.DynamicallyLinkedLibrary);
+            built = built.AddSyntaxTrees(CSharpSyntaxTree.ParseText(Verify.AnalyzedMarker, parseOptions, "AnalyzedMarker.cs"));
             await AddFindingsAsync(built);
             var image = new MemoryStream();
             Assert.IsTrue(built.Emit(image).Success, "The library of the probe does not build.");

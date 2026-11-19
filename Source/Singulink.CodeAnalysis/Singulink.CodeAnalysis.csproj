@@ -21,6 +21,18 @@
     <PackageReference Include="PolySharp" PrivateAssets="all" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!--
+      The marker of an assembly that was built with the analyzer, which the targets file of the package adds to every project that it
+      runs in. This repository references the analyzer as a project, where that file does not run, so the attributes assembly adds the
+      marker itself: the marks of NonCopyable.Move and of the two checks are trusted only from an assembly that has it.
+    -->
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>Singulink.CodeAnalysis.Analyzed</_Parameter1>
+      <_Parameter2>1</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+
   <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
     <!-- .NET Standard 2.0 has no way to test a reference for null without it, which NonCopyable.ThrowIfNullRef does. -->
     <PackageReference Include="System.Runtime.CompilerServices.Unsafe" />

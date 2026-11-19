@@ -7,7 +7,7 @@ using Singulink.CodeAnalysis.Analyzers;
 namespace Singulink.CodeAnalysis.Tests;
 
 /// <summary>
-/// Tests of the safe list: the format of a list file, the merging of user files with the built-in list, and the built-in list itself.
+/// Tests of the symbol list: the format of a list file, the merging of user files with the built-in list, and the built-in list itself.
 /// </summary>
 /// <remarks>
 /// Docs: articles/guides/symbol-list.md.
@@ -204,11 +204,11 @@ public class SafeListTests
         // A line that cannot be parsed is reported in the file that has it.
         test.ExpectedDiagnostics.Add(new DiagnosticResult(DiagnosticIds.SafeListLine, DiagnosticSeverity.Warning)
             .WithSpan(LibraryFile, 3, 1, 3, 13)
-            .WithMessage("This line of the safe list cannot be parsed: expected a documentation comment ID that starts with 'M:', 'P:', 'E:' or 'T:'"));
+            .WithMessage("This line of the list file cannot be parsed: expected a documentation comment ID that starts with 'M:', 'P:', 'E:' or 'T:', or the name of an assembly after 'A:'"));
 
         test.ExpectedDiagnostics.Add(new DiagnosticResult(DiagnosticIds.SafeListLine, DiagnosticSeverity.Warning)
             .WithSpan(SecondLibraryFile, 2, 1, 2, 24)
-            .WithMessage("This line of the safe list cannot be parsed: unknown marker 'unknown'; the markers are 'new', 'borrows', 'drains', 'owned', 'view', 'noncopyable', 'copyable' and 'erasable'"));
+            .WithMessage("This line of the list file cannot be parsed: unknown marker 'unknown'; the markers are 'new', 'borrows', 'drains', 'owned', 'view', 'noncopyable', 'copyable' and 'erasable', and 'trusted' for an assembly"));
 
         return test.RunAsync();
     }
@@ -310,14 +310,14 @@ public class SafeListTests
         M:Bag`1..Take
         T:Bag`1(System.Int32);view
         """,
-        Verify.SafeListLine(5, 1, 11, "expected a documentation comment ID that starts with 'M:', 'P:', 'E:' or 'T:'"),
-        Verify.SafeListLine(6, 1, 15, "expected a documentation comment ID that starts with 'M:', 'P:', 'E:' or 'T:'"),
-        Verify.SafeListLine(7, 1, 3, "expected a documentation comment ID that starts with 'M:', 'P:', 'E:' or 'T:'"),
+        Verify.SafeListLine(5, 1, 11, "expected a documentation comment ID that starts with 'M:', 'P:', 'E:' or 'T:', or the name of an assembly after 'A:'"),
+        Verify.SafeListLine(6, 1, 15, "expected a documentation comment ID that starts with 'M:', 'P:', 'E:' or 'T:', or the name of an assembly after 'A:'"),
+        Verify.SafeListLine(7, 1, 3, "expected a documentation comment ID that starts with 'M:', 'P:', 'E:' or 'T:', or the name of an assembly after 'A:'"),
         Verify.SafeListLine(8, 1, 8, "a type needs the marker 'view', 'noncopyable', 'copyable' or 'erasable'; there is no entry for every member of a type"),
         Verify.SafeListLine(9, 1, 19, "the marker 'new' is for a member; a type takes 'view', 'noncopyable', 'copyable' or 'erasable'"),
         Verify.SafeListLine(10, 1, 18, "the marker 'view' is for a type; a member takes 'new', 'borrows', 'drains', 'owned' or no marker"),
         Verify.SafeListLine(11, 1, 25, "the marker 'noncopyable' is for a type; a member takes 'new', 'borrows', 'drains', 'owned' or no marker"),
-        Verify.SafeListLine(12, 1, 18, "unknown marker 'safe'; the markers are 'new', 'borrows', 'drains', 'owned', 'view', 'noncopyable', 'copyable' and 'erasable'"),
+        Verify.SafeListLine(12, 1, 18, "unknown marker 'safe'; the markers are 'new', 'borrows', 'drains', 'owned', 'view', 'noncopyable', 'copyable' and 'erasable', and 'trusted' for an assembly"),
         Verify.SafeListLine(13, 1, 21, "an entry has one marker, which 'for=' can follow"),
         Verify.SafeListLine(14, 1, 14, "a documentation comment ID has no white space"),
         Verify.SafeListLine(16, 1, 27, "'for=' is for a member"),
@@ -415,8 +415,9 @@ public class SafeListTests
         // 'erasable' that is not on a generic class or interface.
         await Verify.AnalyzerAsync("class C { }", list);
 
-        var references = await new Verify.Test().ReferenceAssemblies.ResolveAsync(LanguageNames.CSharp, CancellationToken.None);
-        var compilation = CSharpCompilation.Create("Test", references: references);
+        // The framework of .NET 10 with ASP.NET Core, whose HybridCache has entries, and that of .NET 11 for a line marked "# net11+".
+        var compilation = await CreateFrameworkCompilationAsync("10.0.0");
+        var compilation11 = await CreateFrameworkCompilationAsync("11.0.0");
         var unresolved = new List<string>();
         int count = 0;
 
@@ -430,14 +431,28 @@ public class SafeListTests
             string id = entry.Split(';', ' ')[0];
             count++;
 
-            var symbols = DocumentationCommentId.GetSymbolsForDeclarationId(id, compilation);
+            var symbols = DocumentationCommentId.GetSymbolsForDeclarationId(id, entry.EndsWith("# net11+", StringComparison.Ordinal) ? compilation11 : compilation);
 
             if (symbols is not [{ DeclaredAccessibility: Accessibility.Public }])
                 unresolved.Add(id);
         }
 
-        Assert.AreEqual(817, count);
+        Assert.AreEqual(824, count);
         Assert.IsEmpty(unresolved, "Entries that do not name one public symbol of .NET 10: " + string.Join(", ", unresolved));
+    }
+
+    private static async Task<CSharpCompilation> CreateFrameworkCompilationAsync(string version)
+    {
+        string target = "net" + version[..version.IndexOf('.', StringComparison.Ordinal)] + ".0";
+        var references = new List<MetadataReference>();
+
+        foreach (string pack in new[] { "Microsoft.NETCore.App.Ref", "Microsoft.AspNetCore.App.Ref" })
+        {
+            var assemblies = new ReferenceAssemblies(target, new PackageIdentity(pack, version), Path.Combine("ref", target));
+            references.AddRange(await assemblies.ResolveAsync(LanguageNames.CSharp, CancellationToken.None));
+        }
+
+        return CSharpCompilation.Create("Test", references: references);
     }
 
     [TestMethod]
@@ -464,8 +479,8 @@ public class SafeListTests
         var descriptors = new DoNotCopyValueAnalyzer().SupportedDiagnostics;
 
         string[] ids = [
-            "SCA1001", "SCA1002", "SCA1003", "SCA1004", "SCA1005", "SCA1006", "SCA1010", "SCA1011", "SCA1012", "SCA1013", "SCA1014", "SCA1015", "SCA1020", "SCA1021",
-            "SCA1022", "SCA1023", "SCA1030", "SCA1031", "SCA1032", "SCA1033", "SCA1040", "SCA1041", "SCA1042", "SCA1043", "SCA1044", "SCA1045",
+            "SCA1001", "SCA1002", "SCA1003", "SCA1004", "SCA1005", "SCA1006", "SCA1007", "SCA1008", "SCA1010", "SCA1011", "SCA1012", "SCA1013", "SCA1014", "SCA1015", "SCA1020", "SCA1021",
+            "SCA1022", "SCA1023", "SCA1024", "SCA1025", "SCA1030", "SCA1031", "SCA1032", "SCA1033", "SCA1040", "SCA1041", "SCA1042", "SCA1043", "SCA1044", "SCA1045",
             "SCA1046", "SCA1047", "SCA1048",
         ];
 

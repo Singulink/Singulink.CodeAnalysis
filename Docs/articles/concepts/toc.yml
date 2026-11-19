@@ -31,6 +31,9 @@
 - name: Where the Compiler Uses One Value Twice
   href: compiler-copies.md
 
+- name: Code Not Built With the Analyzer
+  href: unchecked-code.md
+
 - name: What Is Not Covered
   href: not-covered.md
 

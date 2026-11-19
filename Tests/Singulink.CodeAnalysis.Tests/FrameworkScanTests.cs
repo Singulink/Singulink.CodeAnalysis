@@ -1,0 +1,230 @@
+using System.Reflection.PortableExecutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using PrefixClassName.MsTest;
+
+namespace Singulink.CodeAnalysis.Tests;
+
+/// <summary>
+/// Scans the shared frameworks that the tests run on for members that the rules for code which was not built with the analyzer
+/// reach: every public or protected member that gets at one of the ten built-in non-copyable types other than by value, or hands out a
+/// container of one, must have its entry in the built-in list.
+/// </summary>
+/// <remarks>
+/// Docs: articles/guides/symbol-list.md and articles/concepts/unchecked-code.md.
+/// </remarks>
+[PrefixTestClass]
+public class FrameworkScanTests
+{
+    private static readonly string[] BuiltInTypes = [
+        "System.Threading.SpinLock",
+        "System.Runtime.InteropServices.GCHandle",
+        "System.Runtime.InteropServices.GCHandle`1",
+        "System.Runtime.InteropServices.PinnedGCHandle`1",
+        "System.Runtime.InteropServices.WeakGCHandle`1",
+        "System.Threading.Lock+Scope",
+        "System.Buffers.MemoryHandle",
+        "System.Runtime.CompilerServices.DefaultInterpolatedStringHandler",
+        "System.Threading.AsyncFlowControl",
+        "System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore`1",
+    ];
+
+    // A member that gets at one of them other than by value needs 'borrows'; one that hands out a container of one needs 'new'.
+    [TestMethod]
+    public void SharedFrameworks_EveryMemberThatGetsAtABuiltInTypeOtherThanByValueIsListed()
+    {
+        var frameworks = FindSharedFrameworks();
+        Assert.IsNotEmpty(frameworks);
+
+        var references = frameworks
+            .SelectMany(directory => Directory.GetFiles(directory, "*.dll"))
+            .Where(HasMetadata)
+            .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path))
+            .ToList();
+
+        var compilation = CSharpCompilation.Create("Scan", references: references);
+        var ten = BuiltInTypes.Select(name => compilation.GetTypeByMetadataName(name)).OfType<INamedTypeSymbol>().ToHashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+        Assert.HasCount(BuiltInTypes.Length, ten, "Every built-in non-copyable type is in the shared framework.");
+
+        var entries = ReadEntries();
+        var missing = new SortedSet<string>(StringComparer.Ordinal);
+        int types = 0, found = 0;
+
+        foreach (var reference in references)
+        {
+            if (compilation.GetAssemblyOrModuleSymbol(reference) is not IAssemblySymbol assembly)
+                continue;
+
+            foreach (var type in GetVisibleTypes(assembly.GlobalNamespace))
+            {
+                types++;
+
+                // A member of one of the ten is trusted with a value of its own type and with what it hands out.
+                var owner = ten.Contains(type.OriginalDefinition) ? type.OriginalDefinition : null;
+
+                foreach (var member in type.GetMembers().Where(IsVisible))
+                {
+                    var (inbound, outbound) = Judge(member, ten, owner);
+
+                    if (!inbound && !outbound)
+                        continue;
+
+                    found++;
+                    string id = member.GetDocumentationCommentId()!;
+                    entries.TryGetValue(id, out string? marker);
+
+                    if (inbound && marker is not "borrows")
+                        missing.Add(id + ";borrows");
+                    else if (outbound && !inbound && marker is not "new")
+                        missing.Add(id + ";new");
+                }
+            }
+        }
+
+        Assert.IsGreaterThan(1000, types, "The scan reads the types of the shared frameworks.");
+        Assert.IsEmpty(missing, $"{found} members reach a built-in non-copyable type; these have no entry with the marker that they need:\n" + string.Join("\n", missing));
+    }
+
+    private static (bool Inbound, bool Outbound) Judge(ISymbol member, HashSet<INamedTypeSymbol> ten, INamedTypeSymbol? owner)
+    {
+        // The value of a setter or an init accessor that the scan can see is a parameter, after those of an indexer.
+        var parameters = member switch {
+            IMethodSymbol method => method.Parameters,
+            IPropertySymbol { SetMethod: { } setter } when IsVisible(setter) => setter.Parameters,
+            IPropertySymbol property => property.Parameters,
+            _ => [],
+        };
+
+        bool inbound = parameters.Any(parameter =>
+            parameter.RefKind is not RefKind.Out &&
+            !IsOwnType(parameter.Type, owner) &&
+            ((parameter.RefKind is not RefKind.None && IsOneOf(parameter.Type, ten)) || Carries(parameter.Type, ten)));
+
+        var handedOut = member switch {
+            IMethodSymbol { MethodKind: not (MethodKind.PropertyGet or MethodKind.PropertySet or MethodKind.EventAdd or MethodKind.EventRemove) } method => method.ReturnType,
+            IPropertySymbol property => property.Type,
+            _ => null,
+        };
+
+        bool outbound = owner is null && handedOut is not null && Carries(handedOut, ten);
+
+        // An accessor is judged with its property.
+        if (member is IMethodSymbol { AssociatedSymbol: not null })
+            return (false, false);
+
+        return (inbound, outbound);
+    }
+
+    private static bool IsOwnType(ITypeSymbol type, INamedTypeSymbol? owner)
+    {
+        while (type is IPointerTypeSymbol pointer)
+            type = pointer.PointedAtType;
+
+        return owner is not null && SymbolEqualityComparer.Default.Equals(type.OriginalDefinition, owner);
+    }
+
+    private static bool IsOneOf(ITypeSymbol type, HashSet<INamedTypeSymbol> ten) =>
+        type is INamedTypeSymbol named && ten.Contains(named.OriginalDefinition);
+
+    // A type that holds one of the ten without being one: an array, a pointer, a generic type with one among its type arguments.
+    private static bool Carries(ITypeSymbol type, HashSet<INamedTypeSymbol> ten) => !IsOneOf(type, ten) && Mentions(type, ten);
+
+    private static bool Mentions(ITypeSymbol type, HashSet<INamedTypeSymbol> ten) => type switch {
+        IArrayTypeSymbol array => Mentions(array.ElementType, ten),
+        IPointerTypeSymbol pointer => Mentions(pointer.PointedAtType, ten),
+        INamedTypeSymbol named => ten.Contains(named.OriginalDefinition) || named.TypeArguments.Any(argument => Mentions(argument, ten)) ||
+            (named.ContainingType is { } containing && Mentions(containing, ten)),
+        _ => false,
+    };
+
+    private static IEnumerable<INamedTypeSymbol> GetVisibleTypes(INamespaceOrTypeSymbol container)
+    {
+        foreach (var member in container.GetMembers())
+        {
+            if (member is INamespaceSymbol ns)
+            {
+                foreach (var type in GetVisibleTypes(ns))
+                    yield return type;
+            }
+            else if (member is INamedTypeSymbol type && IsVisible(type))
+            {
+                yield return type;
+
+                foreach (var nested in GetVisibleTypes(type))
+                    yield return nested;
+            }
+        }
+    }
+
+    private static bool IsVisible(ISymbol symbol) =>
+        symbol.DeclaredAccessibility is Accessibility.Public or Accessibility.Protected or Accessibility.ProtectedOrInternal && !symbol.IsImplicitlyDeclared;
+
+    private static bool HasMetadata(string path)
+    {
+        try
+        {
+            using var reader = new PEReader(File.OpenRead(path));
+            return reader.HasMetadata;
+        }
+        catch (BadImageFormatException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Gets the folders of the shared frameworks of the runtime that the tests run on: Microsoft.NETCore.App, and Microsoft.AspNetCore.App
+    /// and Microsoft.WindowsDesktop.App of the same major version where they are installed. System.Private.CoreLib is taken from the folder
+    /// of the running core library, which is where it is.
+    /// </summary>
+    private static List<string> FindSharedFrameworks()
+    {
+        string core = Path.GetDirectoryName(typeof(object).Assembly.Location)!;
+        string shared = Path.GetDirectoryName(Path.GetDirectoryName(core)!)!;
+        var version = new Version(Path.GetFileName(core).Split('-')[0]);
+        var result = new List<string> { core };
+
+        foreach (string name in new[] { "Microsoft.AspNetCore.App", "Microsoft.WindowsDesktop.App" })
+        {
+            string root = Path.Combine(shared, name);
+
+            if (!Directory.Exists(root))
+                continue;
+
+            string? best = Directory.GetDirectories(root)
+                .Select(directory => (directory, parsed: Version.TryParse(Path.GetFileName(directory).Split('-')[0], out var v) ? v : null))
+                .Where(candidate => candidate.parsed is { } v && v.Major == version.Major)
+                .OrderByDescending(candidate => candidate.parsed)
+                .Select(candidate => candidate.directory)
+                .FirstOrDefault();
+
+            if (best is not null)
+                result.Add(best);
+        }
+
+        return result;
+    }
+
+    private static Dictionary<string, string?> ReadEntries()
+    {
+        using var stream = typeof(Singulink.CodeAnalysis.Analyzers.DoNotCopyValueAnalyzer).Assembly
+            .GetManifestResourceStream("Singulink.CodeAnalysis.Analyzers.NonCopyableSymbols.txt")!;
+
+        using var reader = new StreamReader(stream);
+        var entries = new Dictionary<string, string?>(StringComparer.Ordinal);
+
+        while (reader.ReadLine() is { } line)
+        {
+            string entry = line.Trim();
+
+            if (entry.Length is 0 || entry[0] is '#')
+                continue;
+
+            int comment = entry.IndexOf(" #", StringComparison.Ordinal);
+            string[] parts = (comment >= 0 ? entry[..comment] : entry).Split(';', StringSplitOptions.TrimEntries);
+            entries[parts[0]] = parts.Length > 1 && !parts[1].StartsWith("for=", StringComparison.Ordinal) ? parts[1] : null;
+        }
+
+        return entries;
+    }
+}

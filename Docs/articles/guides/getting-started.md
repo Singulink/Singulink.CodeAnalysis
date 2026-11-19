@@ -16,14 +16,14 @@ There are two packages:
 Install **`Singulink.CodeAnalysis`** if you want to use the attributes from the package:
 
 ```xml
-<PackageReference Include="Singulink.CodeAnalysis" Version="0.5.0" />
+<PackageReference Include="Singulink.CodeAnalysis" Version="0.6.0" />
 ```
 
 Install **`Singulink.CodeAnalysis.Analyzers`** alone if you declare the attributes yourself (see [Marking a Struct](marking-a-struct.md)) and want no runtime
 dependency:
 
 ```xml
-<PackageReference Include="Singulink.CodeAnalysis.Analyzers" Version="0.5.0" PrivateAssets="all" />
+<PackageReference Include="Singulink.CodeAnalysis.Analyzers" Version="0.6.0" PrivateAssets="all" />
 ```
 
 The analyzers package is marked as a development dependency, so `dotnet add package` and Visual Studio add it with `PrivateAssets="all"`, which keeps it
@@ -85,6 +85,8 @@ in the category Reliability.
 | [SCA1004](../diagnostics/sca1004.md) | A stored non-copyable value boxed or converted to `object` or an interface |
 | [SCA1005](../diagnostics/sca1005.md) | <xref:System.Object.MemberwiseClone> of an object or a struct that holds a non-copyable value |
 | [SCA1006](../diagnostics/sca1006.md) | Member that the compiler runs on a copy, because it is used through a read-only reference |
+| [SCA1007](../diagnostics/sca1007.md) | Any use of <xref:System.Runtime.CompilerServices.RuntimeHelpers.GetObjectValue*?displayProperty=nameWithType>, which clones a boxed struct |
+| [SCA1008](../diagnostics/sca1008.md) | <xref:System.Object.MemberwiseClone> on a class that another assembly can derive from |
 | [SCA1010](../diagnostics/sca1010.md) | Field of a non-copyable type in a copyable struct or a record |
 | [SCA1011](../diagnostics/sca1011.md) | Auto-property of a non-copyable type |
 | [SCA1012](../diagnostics/sca1012.md) | By-value parameter of a non-copyable type on an iterator that returns a sequence |
@@ -95,6 +97,8 @@ in the category Reliability.
 | [SCA1021](../diagnostics/sca1021.md) | Member that requires a copyable type used with a non-copyable type |
 | [SCA1022](../diagnostics/sca1022.md) | Container used as an untyped collection |
 | [SCA1023](../diagnostics/sca1023.md) | Container used as an opaque type |
+| [SCA1024](../diagnostics/sca1024.md) | Member of an assembly that was not built with the analyzer that gets at a non-copyable value other than by value, not listed with `borrows` |
+| [SCA1025](../diagnostics/sca1025.md) | Referenced assembly that was not built with the analyzer and that references an assembly which declares a non-copyable type, not vouched for with `trusted` |
 | [SCA1030](../diagnostics/sca1030.md) | By-value read from a stored container |
 | [SCA1031](../diagnostics/sca1031.md) | Method that returns a container which it does not own, without `[return: Borrowed]` |
 | [SCA1032](../diagnostics/sca1032.md) | Method that keeps a container parameter which is not marked `[Kept]` |
