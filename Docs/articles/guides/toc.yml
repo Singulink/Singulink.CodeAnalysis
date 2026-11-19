@@ -1,26 +1,47 @@
-- name: Getting Started
-  href: getting-started.md
+- name: Using Non-copyable Values
+  items:
+  - name: Moving Values
+    href: moving-values.md
 
-- name: Marking a Struct
-  href: marking-a-struct.md
+  - name: Cleaning Up When Something Throws
+    href: cleanup-when-throwing.md
 
-- name: Marking a Type Parameter
-  href: marking-a-type-parameter.md
+  - name: Lists, Dictionaries and Spans
+    href: collections.md
 
-- name: Common Fixes
-  href: common-fixes.md
+  - name: Tasks and Async Code
+    href: tasks.md
 
-- name: Libraries
-  href: libraries.md
+  - name: Copies You Cannot See
+    href: hidden-copies.md
 
-- name: The Symbol List
-  href: symbol-list.md
+  - name: Correct Code That Still Gets a Warning
+    href: correct-code-with-warnings.md
 
-- name: Moving a Value
-  href: moving-a-value.md
+- name: Writing Non-copyable Types
+  items:
+  - name: Marking a Struct
+    href: marking-a-struct.md
 
-- name: Null References
-  href: null-references.md
+  - name: Marking a Type Parameter
+    href: marking-a-type-parameter.md
 
-- name: Turning Rules Down
-  href: turning-rules-down.md
+  - name: Containers in Your API
+    href: containers-in-your-api.md
+
+  - name: Writing a Move Method
+    href: writing-a-move.md
+
+  - name: Sharing Your Library
+    href: libraries.md
+
+- name: Configuring the Analyzer
+  items:
+  - name: Turning Rules Down
+    href: turning-rules-down.md
+
+  - name: Symbol List
+    href: symbol-list.md
+
+  - name: Built-in Types
+    href: built-in-types.md

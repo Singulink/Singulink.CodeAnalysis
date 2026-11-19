@@ -6,12 +6,12 @@
 
 **Singulink.CodeAnalysis** is a set of Roslyn analyzers that find every place where code copies a struct that must never be copied. A lock
 guard, a handle or a pooled buffer is a struct where each instance owns something that only one instance may own: copy it, and two instances
-release the same lock or free the same handle. Mark such a struct with `[NonCopyable]`, and the build warns wherever it is copied, including
-the copies that are easy to miss: a read out of a list or a task, a value passed through generic code, and the copies that the compiler makes
+release the same lock or free the same handle. Mark such a struct with `[NonCopyable]`, and the build warns wherever it is copied, even
+where the copy is easy to miss: a read out of a list or a task, a value passed through generic code, and the copies that the compiler makes
 by itself for patterns, iterators and read-only references.
 
 The analyzers check only what is marked, and there are no style or opinion rules. All the rules so far, the
-[SCA1000s](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/guides/getting-started.html#the-diagnostics), are about non-copyable structs.
+[SCA1000s](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/all-diagnostics.html), are about non-copyable structs.
 
 ```cs
 using Singulink.CodeAnalysis;
@@ -38,10 +38,15 @@ LockGuard first = guards[0];            // SCA1030: a copy out of the list
 LockGuard[] all = guards.ToArray();     // SCA1020: ToArray copies every element
 ```
 
-**What is guaranteed is one instance, not one call of `Dispose`.** A value of a marked type is never in two places in code that the
-analyzer checks. A type that the project takes out with a [copyable line](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/guides/symbol-list.html) is an ordinary struct for it, and outside
-that guarantee. Nothing says that it is disposed, or disposed once: a guard should clear itself in `Dispose`, so that a second call on the
+**What is guaranteed is one instance, not one call of `Dispose`.** In code that the analyzer checks, a value of a marked type is never
+in two places. A type that the project takes out with a [`copyable` line of a symbol list file](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/guides/symbol-list.html) is an ordinary struct to the analyzer,
+and the guarantee does not cover it. Nothing guarantees that a value is disposed, or disposed only once: a guard should clear itself in `Dispose`, so that a second call on the
 same instance does nothing. A `readonly struct` guard cannot do that.
+
+**What it cannot see is small.** The one case that ordinary code can meet is a class that holds a non-copyable value and derives from a
+base class that clones itself with `MemberwiseClone`, such as `Encoding`, in an assembly that was not built with the analyzers. Everything
+else takes unsafe code, reflection or `dynamic`, an API used against its documentation, or something that you vouched for. See
+[What Is Not Covered](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/rules/not-covered.html).
 
 ### About Singulink
 
@@ -52,36 +57,37 @@ This package is part of our **Singulink Libraries** collection. Visit https://gi
 ## Why Am I Seeing This?
 
 You may not have added these analyzers yourself. A library whose public API has structs that must not be copied, such as lock guards or
-handles, can bring the analyzers with it, so that the projects which use the library are warned when they copy those structs. The
-analyzers then check the types that the library marked: with nothing marked in your own code, a finding appears where your code copies
-one of the library's structs, or a collection or a task that holds one. The ten framework structs that the analyzers know as
-non-copyable stay off in such a project.
+handles, can bring the analyzers with it, so that the projects that use the library get a warning when they copy those structs. The
+analyzers then check the types that the library marked. Even with nothing marked in your own code, you get a warning where your code
+copies one of the library's structs, or a collection or a task that holds one. In such a project, the analyzers do not check the ten
+framework structs that they otherwise treat as non-copyable.
 
-Three findings are about code that can copy such a struct where no copy shows, so they can appear in a project that copies nothing:
+Three warnings are about code that can copy such a struct without a visible copy, so they can appear even in a project that copies
+nothing:
 `MemberwiseClone` in a class that another assembly can derive from (`SCA1008`), any use of `RuntimeHelpers.GetObjectValue`
 (`SCA1007`), and a referenced assembly that uses the library's structs and was not built with the analyzers (`SCA1025`).
 
-Each finding has an ID of the form `SCA1001`, and its message names the value, says what takes the copy and what to do instead. The ID
-links to the article of the finding on the [documentation site](https://www.singulink.com/Docs/Singulink.CodeAnalysis/index.html), with an example that is reported and the forms
-that are not. Most findings are fixed in one of a few ways, listed under [Common Fixes](#common-fixes) below.
+Each warning has an ID of the form `SCA1001`, and its message names the value, says what receives the copy, and says what to do instead. The
+ID links to the warning's article on the [documentation site](https://www.singulink.com/Docs/Singulink.CodeAnalysis/index.html), which shows an example that gets the warning and
+the forms of the code that do not. Most warnings are fixed in one of a few ways, shown under [Common Fixes](#common-fixes) below.
 
 ## New Values and Stored Values
 
 Every rule comes down to one distinction:
 
 - A **new value** is one that nobody else holds: `new()`, `default`, the result of a call or of an operator, the result of `NonCopyable.Move`, and
-  a local or a by-value parameter [where it is used for the last time](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/concepts/last-use.html). It can go anywhere once: into a variable, a
+  a local or a by-value parameter [where it is used for the last time](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/start/new-and-stored-values.html#last-use-of-a-variable). It can go anywhere once: into a variable, a
   field, a parameter, a tuple, an array, a collection, a hole of an interpolated string.
 - A **stored value** is anything read from a local, a parameter, a field, an array element or a reference. Reading it by value makes a copy, and
-  the copy is what is reported. It can be used in place (`guard.Dispose()`), passed by `ref`, `in` or `ref readonly`, and referred to with a
+  the copy is what gets the warning. It can be used in place (`guard.Dispose()`), passed by `ref`, `in` or `ref readonly`, and referred to with a
   `ref` local or a `ref` return.
 
-See [New Values and Stored Values](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/concepts/new-and-stored-values.html) for the rest of the distinction: the result of an
+See [New Values and Stored Values](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/rules/new-and-stored-values.html) for the rest of the distinction: the result of an
 assignment, the last use of a variable, and what else is stored.
 
 ## Common Fixes
 
-Most findings are fixed in one of a few ways.
+Most warnings are fixed in one of a few ways.
 
 **An element of a list:** read it through a span, which gives a reference to the element.
 
@@ -170,7 +176,7 @@ catch { scope.Dispose(); throw; }
 ```
 
 **A task that a waiter completes later:** make the `TaskCompletionSource` in the method that returns its task, and read `Task` once, there.
-See [What a listed member hands out](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/concepts/listed-members.html).
+See [What a Member on the Symbol List Hands Out](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/rules/listed-members.html#task-of-a-completion-source).
 
 ```cs
 var source = new TaskCompletionSource<LockGuard>();
@@ -178,27 +184,30 @@ _waiters.Enqueue(source);
 return source.Task;                                       // OK: made here, read once
 ```
 
-Three shapes of correct code stay reported, with the clean form or the suppression for each: see
-[Correct Code That Stays Reported](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/guides/common-fixes.html#correct-code-that-stays-reported).
+Three shapes of correct code still get a warning, with the clean form or the suppression for each: see
+[Correct Code That Still Gets a Warning](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/guides/correct-code-with-warnings.html).
 
 ## Turning Things Down
 
-**One type that you copy on purpose:** a struct that the built-in list or a library makes non-copyable is taken out with a `copyable`
-line in a file named `NonCopyableSymbols.txt` in the folder of the project, which the analyzers read with nothing more written:
+**One type that you copy on purpose:** when the [built-in framework symbol list](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/rules/framework-symbol-list.html) or a library makes a struct non-copyable, take it
+out with a `copyable` line in a [symbol list file](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/guides/symbol-list.html). That is a file named `NonCopyableSymbols.txt` in the project folder, and
+the analyzers read it with no further setup:
 
 ```
 T:System.Runtime.InteropServices.GCHandle;copyable
 ```
 
-**A rule:** every rule is a warning, and is turned down like any other analyzer rule, in an `.editorconfig` file:
+Most projects never need such a file: .NET's own libraries are covered by the framework symbol list, and your own code uses attributes.
+
+**A rule:** every rule is a warning, and you turn it down like any other analyzer rule, in an `.editorconfig` file:
 
 ```ini
 [*.cs]
 dotnet_diagnostic.SCA1023.severity = none
 ```
 
-**One finding that is correct code:** suppress it where it stands, with a comment that says why it is right. See
-[Turning Rules Down](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/guides/turning-rules-down.html) and [The Symbol List](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/guides/symbol-list.html).
+**One warning on correct code:** suppress it where it stands, with a comment that says why it is right. See
+[Turning Rules Down](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/guides/turning-rules-down.html) and [Symbol List](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/guides/symbol-list.html).
 
 ## Marking a Struct of Your Own
 
@@ -230,28 +239,27 @@ no runtime dependency:
 <PackageReference Include="Singulink.CodeAnalysis.Analyzers" Version="0.6.0" PrivateAssets="all" />
 ```
 
-A project that references one of the two packages itself also has ten framework structs checked as non-copyable types, such as `GCHandle` and
-`SpinLock`. A project that only gets the analyzers through a library does not. See
-[Non-copyable types](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/concepts/non-copyable-types.html) and
-[Leaving out the built-in non-copyable types](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/guides/symbol-list.html#the-built-in-non-copyable-types).
+In a project that references one of the two packages directly, the analyzers also treat ten framework structs as non-copyable, such as
+`GCHandle` and `SpinLock`. In a project that gets the analyzers only through a library, they do not. See
+[Non-copyable Types](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/rules/non-copyable-types.html) and
+[Leaving out the built-in non-copyable types](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/guides/built-in-types.html).
 
 The analyzers package is marked as a development dependency, so `dotnet add package` and Visual Studio add it with `PrivateAssets="all"`, which keeps it
 to your own project. To let it reach the projects that use your library, see [Libraries](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/guides/libraries.html).
 
 **Requirements**: C# projects built with the .NET 10 SDK or later, that is, a compiler of version 5.0 or later. The analyzer does not load in an
 older compiler. The target framework of the project does not matter. The analyzers are tested with the compilers of the .NET 10 and .NET 11
-SDKs. With a newer SDK, new syntax that the analyzers do not know is reported as a use that is not known to be safe, and a copy that a newer
-compiler makes inside syntax that they already know is covered once that SDK has been tested.
+SDKs. With a newer SDK, you get a warning on new syntax that the analyzers do not know yet, as a use that is not known to be safe. A copy
+that a newer compiler makes inside syntax that the analyzers already know is covered once that SDK has been tested.
 
 ## Further Reading
 
 Here are some links to get you started:
 
-- [Getting Started](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/guides/getting-started.html) - A walkthrough, and the entry point to the guides on every part of
-  using the analyzers.
-- [The Diagnostics](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/guides/getting-started.html#the-diagnostics) - Every ID, each with an article on what the finding
+- [Getting Started](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/start/getting-started.html) - A walkthrough: install the analyzers, mark a first struct and read a first warning.
+- [The Diagnostics](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/all-diagnostics.html) - Every ID, each with an article on what the warning
   means and how to fix it.
-- [New Values and Stored Values](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/concepts/new-and-stored-values.html) - The concepts behind the rules.
+- [New Values and Stored Values](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/start/new-and-stored-values.html) - The concepts behind the rules.
 - [API Documentation](https://www.singulink.com/Docs/Singulink.CodeAnalysis/api/Singulink.CodeAnalysis.html) - The attributes and the helpers.
 - [Chat on Discord](https://discord.gg/EkQhJFsBu6) - Have questions or want to discuss the library? This is the place for all Singulink
   project discussions.

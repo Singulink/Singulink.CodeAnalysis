@@ -504,7 +504,7 @@ public class AttributeTests
         test.TestState.AdditionalReferences.Add(await CompileLibraryAsync(test.ReferenceAssemblies, Library));
 
         test.ExpectedDiagnostics.AddRange([
-            Verify.ForeignNonCopyableAttributeUse(0, "Other.Tool.NonCopyableAttribute", "Library", "struct 'Handle' is copied with no finding"),
+            Verify.ForeignNonCopyableAttributeUse(0, "Other.Tool.NonCopyableAttribute", "Library", "struct 'Handle' is copied with no warning"),
             Verify.ForeignNonCopyableAttributeUse(1, "Other.Tool.NonCopyableAttribute", "Library", "type parameter 'T' counts as not marked"),
             Verify.ForeignNonCopyableAttributeUse(2, "Other.Tool.NonCopyableAttribute", "Library", "type parameter 'T' counts as not marked"),
             Verify.ForeignNonCopyableAttributeUse(3, "Other.Tool.NonCopyableAttribute", "Library", "type parameter 'U' counts as not marked"),
@@ -1043,8 +1043,8 @@ public class AttributeTests
         test.TestState.AdditionalReferences.Add(await CompileLibraryAsync(test.ReferenceAssemblies, Library));
 
         test.ExpectedDiagnostics.AddRange([
-            Verify.ForeignNonCopyableAttributeUse(0, "Other.Tool.NonCopyableAttribute", "Library", "struct 'Token' is copied with no finding"),
-            Verify.ForeignNonCopyableAttributeUse(1, "Other.Tool.NonCopyableAttribute", "Library", "struct 'Handle' is copied with no finding"),
+            Verify.ForeignNonCopyableAttributeUse(0, "Other.Tool.NonCopyableAttribute", "Library", "struct 'Token' is copied with no warning"),
+            Verify.ForeignNonCopyableAttributeUse(1, "Other.Tool.NonCopyableAttribute", "Library", "struct 'Handle' is copied with no warning"),
         ]);
 
         await test.RunAsync();
@@ -1314,7 +1314,7 @@ public class AttributeTests
         test.TestState.AdditionalReferences.Add(await CompileLibraryAsync(test.ReferenceAssemblies, Library));
 
         test.ExpectedDiagnostics.AddRange([
-            Verify.ForeignNonCopyableAttributeUse(0, "Other.Tool.NonCopyable", "Library", "struct 'Handle' is copied with no finding"),
+            Verify.ForeignNonCopyableAttributeUse(0, "Other.Tool.NonCopyable", "Library", "struct 'Handle' is copied with no warning"),
             Verify.ForeignNonCopyableAttributeUse(1, "Other.Tool.NonCopyable", "Library", "type parameter 'T' counts as not marked"),
             Verify.CopyByAssignment(2, "Other.Tool.Token"),
         ]);

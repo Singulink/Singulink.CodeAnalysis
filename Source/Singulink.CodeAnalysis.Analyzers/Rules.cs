@@ -102,12 +102,12 @@ internal static class Rules
 
     private const string SwitchStatementMatchesCopyMessage =
         "The pattern reads from a copy of the value of non-copyable type '{0}': a 'switch' statement matches a copy of what it switches " +
-        "on, also where that is a local or a parameter. An 'is' pattern and a 'switch' expression without 'when' match it in place: use " +
+        "on, even where that is a local or a parameter. An 'is' pattern and a 'switch' expression without 'when' match it in place: use " +
         "one of those, or move the value into the 'switch' with NonCopyable.Move.";
 
     private const string SwitchExpressionWithWhenMatchesCopyMessage =
         "The pattern reads from a copy of the value of non-copyable type '{0}': a 'when' in a 'switch' expression makes every arm match " +
-        "a copy of what it switches on, also where that is a local or a parameter. An 'is' pattern and a 'switch' expression without " +
+        "a copy of what it switches on, even where that is a local or a parameter. An 'is' pattern and a 'switch' expression without " +
         "'when' match it in place: use one of those, or move the value into the 'switch' with NonCopyable.Move.";
 
     private const string PartUsedTwiceInPatternMessage =
@@ -144,20 +144,20 @@ internal static class Rules
 
     private const string GetObjectValueDescription =
         "RuntimeHelpers.GetObjectValue returns a clone of a boxed struct, field by field, so it copies every non-copyable value that the " +
-        "struct holds; for any other object it returns the object itself. Every use of it is reported, a call and a method group alike, " +
+        "struct holds; for any other object it returns the object itself. Every use of it gets a warning, a call and a method group alike, " +
         "whatever the type of its argument: nobody calls it on something that cannot be a boxed struct.";
 
     private const string MemberwiseCloneOfOpenClassMessage =
         "MemberwiseClone of '{0}' clones an object of whatever class derives from it, and '{0}' can be derived from in another assembly, " +
         "where a derived class can hold a non-copyable value that the clone copies. Seal the class, copy its fields in a constructor " +
-        "instead, or suppress this finding as a rule that no derived class may hold a non-copyable value.";
+        "instead, or suppress this warning as a rule that no derived class may hold a non-copyable value.";
 
     private const string MemberwiseCloneOfOpenClassDescription =
         "MemberwiseClone clones the object that it is called on, whatever its class, so a call on a class with no field of a non-copyable " +
         "type copies one of a derived class all the same. A class that can be derived from in another assembly can have such a derived " +
         "class that the analyzer does not see: it, or a class of the compilation that derives from it, is not sealed, is reachable from " +
         "outside its assembly, and has a constructor that a derived class there can call. An assembly with InternalsVisibleTo counts its internal types and constructors as reachable. A derived " +
-        "class in the same compilation that has such a field is reported as a definite copy (SCA1005).";
+        "class in the same compilation that has such a field gets a warning as a definite copy (SCA1005).";
 
     private const string FieldOfRecordDescription =
         "A record copies its fields in 'with', in its copy constructor and in the members that the compiler writes for it (Equals, GetHashCode " +
@@ -179,11 +179,11 @@ internal static class Rules
         "The compiler keeps the arguments of an iterator in the object that the method returns, and copies them into every enumerator that is " +
         "made from it. Everything that the iterator does with a by-value parameter of a non-copyable type then runs on a copy, once for each " +
         "enumeration. Create the value inside the iterator, or pass a reference to an object that holds it. An iterator that returns an " +
-        "enumerator and not a sequence keeps its arguments once, and is not reported.";
+        "enumerator and not a sequence keeps its arguments once, and gets no warning.";
 
     private const string AsyncOrIteratorMemberMessage =
         "'{0}' is an {2} member of non-copyable struct '{1}', so it runs on a copy of 'this' that the compiler keeps in its state machine: " +
-        "what it changes is lost, and it runs later, on a copy that is out of date by then, also where the member is 'readonly'. Do the work " +
+        "what it changes is lost, and it runs later, on a copy that is out of date by then, even where the member is 'readonly'. Do the work " +
         "in a member that is neither async nor an iterator, or in a static method that is given what it needs.";
 
     private const string AsyncOrIteratorMemberDescription =
@@ -214,7 +214,7 @@ internal static class Rules
 
     private const string PositionalParameterReadByDeconstructMessage =
         "Positional parameter '{1}' of record '{2}' cannot have non-copyable type '{0}': the Deconstruct method that the compiler writes " +
-        "for the record reads the member by value, also where the record declares it as a property that returns a reference. Declare " +
+        "for the record reads the member by value, even where the record declares it as a property that returns a reference. Declare " +
         "the Deconstruct method yourself, or give the type an ordinary constructor.";
 
     private const string AutoPropertyDescription =
@@ -250,18 +250,18 @@ internal static class Rules
     private const string UncheckedAssemblyDescription =
         "A call is judged by the member that it binds to, so code of an assembly that was not built with the analyzer and that runs behind " +
         "a type of checked code or of the framework is not seen: an implementation of an interface or of an abstract class, a delegate or a " +
-        "function pointer that it made, an object of a class that holds a non-copyable value. Such code can name a non-copyable type only " +
-        "where its assembly references the assembly that declares it, so that reference is reported, once for each assembly. A type " +
-        "counts that a [NonCopyable] mark or a 'noncopyable' line of a list file makes non-copyable, and that no 'copyable' line takes " +
-        "out; the built-in non-copyable types of the framework do not. A line 'A:<name>;trusted' of a list file vouches for one assembly.";
+        "function pointer that it made, an object of a class that holds a non-copyable value. Such code can use a non-copyable type only " +
+        "where its assembly references the assembly that declares it, so that reference gets a warning, once for each assembly. A type " +
+        "counts that a [NonCopyable] mark or a 'noncopyable' line of a symbol list file makes non-copyable, and that no 'copyable' line takes " +
+        "out; the built-in non-copyable types of the framework do not. A line 'A:<name>;trusted' of a symbol list file vouches for one assembly.";
 
     private const string SafeListTrustedHasNoEffectMessage =
-        "This line of the list file vouches for assembly '{0}'. It has no effect, because {1}.";
+        "This line of the symbol list file vouches for assembly '{0}'. It has no effect, because {1}.";
 
     private const string UnlistedMemberDescription =
         "Generic code whose type parameter is not marked [NonCopyable] is not checked, so it is assumed to copy the values it handles. Its members " +
         "can only be used with a non-copyable type if the symbol list names them. If the generic is yours, mark its type parameter and fix what the " +
-        "analyzer then reports inside it. If it is not, and the member makes no copy other than the value it hands out, add its documentation " +
+        "analyzer then warns about inside it. If it is not, and the member makes no copy other than the value it hands out, add its documentation " +
         "comment ID to an additional file named NonCopyableSymbols.txt.";
 
     private const string RequiresCopyableMemberDescription =
@@ -374,11 +374,11 @@ internal static class Rules
 
     private const string RequiresCopyableNotOnBaseCopyConstructorMessage =
         "'{0}' cannot be marked [RequiresCopyable] because the copy constructor of its base record '{1}' is not: 'with' on a variable of " +
-        "the base record runs the copy constructor of '{2}' with nothing to report it at";
+        "the base record runs the copy constructor of '{2}' with no place to warn about it";
 
     private const string RequiresCopyableOnMemberNeverCalledMessage =
-        "'{0}' cannot be marked [RequiresCopyable]: the runtime runs a static constructor and a finalizer, so there is no use at which a " +
-        "copy could be reported. The mark counts for nothing, and the body is checked as it would be without it.";
+        "'{0}' cannot be marked [RequiresCopyable]: the runtime runs a static constructor and a finalizer, so there is no use at which the " +
+        "analyzer could warn about a copy. The mark counts for nothing, and the body is checked as it would be without it.";
 
     private const string HolderReturnedByOverrideMessage =
         "'{2}' returns '{0}' where '{3}', which it overrides, returns '{1}': a caller of the base member takes the result for a new " +
@@ -399,7 +399,7 @@ internal static class Rules
         "it read from a field, a property, an indexer, an element or a parameter, or a local that it also stored somewhere, passed to " +
         "something that keeps it, put a stored container into, or that a lambda captures. Every caller would read its non-copyable values as " +
         "new. That goes for an array and an ArraySegment<T> as well; a Span<T> and a Memory<T> are not checked, since every by-value read " +
-        "of an element through one is reported whatever it came from. A method whose return value is marked [Borrowed] keeps what it returns, and its " +
+        "of an element through one gets a warning whatever it came from. A method whose return value is marked [Borrowed] keeps what it returns, and its " +
         "callers treat the result as stored, as they treat what a property returns.";
 
     private const string KeepsUnmarkedParameterMessage =
@@ -531,24 +531,24 @@ internal static class Rules
 
     private const string ForeignNonCopyableAttributeMessage =
         "'{0}' is not the attribute that the analyzer reads: only 'Singulink.CodeAnalysis.NonCopyableAttribute' is recognised, so a " +
-        "struct that is marked with this class is copied with no finding. Declare the class in the namespace 'Singulink.CodeAnalysis', " +
-        "or suppress this finding if the attribute is meant for something else.";
+        "struct that is marked with this class is copied with no warning. Declare the class in the namespace 'Singulink.CodeAnalysis', " +
+        "or suppress this warning if the attribute is meant for something else.";
 
     private const string NonCopyableAttributeWithNoSuffixMessage =
         "'{0}' is not the attribute that the analyzer reads: only 'Singulink.CodeAnalysis.NonCopyableAttribute' is recognised, by that " +
-        "name, so a struct that is marked with this class is copied with no finding. Name the class 'NonCopyableAttribute' and declare " +
-        "it in the namespace 'Singulink.CodeAnalysis', or suppress this finding if the attribute is meant for something else.";
+        "name, so a struct that is marked with this class is copied with no warning. Name the class 'NonCopyableAttribute' and declare " +
+        "it in the namespace 'Singulink.CodeAnalysis', or suppress this warning if the attribute is meant for something else.";
 
     private const string ForeignNonCopyableAttributeUseMessage =
         "This mark is not recognised: '{0}' of '{1}' is not the attribute that the analyzer reads, so {2}. Use " +
         "'Singulink.CodeAnalysis.NonCopyableAttribute', from the Singulink.CodeAnalysis package or declared by the project in the namespace " +
-        "'Singulink.CodeAnalysis', or suppress this finding if the attribute is meant for something else.";
+        "'Singulink.CodeAnalysis', or suppress this warning if the attribute is meant for something else.";
 
     private const string ForeignNonCopyableAttributeDescription =
         "The attributes of the analyzer are recognised by their full name: the namespace Singulink.CodeAnalysis and the name of the class, " +
         "in any assembly, public or internal. A class of the same name in another namespace has no effect on what the project declares, " +
         "since it can as well be the attribute of another tool. For NonCopyableAttribute that fails without a sign: the struct is " +
-        "copyable in a build that looks clean. So an attribute class of that name anywhere else is reported where it is declared, and " +
+        "copyable in a build that looks clean. So an attribute class of that name anywhere else gets a warning where it is declared, and " +
         "where it is used if a referenced assembly declares it. On a struct of a referenced assembly, which the project cannot change, " +
         "a NonCopyableAttribute of any namespace is recognised.";
 
@@ -606,16 +606,16 @@ internal static class Rules
 
     private const string NotNullRefNotCheckedMessage =
         "The analyzer does not check that '{1}' returns only if the reference that it is given for parameter '{0}' refers to something, " +
-        "as [NotNullRef] says: what it reports about a [MovedFrom] parameter and about a value that is committed at the end of a 'try' " +
-        "block rests on that. Verify and test the method, then suppress this finding here.";
+        "as [NotNullRef] says: its warnings about a [MovedFrom] parameter and about a value that is committed at the end of a 'try' " +
+        "block rest on that. Verify and test the method, then suppress this warning here.";
 
     private const string NestedTooDeeplyMessage =
-        "'{0}' is nested too deeply for the analyzer and was not checked: a copy in it is not reported. Break up the expression that is " +
+        "'{0}' is nested too deeply for the analyzer and was not checked: a copy in it goes unseen. Break up the expression that is " +
         "nested this deeply, with locals or with methods of its own.";
 
     private const string NestedTooDeeplyDescription =
         "The analyzer walks an expression by recursion and stops before the stack runs out: a chain of thousands of operators or of a " +
-        "thousand calls is deeper than it can follow. The member is then not checked at all, and this finding says so, so that a member " +
+        "thousand calls is deeper than it can follow. The member is then not checked at all, and this warning says so, so that a member " +
         "that is not checked never looks clean.";
 
     private const string NotNullRefDescription =
@@ -626,8 +626,8 @@ internal static class Rules
         "is not virtual, abstract or an override, static or not, an extension method included, and on a local function. It does not " +
         "count on a by-value parameter, on a member of an interface, a delegate, a lambda, an operator, a constructor or an accessor, " +
         "or on a method that the compiler can leave out of a build, which is one that is [Conditional] or a partial method with no " +
-        "body. The body of the method is not checked: the mark is a statement of its author. So every mark that a project declares is " +
-        "reported once, where it stands, and is suppressed there when the method has been verified and tested. NonCopyable.ThrowIfNullRef " +
+        "body. The body of the method is not checked: the mark is a statement of its author. So every mark that a project declares gets " +
+        "one warning, where it stands, to be suppressed there when the method has been verified and tested. NonCopyable.ThrowIfNullRef " +
         "and NonCopyable.ThrowIfNullRefArgument of the attributes package are two such methods.";
 
     private const string MovedFromParameterReassignedMessage =
@@ -673,11 +673,11 @@ internal static class Rules
         "be a pure move: what it returns and what it leaves behind is 'default' or what it read from those parameters.";
 
     private const string SafeListNonCopyableNamesNothingMessage =
-        "This line of the list file marks '{0}' as non-copyable, and the compilation has no type of that ID: the type stays copyable. Fix the " +
+        "This line of the symbol list file marks '{0}' as non-copyable, and the compilation has no type of that ID: the type stays copyable. Fix the " +
         "ID, or take the line out of the file of a project that does not reference the type.";
 
     private const string SafeListCopyableHasNoEffectMessage =
-        "This line of the list file marks '{0}' as copyable. It has no effect, because {1}.";
+        "This line of the symbol list file marks '{0}' as copyable. It has no effect, because {1}.";
 
     private const string SafeListLineDescription =
         "A line of a NonCopyableSymbols.txt file is a documentation comment ID that starts with 'M:', 'P:', 'E:' or 'T:', optionally followed " +
@@ -685,7 +685,7 @@ internal static class Rules
         "of a class whose type is Task<TResult>, 'view', " +
         "'noncopyable' or 'copyable' for a struct, 'erasable' for a generic class or interface. A type " +
         "needs a marker. A member can end with ';for=' and the names of the type parameters that the entry vouches for. A line 'A:<name>;trusted' " +
-        "vouches for the assembly of that simple name, which then is not reported as unchecked code that uses a non-copyable type. A line that starts with " +
+        "vouches for the assembly of that simple name, which then gets no warning as unchecked code that uses a non-copyable type. A line that starts with " +
         "'#' is a comment, and so is the rest of a line after white space and '#'.";
 
     public static readonly DiagnosticDescriptor CopyByAssignment = Create(
@@ -1290,26 +1290,26 @@ internal static class Rules
 
     public static readonly DiagnosticDescriptor SafeListLine = Create(
         DiagnosticIds.SafeListLine,
-        "Fix the line of the list file",
-        "This line of the list file cannot be parsed: {0}",
+        "Fix the line of the symbol list file",
+        "This line of the symbol list file cannot be parsed: {0}",
         SafeListLineDescription);
 
     public static readonly DiagnosticDescriptor SafeListNonCopyableNamesNothing = Create(
         DiagnosticIds.SafeListLine,
-        "Fix the line of the list file",
+        "Fix the line of the symbol list file",
         SafeListNonCopyableNamesNothingMessage,
         SafeListLineDescription);
 
     public static readonly DiagnosticDescriptor SafeListCopyableHasNoEffect = Create(
         DiagnosticIds.SafeListLine,
-        "Fix the line of the list file",
+        "Fix the line of the symbol list file",
         SafeListCopyableHasNoEffectMessage,
         SafeListLineDescription);
 
     // Whether the line has an effect is known only once the references of the whole compilation have been looked at.
     public static readonly DiagnosticDescriptor SafeListTrustedHasNoEffect = Create(
         DiagnosticIds.SafeListLine,
-        "Fix the line of the list file",
+        "Fix the line of the symbol list file",
         SafeListTrustedHasNoEffectMessage,
         SafeListLineDescription,
         WellKnownDiagnosticTags.CompilationEnd);
@@ -1364,7 +1364,7 @@ internal static class Rules
 
     public static readonly DiagnosticDescriptor NotNullRefNotChecked = Create(
         DiagnosticIds.NotNullRefNotChecked,
-        "Verify a method with a [NotNullRef] parameter, then suppress this finding on it",
+        "Verify a method with a [NotNullRef] parameter, then suppress this warning on it",
         NotNullRefNotCheckedMessage,
         NotNullRefDescription);
 

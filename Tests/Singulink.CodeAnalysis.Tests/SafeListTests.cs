@@ -204,11 +204,11 @@ public class SafeListTests
         // A line that cannot be parsed is reported in the file that has it.
         test.ExpectedDiagnostics.Add(new DiagnosticResult(DiagnosticIds.SafeListLine, DiagnosticSeverity.Warning)
             .WithSpan(LibraryFile, 3, 1, 3, 13)
-            .WithMessage("This line of the list file cannot be parsed: expected a documentation comment ID that starts with 'M:', 'P:', 'E:' or 'T:', or the name of an assembly after 'A:'"));
+            .WithMessage("This line of the symbol list file cannot be parsed: expected a documentation comment ID that starts with 'M:', 'P:', 'E:' or 'T:', or the name of an assembly after 'A:'"));
 
         test.ExpectedDiagnostics.Add(new DiagnosticResult(DiagnosticIds.SafeListLine, DiagnosticSeverity.Warning)
             .WithSpan(SecondLibraryFile, 2, 1, 2, 24)
-            .WithMessage("This line of the list file cannot be parsed: unknown marker 'unknown'; the markers are 'new', 'borrows', 'drains', 'owned', 'view', 'noncopyable', 'copyable' and 'erasable', and 'trusted' for an assembly"));
+            .WithMessage("This line of the symbol list file cannot be parsed: unknown marker 'unknown'; the markers are 'new', 'borrows', 'drains', 'owned', 'view', 'noncopyable', 'copyable' and 'erasable', and 'trusted' for an assembly"));
 
         return test.RunAsync();
     }

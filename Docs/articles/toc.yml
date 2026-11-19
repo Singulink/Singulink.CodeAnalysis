@@ -1,8 +1,13 @@
+- name: Start Here
+  href: start/toc.yml
+
 - name: Guides
   href: guides/toc.yml
 
-- name: Concepts
-  href: concepts/toc.yml
+- name: Rules
+  href: rules/toc.yml
 
 - name: Diagnostics
   href: diagnostics/toc.yml
+  # The section opens on the list of every ID. It is not in the diagnostics folder, which a test holds to the articles of the IDs.
+  topicHref: all-diagnostics.md

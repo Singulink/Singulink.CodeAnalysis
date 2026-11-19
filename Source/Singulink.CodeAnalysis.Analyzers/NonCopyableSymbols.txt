@@ -1,6 +1,6 @@
-# The built-in list of the non-copyable analyzer.
+# The built-in framework symbol list of the non-copyable analyzer.
 # Format: one documentation-comment ID per line, with an optional marker (";new", ";borrows", ";drains", ";owned", ";view", ";noncopyable", ";copyable" or ";erasable") and optional ";for=" type parameter names.
-# A list file of a project can also vouch for an assembly, with a line of the form "A:Assembly.Name;trusted".
+# A symbol list file of a project can also vouch for an assembly, with a line of the form "A:Assembly.Name;trusted".
 # Runtime source read: dotnet/runtime d757c03be2c3.
 # A line ending in "# net9+", "# net10+" or "# net11+" names a member that exists from that version of .NET on. It does not resolve in a project that targets an earlier one.
 #
@@ -78,7 +78,7 @@ M:System.Threading.AsyncFlowControl.op_Inequality(System.Threading.AsyncFlowCont
 # ============================================================================
 
 # A member of an assembly that was not built with the analyzer and that takes a non-copyable value by 'ref', 'in' or 'ref readonly',
-# in a container, in a view or through a pointer is reported unless it is here with "borrows". FrameworkScanTests finds every such
+# in a container, in a view or through a pointer gets a warning unless it is here with "borrows". FrameworkScanTests finds every such
 # member of the shared frameworks. Each was read in the runtime source:
 # - String.Create: returns handler.ToStringAndClear() (String.cs 352-361 at d757c03).
 # - HybridCache.GetOrCreateAsync: passes key.Text on and clears the key before it returns (HybridCache.cs 100-139 at d757c03; the
@@ -775,7 +775,7 @@ M:System.Runtime.CompilerServices.StrongBox`1.#ctor(`0)
 # Every member here was read in the runtime source for what it does with a value. A write moves the value into one place: the
 # buffer, a reader that is waiting, or, in a bounded channel that drops, the callback for dropped items. A read takes it out, and
 # nothing is left behind that another read could hand out, so those are marked "new". A peek and an enumerator hand out a copy
-# of what the collection still holds, so they are listed with no marker and are reported on a stored collection.
+# of what the collection still holds, so they are listed with no marker and get a warning on a stored collection.
 #
 # A write that fails has not taken the value: TryWrite and TryAdd return false, and WriteAsync and Add throw.
 #

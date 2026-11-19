@@ -5,9 +5,9 @@ namespace Singulink.CodeAnalysis;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The result of a call is a new value, so a method must not return a container that something else still holds: the analyzer reports it. With
+/// The result of a call is a new value, so a method must not return a container that something else still holds: the analyzer warns about it. With
 /// this attribute the method may, and its callers treat the result as stored, as they treat what a property returns: they can use it in place,
-/// and a by-value read of a non-copyable value from it is reported.</para>
+/// and a by-value read of a non-copyable value from it gets a warning.</para>
 /// <para>
 /// An override or an implementation cannot have the attribute where the member that it replaces does not, since a caller through that member takes
 /// the result for a new value.</para>

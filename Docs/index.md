@@ -2,11 +2,13 @@
 
 # Singulink.CodeAnalysis
 
-**Singulink.CodeAnalysis** is a set of Roslyn analyzers that find every place where code copies a struct that must never be copied. A lock
-guard, a handle or a pooled buffer is a struct where each instance owns something that only one instance may own: copy it, and two instances
-release the same lock or free the same handle. Mark such a struct with `[NonCopyable]`, and the build warns wherever it is copied, including
-the copies that are easy to miss: a read out of a list or a task, a value passed through generic code, and the copies that the compiler makes
-by itself for patterns, iterators and read-only references.
+**Singulink.CodeAnalysis** is a set of Roslyn analyzers that find every place where code copies a struct that must never be copied.
+
+A lock guard, a handle or a pooled buffer is a struct where each instance owns something that only one instance may own. Copy it, and two instances release the same lock or free the same handle. Mark such a struct with `[NonCopyable]`, and the build warns wherever it is copied, even where the copy is easy to miss:
+
+- a read out of a list or a task;
+- a value passed through generic code;
+- the copies that the compiler makes by itself for patterns, iterators and read-only references.
 
 The analyzers check only what is marked, and there are no style or opinion rules. All the rules so far, the SCA1000s, are about non-copyable
 structs.
@@ -21,9 +23,9 @@ The analyzers come in two packages on NuGet:
 - `Singulink.CodeAnalysis` - the attributes and the <xref:Singulink.CodeAnalysis.NonCopyable> helpers, which bring the analyzers with them.
 - `Singulink.CodeAnalysis.Analyzers` - the analyzers only, for a project that declares the attributes itself.
 
-A project that references one of the two packages itself also has ten framework structs checked as non-copyable types, such as
-<xref:System.Runtime.InteropServices.GCHandle> and <xref:System.Threading.SpinLock>. A project that only gets the analyzers through a library
-does not. See [Non-copyable Types](articles/concepts/non-copyable-types.md).
+In a project that references one of the two packages directly, the analyzers also treat ten framework structs as non-copyable, such as
+<xref:System.Runtime.InteropServices.GCHandle> and <xref:System.Threading.SpinLock>. In a project that gets the analyzers only through a
+library, they do not. See [Built-in Types](articles/guides/built-in-types.md).
 
 **Requirements**: C# projects built with the .NET 10 SDK or later.
 
@@ -31,9 +33,10 @@ does not. See [Non-copyable Types](articles/concepts/non-copyable-types.md).
 
 Here are some additional links to get you started:
 
-- [Getting Started](articles/guides/getting-started.md) - Visit here first for a walkthrough. It opens the guides: an article on every part of using the analyzers, listed in the sidebar.
-- [New Values and Stored Values](articles/concepts/new-and-stored-values.md) - The one distinction that every rule comes down to, and the start of the concepts behind the rules.
-- [SCA1001](articles/diagnostics/sca1001.md) - The first of the diagnostics: an article for every ID, with what the finding means and how to fix it.
+- [What the Analyzer Does](articles/start/what-it-does.md) - Visit here first. It opens Start Here, a few short pages to read in order.
+- [Why Am I Seeing This?](articles/start/why-am-i-seeing-this.md) - For a project that got the analyzers through a library that it uses.
+- [New and Stored Values](articles/start/new-and-stored-values.md) - The one distinction that every rule comes down to.
+- [All Diagnostics](articles/all-diagnostics.md) - Every ID, each with an article on what the warning means and how to fix it.
 - [API Documentation](api/Singulink.CodeAnalysis.yml) - Browse the attributes and the helpers here.
 - [Chat on Discord](https://discord.gg/EkQhJFsBu6) - Have questions or want to discuss the library? This is the place for all Singulink project discussions.
 - [Github Repo](https://github.com/Singulink/Singulink.CodeAnalysis) - File issues, contribute pull requests or check out the code for yourself!

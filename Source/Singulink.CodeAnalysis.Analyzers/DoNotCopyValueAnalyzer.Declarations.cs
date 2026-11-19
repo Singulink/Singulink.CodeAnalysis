@@ -317,7 +317,7 @@ public sealed partial class DoNotCopyValueAnalyzer
 
             string effect = marked is ITypeParameterSymbol
                 ? $"type parameter '{marked.Name}' counts as not marked"
-                : $"struct '{marked.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' is copied with no finding";
+                : $"struct '{marked.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' is copied with no warning";
 
             report(Diagnostic.Create(
                 Rules.ForeignNonCopyableAttributeUse,

@@ -257,14 +257,14 @@ internal static class Verify
         DiagnosticIds.UnsupportedUse,
         location,
         $"The pattern reads from a copy of the value of non-copyable type '{type}': a 'switch' statement matches a copy of what it " +
-        "switches on, also where that is a local or a parameter. An 'is' pattern and a 'switch' expression without 'when' match it in " +
+        "switches on, even where that is a local or a parameter. An 'is' pattern and a 'switch' expression without 'when' match it in " +
         "place: use one of those, or move the value into the 'switch' with NonCopyable.Move.");
 
     public static DiagnosticResult SwitchExpressionWithWhenMatchesCopy(int location, string type) => Diagnostic(
         DiagnosticIds.UnsupportedUse,
         location,
         $"The pattern reads from a copy of the value of non-copyable type '{type}': a 'when' in a 'switch' expression makes every arm " +
-        "match a copy of what it switches on, also where that is a local or a parameter. An 'is' pattern and a 'switch' expression " +
+        "match a copy of what it switches on, even where that is a local or a parameter. An 'is' pattern and a 'switch' expression " +
         "without 'when' match it in place: use one of those, or move the value into the 'switch' with NonCopyable.Move.");
 
     public static DiagnosticResult PartUsedTwiceInPattern(int location, string first, string second) => Diagnostic(
@@ -306,7 +306,7 @@ internal static class Verify
         location,
         $"MemberwiseClone of '{type}' clones an object of whatever class derives from it, and '{type}' can be derived from in another assembly, " +
         "where a derived class can hold a non-copyable value that the clone copies. Seal the class, copy its fields in a constructor " +
-        "instead, or suppress this finding as a rule that no derived class may hold a non-copyable value.");
+        "instead, or suppress this warning as a rule that no derived class may hold a non-copyable value.");
 
     public static DiagnosticResult GetObjectValueCall(int location) => Diagnostic(
         DiagnosticIds.GetObjectValue,
@@ -346,7 +346,7 @@ internal static class Verify
         DiagnosticIds.AutoProperty,
         location,
         $"Positional parameter '{parameter}' of record '{record}' cannot have non-copyable type '{type}': the Deconstruct method that the " +
-        "compiler writes for the record reads the member by value, also where the record declares it as a property that returns a " +
+        "compiler writes for the record reads the member by value, even where the record declares it as a property that returns a " +
         "reference. Declare the Deconstruct method yourself, or give the type an ordinary constructor.");
 
     public static DiagnosticResult IteratorParameter(int location, string type, string parameter, string iterator) => Diagnostic(
@@ -373,7 +373,7 @@ internal static class Verify
         DiagnosticIds.AsyncOrIteratorMember,
         location,
         $"'{member}' is an {kind} member of non-copyable struct '{type}', so it runs on a copy of 'this' that the compiler keeps in its state " +
-        "machine: what it changes is lost, and it runs later, on a copy that is out of date by then, also where the member is 'readonly'. Do " +
+        "machine: what it changes is lost, and it runs later, on a copy that is out of date by then, even where the member is 'readonly'. Do " +
         "the work in a member that is neither async nor an iterator, or in a static method that is given what it needs.");
 
     public static DiagnosticResult UnlistedMemberOfUncheckedCode(int location, string member, string type, string typeParameter, string id) => Diagnostic(
@@ -637,7 +637,7 @@ internal static class Verify
         DiagnosticIds.MarkNotKept,
         location,
         $"'{member}' cannot be marked [RequiresCopyable]: the runtime runs a static constructor and a finalizer, so there is no use at " +
-        "which a copy could be reported. The mark counts for nothing, and the body is checked as it would be without it.");
+        "which the analyzer could warn about a copy. The mark counts for nothing, and the body is checked as it would be without it.");
 
     public static DiagnosticResult BorrowedNotOnBaseMember(int location, string member, string baseMember) => Diagnostic(
         DiagnosticIds.MarkNotKept,
@@ -744,7 +744,7 @@ internal static class Verify
         DiagnosticIds.MarkNotKept,
         location,
         $"'{constructor}' cannot be marked [RequiresCopyable] because the copy constructor of its base record '{baseRecord}' is not: 'with' on " +
-        $"a variable of the base record runs the copy constructor of '{derived}' with nothing to report it at");
+        $"a variable of the base record runs the copy constructor of '{derived}' with no place to warn about it");
 
     public static DiagnosticResult KeepingNotOnInterfaceMember(
         int location, string parameter, string member, string interfaceMember, string type, bool byUncheckedCode = false) => Diagnostic(
@@ -830,15 +830,15 @@ internal static class Verify
     public static DiagnosticResult NestedTooDeeply(int location, string member) => Diagnostic(
         DiagnosticIds.NestedTooDeeply,
         location,
-        $"'{member}' is nested too deeply for the analyzer and was not checked: a copy in it is not reported. Break up the expression that " +
+        $"'{member}' is nested too deeply for the analyzer and was not checked: a copy in it goes unseen. Break up the expression that " +
         "is nested this deeply, with locals or with methods of its own.");
 
     public static DiagnosticResult NotNullRefNotChecked(int location, string parameter, string member) => Diagnostic(
         DiagnosticIds.NotNullRefNotChecked,
         location,
         $"The analyzer does not check that '{member}' returns only if the reference that it is given for parameter '{parameter}' refers to " +
-        "something, as [NotNullRef] says: what it reports about a [MovedFrom] parameter and about a value that is committed at the end of a " +
-        "'try' block rests on that. Verify and test the method, then suppress this finding here.");
+        "something, as [NotNullRef] says: its warnings about a [MovedFrom] parameter and about a value that is committed at the end of a " +
+        "'try' block rest on that. Verify and test the method, then suppress this warning here.");
 
     /// <summary>
     /// For the <c>usedByHandler</c> of a finding: the variable, and the reference through which the 'try' block reads or writes after
@@ -899,12 +899,12 @@ internal static class Verify
     public static DiagnosticResult SafeListTrustedHasNoEffect(int line, int startColumn, int endColumn, string assembly, string reason) =>
         new DiagnosticResult(DiagnosticIds.SafeListLine, DiagnosticSeverity.Warning)
             .WithSpan(ListFileName, line, startColumn, line, endColumn)
-            .WithMessage($"This line of the list file vouches for assembly '{assembly}'. It has no effect, because {reason}.");
+            .WithMessage($"This line of the symbol list file vouches for assembly '{assembly}'. It has no effect, because {reason}.");
 
     public static DiagnosticResult SafeListLine(int line, int startColumn, int endColumn, string reason) =>
         new DiagnosticResult(DiagnosticIds.SafeListLine, DiagnosticSeverity.Warning)
             .WithSpan(ListFileName, line, startColumn, line, endColumn)
-            .WithMessage($"This line of the list file cannot be parsed: {reason}");
+            .WithMessage($"This line of the symbol list file cannot be parsed: {reason}");
 
     /// <summary>
     /// The finding for a 'noncopyable' line of the list file that names no type of the compilation.
@@ -913,7 +913,7 @@ internal static class Verify
         new DiagnosticResult(DiagnosticIds.SafeListLine, DiagnosticSeverity.Warning)
             .WithSpan(ListFileName, line, startColumn, line, endColumn)
             .WithMessage(
-                $"This line of the list file marks '{id}' as non-copyable, and the compilation has no type of that ID: the type stays copyable. " +
+                $"This line of the symbol list file marks '{id}' as non-copyable, and the compilation has no type of that ID: the type stays copyable. " +
                 "Fix the ID, or take the line out of the file of a project that does not reference the type.");
 
     /// <summary>
@@ -922,7 +922,7 @@ internal static class Verify
     public static DiagnosticResult SafeListCopyableHasNoEffect(int line, int startColumn, int endColumn, string id, string because) =>
         new DiagnosticResult(DiagnosticIds.SafeListLine, DiagnosticSeverity.Warning)
             .WithSpan(ListFileName, line, startColumn, line, endColumn)
-            .WithMessage($"This line of the list file marks '{id}' as copyable. It has no effect, because {because}.");
+            .WithMessage($"This line of the symbol list file marks '{id}' as copyable. It has no effect, because {because}.");
 
     public static DiagnosticResult NonCopyableAwaiter(int location, string type) => Diagnostic(
         DiagnosticIds.NonCopyableAwaiter,
@@ -956,22 +956,22 @@ internal static class Verify
         DiagnosticIds.ForeignNonCopyableAttribute,
         location,
         $"'{attribute}' is not the attribute that the analyzer reads: only 'Singulink.CodeAnalysis.NonCopyableAttribute' is recognised, so a " +
-        "struct that is marked with this class is copied with no finding. Declare the class in the namespace 'Singulink.CodeAnalysis', or " +
-        "suppress this finding if the attribute is meant for something else.");
+        "struct that is marked with this class is copied with no warning. Declare the class in the namespace 'Singulink.CodeAnalysis', or " +
+        "suppress this warning if the attribute is meant for something else.");
 
     public static DiagnosticResult NonCopyableAttributeWithNoSuffix(int location, string attribute) => Diagnostic(
         DiagnosticIds.ForeignNonCopyableAttribute,
         location,
         $"'{attribute}' is not the attribute that the analyzer reads: only 'Singulink.CodeAnalysis.NonCopyableAttribute' is recognised, by " +
-        "that name, so a struct that is marked with this class is copied with no finding. Name the class 'NonCopyableAttribute' and declare " +
-        "it in the namespace 'Singulink.CodeAnalysis', or suppress this finding if the attribute is meant for something else.");
+        "that name, so a struct that is marked with this class is copied with no warning. Name the class 'NonCopyableAttribute' and declare " +
+        "it in the namespace 'Singulink.CodeAnalysis', or suppress this warning if the attribute is meant for something else.");
 
     public static DiagnosticResult ForeignNonCopyableAttributeUse(int location, string attribute, string assembly, string effect) => Diagnostic(
         DiagnosticIds.ForeignNonCopyableAttribute,
         location,
         $"This mark is not recognised: '{attribute}' of '{assembly}' is not the attribute that the analyzer reads, so {effect}. Use " +
         "'Singulink.CodeAnalysis.NonCopyableAttribute', from the Singulink.CodeAnalysis package or declared by the project in the namespace " +
-        "'Singulink.CodeAnalysis', or suppress this finding if the attribute is meant for something else.");
+        "'Singulink.CodeAnalysis', or suppress this warning if the attribute is meant for something else.");
 
     public static DiagnosticResult ErasableBaseNotKept(int location, string type, string erasable, string reason) => Diagnostic(
         DiagnosticIds.ErasableBase,

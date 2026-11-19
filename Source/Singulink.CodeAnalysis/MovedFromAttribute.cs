@@ -7,7 +7,7 @@ namespace Singulink.CodeAnalysis;
 /// <remarks>
 /// <para>
 /// Inside the method, reading the parameter by value is a move and not a copy. The method must assign the parameter and can read it by value only
-/// once, and the attribute has no meaning on anything that is not a <see langword="ref"/> parameter: the analyzer reports each of these.</para>
+/// once, and the attribute has no meaning on anything that is not a <see langword="ref"/> parameter: the analyzer warns about each of these.</para>
 /// <para>
 /// The mark is kept in both directions: an override, an implementation, or a method or a lambda that is converted to a delegate must have
 /// it exactly where the member or the delegate that it stands in for has it. A method with a marked parameter of a container type, such
