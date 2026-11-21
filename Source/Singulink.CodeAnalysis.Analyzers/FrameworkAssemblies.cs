@@ -14,10 +14,11 @@ namespace Singulink.CodeAnalysis.Analyzers;
 /// clones itself. A library of Microsoft's that is no part of a shared framework, such as WinUI, was not read, and so is not listed.
 /// </para>
 /// <para>
-/// A project of another target is judged by the same names: the reference assemblies of .NET Standard and of the .NET Framework, such
-/// as netstandard, mscorlib and System, are among the assemblies of the shared frameworks, where they forward to the implementation.
-/// The name alone is what counts, as for a 'trusted' line: an assembly of another origin that takes a framework's name only loses a
-/// warning, which is the state before the check of an unknown base class existed.
+/// A project of another target is judged by the same names: the assemblies that forward to the implementation for .NET Standard and
+/// the .NET Framework, such as netstandard, mscorlib and System, are among the assemblies of the shared frameworks. An assembly that
+/// only the .NET Framework has, such as System.Messaging, or that only a platform has, such as Mono.Android, was not read and is not
+/// listed. The name alone is what counts, as for a 'trusted' line: an assembly of another origin that takes a framework's name only
+/// loses a warning, which is the state before the check of an unknown base class existed.
 /// </para>
 /// </remarks>
 internal static class FrameworkAssemblies

@@ -998,8 +998,10 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
     /// <para>
     /// The code of every other base class is known. A class of the compilation or of an analyzed assembly is checked in its own build,
     /// where a call of MemberwiseClone gets its warning. Of a class of the framework the built-in list says whether it clones itself:
-    /// see <see cref="FrameworkAssemblies"/>. A 'clones=none' line vouches for its class and for every class above it, so the walk ends
-    /// there. A 'trusted' line vouches for the classes of its assembly, and the walk goes on above them.
+    /// see <see cref="FrameworkAssemblies"/>. A 'clones=none' line for such a class has no effect, and gets a warning in its file: the
+    /// walk goes on above the class, so that the line cannot vouch for an unknown class above it by the way. A 'clones=none' line for
+    /// an unknown class vouches for that class and for every class above it, so the walk ends there. A 'trusted' line vouches for the
+    /// classes of its assembly, and the walk goes on above them.
     /// </para>
     /// </remarks>
     /// <param name="type">The class.</param>
@@ -1010,14 +1012,13 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
         for (var current = type.BaseType; current is not null; current = current.BaseType)
         {
             var definition = current.OriginalDefinition;
-
-            if (list.IsNeverClones(definition))
-                return null;
-
             var assembly = definition.ContainingAssembly;
 
             if (assembly is null || AnalyzedAssemblies.IsAnalyzed(assembly) || FrameworkAssemblies.Contains(assembly))
                 continue;
+
+            if (list.IsNeverClones(definition))
+                return null;
 
             if (list.IsTrusted(assembly))
             {

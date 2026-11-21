@@ -397,10 +397,14 @@ That leaves the base classes of which nothing is known, and since 0.7.1 they get
   clone themselves. Every other base class may clone itself, and a field behind it gets the warning until a line says what it does.
 - **The framework is the assemblies that the scan read,** by their simple names: `FrameworkAssemblies.txt` lists the assemblies of the
   shared frameworks `Microsoft.NETCore.App`, `Microsoft.AspNetCore.App` and `Microsoft.WindowsDesktop.App` of .NET 10 and .NET 11, and
-  `FrameworkScanTests` fails for an assembly of a shared framework that the file does not name. The reference assemblies of
-  .NET Standard and the .NET Framework, such as `netstandard` and `mscorlib`, are among them. A library of Microsoft's that is no
-  part of a shared framework, such as WinUI, was not read, so it is another library. The name was chosen over the publisher on
-  purpose: the list says what was checked, not who wrote the code.
+  `FrameworkScanTests` fails for an assembly of a shared framework that the file does not name. The assemblies that forward to them
+  for another target, such as `netstandard`, `mscorlib` and `System`, are among them, so a project for .NET Standard or the
+  .NET Framework is judged by the same names. A library of Microsoft's that is no part of a shared framework, such as WinUI, was not
+  read, so it is another library. So is an assembly that only the .NET Framework has, such as `System.Messaging`, or that only a
+  platform has, such as `Mono.Android`: 82 of the 133 reference assemblies of .NET Framework 4.8 are not in the file. The name was
+  chosen over the publisher on purpose: the list says what was checked, not who wrote the code.
+- **A `clones=none` line counts only for a class that is not known.** For a class of checked code or of the framework it has no
+  effect, gets SCA1042, and does not end the walk, so it cannot vouch for an unknown class above it by the way.
 - **Three lines answer it.** `clones` says that the class clones itself. `clones=none` says that neither the class nor a class above it
   does, so one line for the direct base class is enough. A `trusted` line for the assembly says that no code of it copies a
   non-copyable value, and the walk goes on above the classes of that assembly.

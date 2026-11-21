@@ -152,8 +152,8 @@ public sealed partial class DoNotCopyValueAnalyzer
 
         return named.All(AnalyzedAssemblies.IsAnalyzed)
             ? "the assembly was built with the analyzer, so it is checked code"
-            : "the assembly references no assembly that declares a non-copyable type, and no class of the compilation that holds a " +
-              "non-copyable value derives from a class of the assembly";
+            : "the assembly references no assembly that declares a non-copyable type or that lets a non-copyable value out, and the " +
+              "line answers no warning for a field behind a class of the assembly";
     }
 
     /// <summary>

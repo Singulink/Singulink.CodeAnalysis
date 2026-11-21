@@ -160,7 +160,7 @@ public class ExposedValueTests
                 1,
                 17,
                 "Plugin",
-                "the assembly references no assembly that declares a non-copyable type, and no class of the compilation that holds a non-copyable value derives from a class of the assembly"));
+                "the assembly references no assembly that declares a non-copyable type or that lets a non-copyable value out, and the line answers no warning for a field behind a class of the assembly"));
         }
 
         await test.RunAsync();

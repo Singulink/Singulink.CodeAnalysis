@@ -181,6 +181,77 @@ public class UnknownBaseTests
         await test.RunAsync();
     }
 
+    // A 'clones=none' line for a class of checked code has no effect, and gets a warning in its file. It does not vouch for an unknown
+    // class above it by the way: the walk goes on, and the field keeps its warning for the class that is not known.
+    [TestMethod]
+    public async Task NoneLine_ForAClassOfCheckedCodeDoesNotVouchForTheClassAbove()
+    {
+        var docs = await CompileDocsAsync(analyzed: false);
+        var marked = await CompileDocsAsync(analyzed: true, "Marked", "namespace Marked { public class Sheet : Docs.Page { } }", docs);
+
+        var test = new Verify.Test {
+            TestCode = """
+                using System.Runtime.InteropServices;
+
+                class Middle : Docs.Page
+                {
+                }
+
+                class Deep : Middle
+                {
+                    private GCHandle {|#0:_pinned|};
+                }
+
+                class OnSheet : Marked.Sheet
+                {
+                    private GCHandle {|#1:_pinned|};
+                }
+                """,
+        };
+
+        test.TestState.AdditionalReferences.Add(docs);
+        test.TestState.AdditionalReferences.Add(marked);
+        test.TestState.AdditionalFiles.Add((Verify.ListFileName, "T:Middle;clones=none\nT:Marked.Sheet;clones=none"));
+
+        test.ExpectedDiagnostics.AddRange([
+            Verify.FieldBehindUnknownBase(0, "Deep", "Docs.Page", "Docs", Handle, "_pinned"),
+            Verify.FieldBehindUnknownBase(1, "OnSheet", "Docs.Page", "Docs", Handle, "_pinned"),
+            Verify.SafeListNeverClonesHasNoEffect(1, 1, 21, "T:Middle", "the class is of the compilation, which is checked code"),
+            Verify.SafeListNeverClonesHasNoEffect(2, 1, 27, "T:Marked.Sheet", "the class is of an assembly that was built with the analyzer, so it is checked code"),
+        ]);
+
+        await test.RunAsync();
+    }
+
+    // A 'trusted' line that another line makes needless has no effect, and its warning says so without claiming that the project has no
+    // such class: here a 'clones=none' line answers the warning first.
+    [TestMethod]
+    public async Task TrustedLine_ThatAnotherLineMakesNeedlessHasNoEffect()
+    {
+        var test = new Verify.Test {
+            TestCode = """
+                using System.Runtime.InteropServices;
+
+                class Pinned : Docs.Page
+                {
+                    private GCHandle _pinned;
+                }
+                """,
+        };
+
+        test.TestState.AdditionalReferences.Add(await CompileDocsAsync(analyzed: false));
+        test.TestState.AdditionalFiles.Add((Verify.ListFileName, "T:Docs.Page;clones=none\nA:Docs;trusted"));
+
+        test.ExpectedDiagnostics.Add(Verify.SafeListTrustedHasNoEffect(
+            2,
+            1,
+            15,
+            "Docs",
+            "the assembly references no assembly that declares a non-copyable type or that lets a non-copyable value out, and the line answers no warning for a field behind a class of the assembly"));
+
+        await test.RunAsync();
+    }
+
     // A 'trusted' line vouches for the classes of its assembly, and the walk goes on above them: a base class of another assembly that
     // was not built with the analyzer is still not known. A 'clones=none' line for the nearest class vouches for every class above it.
     [TestMethod]
@@ -376,7 +447,7 @@ public class UnknownBaseTests
                 1,
                 15,
                 "Docs",
-                "the assembly references no assembly that declares a non-copyable type, and no class of the compilation that holds a non-copyable value derives from a class of the assembly"));
+                "the assembly references no assembly that declares a non-copyable type or that lets a non-copyable value out, and the line answers no warning for a field behind a class of the assembly"));
         }
 
         await test.RunAsync();
