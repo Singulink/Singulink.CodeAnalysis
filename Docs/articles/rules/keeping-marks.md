@@ -50,10 +50,12 @@ A method or a lambda with `[Kept]` may stand only for a parameter that keeps too
 ```cs
 public delegate void GuardsSink(List<LockGuard> guards);
 public delegate void KeptSink([Kept] List<LockGuard> guards);
+public delegate void MarkedSink<[NonCopyable] T>(T item);
 
 void Register([Kept] List<LockGuard> list) => _all = list;
 
-Action<List<LockGuard>> keep = Register;       // OK: an unmarked type parameter, as in Action<T>, counts as keeping
+Action<List<LockGuard>> keep = Register;       // OK: a type parameter, as in Action<T>, counts as keeping
+MarkedSink<List<LockGuard>> marked = Register; // OK: a marked type parameter counts as keeping as well
 KeptSink sink = Register;                      // OK: the delegate's parameter is [Kept]
 GuardsSink plain = Register;                   // SCA1040: callers of GuardsSink assume the list is still theirs
 ```
@@ -62,9 +64,9 @@ Here the parameter of the delegate, or of the member that is overridden or imple
 
 - it is marked `[Kept]`;
 - it is the value of a setter;
-- its type is a type parameter that is **not** marked `[NonCopyable]`, as in `Action<T>`.
+- its type is a type parameter, marked `[NonCopyable]` or not, as in `Action<T>` and `MarkedSink<T>`, unless the symbol list marks the member `borrows`.
 
-A delegate whose parameter has a marked type parameter as its type, such as `delegate void MarkedSink<[NonCopyable] T>(T item)`, does not count as keeping for `[Kept]`: `MarkedSink<List<LockGuard>> m = Register;` gets a warning.
+A call through such a parameter already counts what it passes as kept, so `[Kept]` behind it adds nothing that a caller could miss. That goes too for an override or an implementation of a member whose parameter is of a type parameter. A lambda made as such a delegate needs no `[Kept]` of its own to keep its parameter: see [Lambdas](keeping-containers.md#lambdas).
 
 A `[MovedFrom]` parameter hands its container over for good, so a method may keep it with no mark.
 
@@ -84,7 +86,7 @@ KeptSink keeping = registry.Add;            // OK: the delegate says that it kee
 Action<List<LockGuard>> action = registry.Add;   // OK: the parameter of 'Action<T>' is a type parameter as well
 ```
 
-For a method group without `[Kept]`, a delegate's parameter whose type is a type parameter keeps, marked or not: `MarkedSink<List<LockGuard>> m = registry.Add;` is fine.
+A delegate's parameter whose type is a type parameter keeps here too, marked or not: `MarkedSink<List<LockGuard>> m = registry.Add;` is fine.
 
 The analyzer asks of a method group what it asks of every call:
 

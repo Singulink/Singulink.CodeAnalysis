@@ -11,8 +11,8 @@ A symbol list file tells the analyzer what it cannot see for itself in code that
 - **The ID to add** is in the message of SCA1020.
 - **Entries are exact per overload.** There is no entry for every member of a type, and no wildcard.
 - **The files:** the project's own symbol list files and those that come with a library are read alike and merged with the [built-in framework symbol list](framework-symbol-list.md).
-- **Where two entries disagree,** the one that claims less applies, even between a project's file and a library's. The one exception: `copyable` overrides the framework symbol list.
-- **A line of a symbol list file that cannot be parsed,** and a `noncopyable`, `copyable` or `trusted` line that has no effect, gets a warning (SCA1042). The analyzer's own tests check the framework symbol list, so it never gets one.
+- **Where two entries disagree,** the one that claims less applies, even between a project's file and a library's. Two exceptions: `copyable` overrides the framework symbol list, and `clones=complete` counts where any line for the class says it, in any file.
+- **Three kinds of line of a symbol list file get a warning (SCA1042):** a line that cannot be parsed; a `noncopyable`, `copyable`, `trusted` or `clones` line that has no effect; and a line that says a member which clones makes no copy. The analyzer's own tests check the framework symbol list, so it never gets one.
 
 ## Lines
 
@@ -55,6 +55,14 @@ T:ThirdParty.Promise`1;erasable
 
 # trusted: an assembly that was not built with the analyzer, and whose code makes no copy of the non-copyable values that it gets at
 A:Contoso.Plugins;trusted
+
+# clones: a class whose own code clones its objects field by field with MemberwiseClone, and the method that does it
+T:Contoso.Document;clones
+M:Contoso.Document.Copy;clones
+
+# clones=complete: the class's clones lines name every member that clones its object or hands it on
+T:Contoso.Report;clones=complete
+M:Contoso.Report.Copy;clones
 ```
 
 ## Markers
@@ -72,6 +80,9 @@ A:Contoso.Plugins;trusted
 | A struct (`T:`) | `copyable` | The struct is an ordinary struct for the project |
 | An assembly (`A:` and its simple name) | `trusted` | The unchecked assembly makes no copy of what it gets at |
 | A generic class or interface (`T:`) | `erasable` | No base type or interface hands out a value of its type arguments |
+| A class (`T:`) | `clones` | The class's own code clones its objects field by field with MemberwiseClone |
+| A class (`T:`) | `clones=complete` | As `clones`, and its `clones` lines name every member that clones the object or hands it on |
+| A method (`M:`), a property (`P:`) or an event (`E:`) | `clones` | The member clones its object, or the object that it is given, field by field with MemberwiseClone, or hands it to code that can |
 
 #### No Marker
 
@@ -137,6 +148,62 @@ A `copyable` line gets a warning (SCA1042), and does nothing, where it names:
 
 An assembly marked `trusted` was not built with the analyzer, and its code makes no copy of the non-copyable values that it gets at. That holds even where its code runs behind a type of checked code or of the framework. The line turns off SCA1025 for the assembly and changes nothing else: its members stay unchecked code for every other rule. The name is matched without regard to case, as the runtime binds it. See [SCA1025](../diagnostics/sca1025.md).
 
+#### Clones
+
+A class marked `clones` has code of its own that clones its objects field by field with <xref:System.Object.MemberwiseClone>. A class of the project that derives from it, at any depth, gets a warning on each field that holds a non-copyable value (SCA1009), since the clone copies the field. One line covers the class, every class that derives from it, and the generic classes that derive from it, where a non-copyable type is bound to them: see [SCA1009](../diagnostics/sca1009.md).
+
+```text
+# Document of a library clones itself in its Copy method
+T:Contoso.Document;clones
+```
+
+```cs
+sealed class PinnedDocument : Contoso.Document
+{
+    private GCHandle _pinned;                            // SCA1009: Document's own code clones the object, and the handle with it
+    private readonly List<GCHandle> _handles = new();    // OK: the clone shares the list
+}
+```
+
+| Question | Answer |
+|---|---|
+| Where can the line stand? | In any symbol list file: the project's own, and one that comes with a library. It counts whether or not the class's assembly was built with the analyzers, since it only adds warnings |
+| Can another line take it away? | No. `clones` has no opposite, and a line for the same class in another file does not turn it off. Suppress the warning where a class is never cloned |
+| What if one file says `clones=complete` and another `clones` alone? | `clones=complete` applies. A plain `clones` line says nothing about completeness. Where the lines miss a member, add a `clones` line for that member, in any file |
+| May the class be the project's own? | Yes, where its own code clones its objects by a means that the analyzer does not see. A call of `MemberwiseClone` in the project gets SCA1005 and SCA1008 as before |
+| Which classes of the framework have it? | Every one that clones itself: see [Classes That Clone Themselves](framework-symbol-list.md#classes-that-clone-themselves) |
+
+A method, a property or an event marked `clones` clones its object, or the object that it is given, or hands it to code that can. For an event, adding a handler and removing one both count, and the analyzer warns at each. Two examples are `M:System.Globalization.CultureInfo.Clone` and `P:System.Drawing.Printing.PrinterSettings.DefaultPageSettings`, whose page settings refer back to the printer settings. The built-in framework symbol list has a line for each public or protected member of the framework that clones or hands its object on, through other members included.
+
+A use of a member marked `clones` gets a warning with no advice to add a line, because no line can say that such a member makes no copy. A line for such a member that says it makes no copy, with no marker or with `new`, `borrows`, `drains` or `owned`, gets a warning and is left out.
+
+**Each line of a class that clones itself vouches for what it names,** and the type line says whether the lines are complete:
+
+| You write | You vouch for |
+|---|---|
+| The type line alone, `T:Contoso.Document;clones` | The class clones itself. The analyzer counts every member that no line names as one that can clone |
+| A `clones` member line, `M:Contoso.Document.Copy;clones` | This member clones its object, or the object that it is given, or hands it to code that can |
+| A member line with no marker, `M:Contoso.Document.WithTitle(System.String)` | This member neither clones its object nor hands it on |
+| The type line with `complete`, `T:Contoso.Document;clones=complete` | The `clones` lines name every member that clones the object or hands it on, so a member with no line does neither |
+
+> [!WARNING]
+> `clones=complete` vouches that the `clones` lines name **every** member that clones the object or hands it to other code, even one that only gives it to a visitor interface, a registry or a wrapper. The analyzer cannot check that. Without `complete`, the analyzer judges each member by its own line: the safe choice when you cannot vouch for all of them.
+
+Take a use of a member that no line names, on an object whose class binds a non-copyable type. It gets a warning unless the class's line says `clones=complete`. With `clones=complete`, it gets a warning only where the member's signature shows that it can hand the object on: see [Uses](../diagnostics/sca1009.md#uses).
+
+A member line names a member that another assembly can call, and that clones the object or hands it on directly or through another member. A private or internal member is not imported where the library is referenced, so a line for it has no effect there and gets SCA1042: name the member that calls it instead.
+
+A class can sit between the class that clones itself and the object's own class. Where it is of a library that was not built with the analyzers, it takes a type line of its own for its own members, such as ``T:Contoso.TaggedDocument`1;clones=complete``. The class above it already has a `clones` line, but this line is not redundant, so it gets no SCA1042 warning for having no effect.
+
+A library that is built with the analyzers gets SCA1008 for each member of its own such class that another assembly can call and that clones its object without a line. The warnings help it complete the file that it ships, before it writes `clones=complete` on the type line. It is not a proof: a member that clones through a private helper, or hands the object on, needs its line all the same. For a library that is not built with the analyzers, the lines are your statement, as every line is.
+
+Two other lines are for such a class:
+
+- **A member line with no marker** says that the member never hands the object itself to other code. It answers two warnings: the one for a member whose signature shows that it can hand the object on, and the one for any member of a class whose line does not say `clones=complete`. It vouches for everything that the member does, what it calls included, and not for an override of it.
+- **`borrows`,** for a member that receives the object as an argument, says that it uses the object during the call and keeps nothing of it. A member on the list with no marker that receives a value as a type that hides it, as `List<object>.Add` does, keeps it, and the conversion gets its warning.
+
+A member line with no marker gets no warning for having no effect: it can still be what lets a container of an unmarked generic through (SCA1023).
+
 #### Erasable
 
 A generic class or interface marked `erasable` has no base type or interface that hands out a value of its type arguments. So a container of the type may be converted to one of them. See [Variance and Erasable Types](variance-and-erasable-types.md).
@@ -166,16 +233,21 @@ An entry that names something the project does not reference is ignored, so one 
 | A line that cannot be parsed | Always; it is then ignored |
 | `copyable` | It has no effect |
 | `trusted` | It has no effect |
+| `clones` | It names no type, method, property or event, or has no effect |
+| A member line of any marker that names an accessor, such as `M:Contoso.Document.get_Title` or `M:Contoso.Document.add_Changed(System.EventHandler)` | Always: the analyzer looks up every use of an accessor under its property or event, so write the `P:` or `E:` line instead |
+| A member line with no marker, `new`, `borrows`, `drains` or `owned` | A `clones` line names the member; the line is left out |
 
 - **A `noncopyable` line that names no type** gets a warning because a mistyped ID would leave the type copyable in a build that looks clean. A project that does not reference the type should take the line out of its file.
 - **A `copyable` line has no effect** in the cases that [Copyable](#copyable) gives.
 - **A `trusted` line has no effect** for an assembly that the project does not reference, for the project's own, and for one that was built with the analyzer. Nor does it for an assembly that references no assembly which declares a non-copyable type.
+- **A `clones` line has no effect** for a class that is static, or sealed and not generic, since no class can derive from it and no type can be bound to it. A line that names no type, no method, no property or no event gets a warning as a `noncopyable` line does, since a mistyped ID would leave the fields of every derived class with no warning. A line that repeats one of the built-in framework symbol list, or that names a class whose base class has a line, gets no warning: it has its effect already, and with `clones=complete` it covers the members of the class.
 
 A line cannot be parsed if it has:
 
 - an ID that cannot be a documentation comment ID, such as one with a parenthesis that is not closed;
 - a `for=` that names a type parameter which the member does not have, or one that fits more than one type parameter of the member and of the types that contain it;
 - a marker on something that it does not fit (see the table below);
+- `clones=complete` on a method, a property or an event, a value of `clones` other than `complete`, or `complete` written as a marker of its own;
 - a marker other than `trusted` on an assembly, or `trusted` on anything but an assembly;
 - an assembly given by a display name with a version, or by a file name.
 
@@ -183,6 +255,8 @@ A line cannot be parsed if it has:
 |---|---|
 | `view`, `noncopyable`, `copyable` | A struct |
 | `erasable` | A generic class or interface |
+| `clones` | A class, a method, a property or an event |
+| `clones=complete` | A class |
 | `new`, `borrows` | A member, not a type |
 | `drains` | A method whose result is an <xref:System.Collections.Generic.IEnumerable`1> or an <xref:System.Collections.Generic.IAsyncEnumerable`1> |
 | `owned` | An instance property of a class whose type is <xref:System.Threading.Tasks.Task`1> |
@@ -198,8 +272,13 @@ Where two entries for the same ID disagree, the one that claims less applies, wh
 | Two `for=` limits | Only the type parameters that both name |
 | `copyable` and the framework symbol list | `copyable`, since that is what it is for |
 | `copyable` and `noncopyable` of the same type, in two symbol list files | `noncopyable` |
+| `clones` and any other line for the same class | Both: `clones` is kept apart, and nothing takes it away |
+| `clones` and a line that says the same method makes no copy | `clones`: the other line is left out, with a warning |
+| `clones=complete` and `clones` alone, for the same class | `clones=complete`: a plain `clones` line says nothing about completeness, and nothing takes `complete` away |
 
-So a file can add entries and can tighten a built-in one, but cannot loosen it. The one line that loosens is `copyable`.
+So a file can add entries and can tighten a built-in one, but cannot loosen it. Two kinds of line do loosen: `copyable`, and `clones=complete`, by which you vouch for the members of a class.
+
+Take a member that the framework symbol list names with `for=`. A line of a file that names it for a type parameter that the `for=` leaves out, or names it with no `for=`, would add nothing. The analyzer leaves such a line out and warns about it (SCA1042). Where code uses the member, the warning says which type parameters the list names it for, and gives no line to add.
 
 #### The Owned Marker Is Taken on Trust
 

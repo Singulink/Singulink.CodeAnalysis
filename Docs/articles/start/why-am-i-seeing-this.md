@@ -25,12 +25,13 @@ In a project that gets the analyzers only through a library, the analyzers do no
 
 #### Warnings Where Nothing Is Copied
 
-Three warnings are about code that can copy such a struct without a visible copy. So they can appear even in a project that copies nothing:
+Four warnings are about code that can copy such a struct without a visible copy. So they can appear even in a project that copies nothing:
 
 | ID | What it warns about | What to do |
 |---|---|---|
 | [SCA1007](../diagnostics/sca1007.md) | Any use of <xref:System.Runtime.CompilerServices.RuntimeHelpers.GetObjectValue*?displayProperty=nameWithType>, which clones a boxed struct field by field | Use the object as it is |
-| [SCA1008](../diagnostics/sca1008.md) | <xref:System.Object.MemberwiseClone> in a class that another assembly can derive from, where a derived class could hold a non-copyable value | Seal the class, copy the fields yourself, or suppress the warning and document the rule for derived classes |
+| [SCA1008](../diagnostics/sca1008.md) | <xref:System.Object.MemberwiseClone> in a class that another assembly can derive from, where a derived class could hold a non-copyable value | Seal the class, copy the fields yourself, or suppress the warning and either document the rule for derived classes or ship a `clones` line for the class |
+| [SCA1009](../diagnostics/sca1009.md) | A field that holds a non-copyable value in a class that derives from a class that clones itself, such as <xref:System.Text.Encoding>, and a non-copyable type bound to a generic class that derives from one | Hold the value in an object of a class that your class refers to |
 | [SCA1025](../diagnostics/sca1025.md) | A referenced assembly that uses the library's structs and was not built with the analyzers | Build that assembly with the analyzers, or vouch for it with a `trusted` line in a symbol list file (see [Symbol List](../guides/symbol-list.md)) |
 
 ## What to Do About a Warning

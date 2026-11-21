@@ -30,14 +30,16 @@ The rest of this page gives the exact rules for the last row.
 
 ## Marker of an Analyzed Build
 
-The build files of the package add an assembly attribute to every project that runs the analyzers: an <xref:System.Reflection.AssemblyMetadataAttribute> with the key `Singulink.CodeAnalysis.Analyzed` and the value `1`, which is the version of the marker.
+The build files of the package add an assembly attribute to every project that runs the analyzers: an <xref:System.Reflection.AssemblyMetadataAttribute> with the key `Singulink.CodeAnalysis.Analyzed` and, as its value, the version of the analyzers that built the assembly, such as `0.7.0`.
 
 - **A build that does not run analyzers gets no marker:** that is one with `RunAnalyzers` or `RunAnalyzersDuringBuild` set to `false`.
-- **A project with `GenerateAssemblyInfo` set to `false`** gets nothing from the item that the package adds, and writes the attribute itself:
+- **A project with `GenerateAssemblyInfo` set to `false`** gets nothing from the item that the package adds, and writes the attribute itself, with the version of the analyzers that it is built with as the value:
 
   ```cs
-  [assembly: System.Reflection.AssemblyMetadata("Singulink.CodeAnalysis.Analyzed", "1")]
+  [assembly: System.Reflection.AssemblyMetadata("Singulink.CodeAnalysis.Analyzed", "0.7.0")]
   ```
+
+  The line is only for such a project. A project that generates its assembly info gets the line from the package, and must not write it as well: the assembly would then carry two markers.
 
 - **The marker is a claim made by the build,** like a [symbol list entry](symbol-list-format.md). A project that suppresses warnings still carries it, and the projects that use its assembly trust its marks all the same.
 - **The attributes package carries it,** so the marks of <xref:Singulink.CodeAnalysis.NonCopyable.Move*?displayProperty=nameWithType> and of the two checks of a reference are trusted wherever they are used.
@@ -154,6 +156,6 @@ A few things remain, and all are rare:
 - **A struct of unchecked code that only a `noncopyable` line makes non-copyable,** in the same way. A line for a struct of the framework would otherwise put a warning on every assembly of the framework.
 - **What is handed over or vouched for:** a value passed by value is the callee's from then on, and so is what a `borrows` or a `new` entry or a `trusted` line vouches for.
 
-How these weigh against the rest, and the one case to know about, a base class that clones itself: [What Is Not Covered](not-covered.md).
+How these weigh against the rest, and the one case to know about, a base class of another library that clones itself and that no symbol list file names: [What Is Not Covered](not-covered.md).
 
 </div>

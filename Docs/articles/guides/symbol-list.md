@@ -16,6 +16,7 @@ You need a symbol list file when:
 | Such an assembly hands out a container that nothing else holds | [SCA1030](../diagnostics/sca1030.md) | `M:ThirdParty.Leases.Create;new` |
 | An assembly that uses your structs cannot be built with the analyzers, and you vouch for it | [SCA1025](../diagnostics/sca1025.md) | `A:Contoso.Plugins;trusted` |
 | A struct that cannot be marked in its source must be non-copyable, or one that is non-copyable must not be | None | `T:ThirdParty.Handle;noncopyable`, `T:System.Runtime.InteropServices.GCHandle;copyable` |
+| A base class of a library clones itself with `MemberwiseClone`, and a class of yours that derives from it holds a non-copyable value | None: you find it in the library's documentation or code | `T:Contoso.Document;clones` |
 
 ### At a Glance
 
@@ -26,7 +27,7 @@ You need a symbol list file when:
 
 ## Symbol List Files
 
-A project reads its own symbol list files and those that come with the libraries it uses, treats them all alike, and merges them with the [built-in framework symbol list](../rules/framework-symbol-list.md). Where two files disagree, the line that claims less applies: a project's file can tighten a line that came with a library, but not loosen it.
+A project reads its own symbol list files and those that come with the libraries it uses, treats them all alike, and merges them with the [built-in framework symbol list](../rules/framework-symbol-list.md). Where two files disagree, the line that claims less applies: a project's file can tighten a line that came with a library, but not loosen it. The exceptions are `copyable` and `clones=complete` lines: see [Entries That Disagree](../rules/symbol-list-format.md#entries-that-disagree).
 
 A project adds files named `NonCopyableSymbols.txt` or `NonCopyableSymbols.<name>.txt`, whatever the case of the name. Such a file in the folder of the project is read with no further setup. A file in another folder is added as an additional file:
 
@@ -69,8 +70,29 @@ Entries are exact per overload, with no wildcard. Your own generics mark their t
 | `T:ThirdParty.Handle;noncopyable` | The struct is non-copyable, though its source cannot be marked |
 | `T:System.Runtime.InteropServices.GCHandle;copyable` | The struct is an ordinary struct for this project |
 | `A:Contoso.Plugins;trusted` | The assembly was not built with the analyzer, and makes no copy of the values that it gets at |
+| `T:Contoso.Document;clones` | The class clones its objects field by field, so a class that derives from it gets a warning for each field that holds a non-copyable value |
 
 The other markers (`drains`, `owned`, `for=`, `view`, `erasable`), what each entry may be put on, and what happens where two entries disagree: [Symbol List Format](../rules/symbol-list-format.md). What the analyzer ships for .NET's own libraries is on the [built-in framework symbol list](../rules/framework-symbol-list.md).
+
+## A Base Class That Clones Itself
+
+A class of a library can clone itself with `MemberwiseClone`, and the clone copies every field of a class that derives from it. The [built-in framework symbol list](../rules/framework-symbol-list.md#classes-that-clone-themselves) has a line for every class of the framework that does this, such as `Encoding`. For a class of another library, add the line yourself:
+
+```text
+# NonCopyableSymbols.txt: Contoso's Document clones itself in its Copy method
+T:Contoso.Document;clones
+```
+
+```cs
+sealed class PinnedDocument : Contoso.Document
+{
+    private GCHandle _pinned;                    // SCA1009: Document's own code clones the object, and the handle with it
+}
+```
+
+The line may stand in the project's symbol list file or in one that comes with the library, and nothing takes it away. With the type line alone, the analyzer counts every member of the class as one that can clone. A line for a member speaks for that member.
+
+Write the type line as `clones=complete` only where the lines name every member that clones the object or hands it on. Such a line counts from any file, and a plain `clones` line elsewhere does not undo it: see [Clones](../rules/symbol-list-format.md#clones).
 
 ## Code Not Built With the Analyzer
 

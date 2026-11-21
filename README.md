@@ -3,6 +3,7 @@
 [![Chat on Discord](https://img.shields.io/discord/906246067773923490)](https://discord.gg/EkQhJFsBu6)
 [![View nuget packages](https://img.shields.io/nuget/v/Singulink.CodeAnalysis.svg)](https://www.nuget.org/packages/Singulink.CodeAnalysis/)
 [![Build and Test](https://github.com/Singulink/Singulink.CodeAnalysis/workflows/build%20and%20test/badge.svg)](https://github.com/Singulink/Singulink.CodeAnalysis/actions?query=workflow%3A%22build+and+test%22)
+[![View documentation](https://img.shields.io/badge/View-Documentation-blue)](https://www.singulink.com/Docs/Singulink.CodeAnalysis/)
 
 **Singulink.CodeAnalysis** is a set of Roslyn analyzers that find every place where code copies a struct that must never be copied. A lock
 guard, a handle or a pooled buffer is a struct where each instance owns something that only one instance may own: copy it, and two instances
@@ -44,9 +45,12 @@ and the guarantee does not cover it. Nothing guarantees that a value is disposed
 same instance does nothing. A `readonly struct` guard cannot do that.
 
 **What it cannot see is small.** The one case that ordinary code can meet is a class that holds a non-copyable value and derives from a
-base class that clones itself with `MemberwiseClone`, such as `Encoding`, in an assembly that was not built with the analyzers. Everything
-else takes unsafe code, reflection or `dynamic`, an API used against its documentation, or something that you vouched for. See
+class of another library that clones itself with `MemberwiseClone`, where no symbol list file names that class. For the framework's own
+classes that do this, such as `Encoding`, you get a warning. Everything else takes unsafe code, reflection or `dynamic`, an API used
+against its documentation, or something that you vouched for. See
 [What Is Not Covered](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/rules/not-covered.html).
+
+**Documentation**: guides, an article for every warning and the fully documented API are on the [project documentation site](https://www.singulink.com/Docs/Singulink.CodeAnalysis/).
 
 ### About Singulink
 
@@ -62,10 +66,14 @@ analyzers then check the types that the library marked. Even with nothing marked
 copies one of the library's structs, or a collection or a task that holds one. In such a project, the analyzers do not check the ten
 framework structs that they otherwise treat as non-copyable.
 
-Three warnings are about code that can copy such a struct without a visible copy, so they can appear even in a project that copies
+Four warnings are about code that can copy such a struct without a visible copy, so they can appear even in a project that copies
 nothing:
-`MemberwiseClone` in a class that another assembly can derive from (`SCA1008`), any use of `RuntimeHelpers.GetObjectValue`
-(`SCA1007`), and a referenced assembly that uses the library's structs and was not built with the analyzers (`SCA1025`).
+
+- `MemberwiseClone` in a class that another assembly can derive from (`SCA1008`);
+- a field that holds such a struct in a class that derives from a class that clones itself, such as `Encoding`, or such a struct bound to
+  a generic class that derives from one (`SCA1009`);
+- any use of `RuntimeHelpers.GetObjectValue` (`SCA1007`);
+- a referenced assembly that uses the library's structs and was not built with the analyzers (`SCA1025`).
 
 Each warning has an ID of the form `SCA1001`, and its message names the value, says what receives the copy, and says what to do instead. The
 ID links to the warning's article on the [documentation site](https://www.singulink.com/Docs/Singulink.CodeAnalysis/index.html), which shows an example that gets the warning and
@@ -229,14 +237,14 @@ There are two packages:
 Install **`Singulink.CodeAnalysis`** if you want to use the attributes from the package:
 
 ```xml
-<PackageReference Include="Singulink.CodeAnalysis" Version="0.6.0" />
+<PackageReference Include="Singulink.CodeAnalysis" Version="0.7.0" />
 ```
 
 Install **`Singulink.CodeAnalysis.Analyzers`** alone if you declare the attributes yourself (see [Marking a Struct of Your Own](#marking-a-struct-of-your-own) above) and want
 no runtime dependency:
 
 ```xml
-<PackageReference Include="Singulink.CodeAnalysis.Analyzers" Version="0.6.0" PrivateAssets="all" />
+<PackageReference Include="Singulink.CodeAnalysis.Analyzers" Version="0.7.0" PrivateAssets="all" />
 ```
 
 In a project that references one of the two packages directly, the analyzers also treat ten framework structs as non-copyable, such as
@@ -261,6 +269,7 @@ Here are some links to get you started:
   means and how to fix it.
 - [New Values and Stored Values](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/start/new-and-stored-values.html) - The concepts behind the rules.
 - [API Documentation](https://www.singulink.com/Docs/Singulink.CodeAnalysis/api/Singulink.CodeAnalysis.html) - The attributes and the helpers.
+- [Design Notes](https://github.com/Singulink/Singulink.CodeAnalysis/blob/main/DESIGN.md) - Why the analyzer works as it does, for contributors.
 - [Chat on Discord](https://discord.gg/EkQhJFsBu6) - Have questions or want to discuss the library? This is the place for all Singulink
   project discussions.
 - [Third-party notices](https://github.com/Singulink/Singulink.CodeAnalysis/blob/main/THIRD-PARTY-NOTICES.md) - The non-copyable analyzer

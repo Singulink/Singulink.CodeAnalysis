@@ -18,6 +18,7 @@ Didn't add these analyzers yourself? See [Why Am I Seeing This?](start/why-am-i-
 | [SCA1006](diagnostics/sca1006.md) | A member that is not `readonly` runs on a copy, behind a read-only reference |
 | [SCA1007](diagnostics/sca1007.md) | `RuntimeHelpers.GetObjectValue`, which clones a boxed struct, is used |
 | [SCA1008](diagnostics/sca1008.md) | `MemberwiseClone` is called on a class that another assembly can derive from |
+| [SCA1009](diagnostics/sca1009.md) | A class whose base class clones itself, such as `Encoding`, holds or binds a non-copyable value, or an object of such a class is used in a way that lets other code clone it |
 
 ## Declarations
 

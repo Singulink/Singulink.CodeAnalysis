@@ -56,7 +56,7 @@ A local that holds a container which nothing else holds: everything assigned to 
 #### Symbol List, Symbol List File, Built-in Framework Symbol List and Symbol List Entry
 
 - The **symbol list** tells the analyzer what it cannot see in code that you cannot mark: the [built-in framework symbol list](framework-symbol-list.md) and every symbol list file that the project reads, merged. See [Symbol List Format](symbol-list-format.md).
-- A **symbol list file** is a `NonCopyableSymbols.txt` file of the project, or one that comes with a library that it uses. All are read alike and merged with the framework symbol list, and where two lines disagree, the one that claims less applies. Most projects never need one: see [Symbol List](../guides/symbol-list.md).
+- A **symbol list file** is a `NonCopyableSymbols.txt` file of the project, or one that comes with a library that it uses. All are read alike and merged with the framework symbol list. Where two lines disagree, the one that claims less applies, except for `copyable` and `clones=complete` lines (see [Entries That Disagree](symbol-list-format.md#entries-that-disagree)). Most projects never need one: see [Symbol List](../guides/symbol-list.md).
 - The **built-in framework symbol list**, or **framework symbol list** for short, is the symbol list for .NET's own libraries: it is built into the analyzer and merged with the symbol list files of the project. See [Built-in Framework Symbol List](framework-symbol-list.md).
 - A **symbol list entry** is one line of a symbol list file or of the framework symbol list.
 
@@ -87,6 +87,10 @@ The analyzer checks that its body hands out and leaves behind only what it read 
 #### Erasable
 
 A generic class or interface where no base type or interface hands out a value of its type arguments, such as <xref:System.Threading.Tasks.Task`1>. A container of such a type may be converted to those base types and interfaces. See [Variance and Erasable Types](variance-and-erasable-types.md#erasable-types).
+
+#### Class That Clones Itself
+
+A class whose own code clones its objects field by field with <xref:System.Object.MemberwiseClone>, such as <xref:System.Text.Encoding>. A class that derives from one and holds a non-copyable value gets a warning on that field (SCA1009). A `clones` line of the symbol list names such a class. See [Symbol List Format](symbol-list-format.md#clones).
 
 #### Temporary Copy
 

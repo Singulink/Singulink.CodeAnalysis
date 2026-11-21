@@ -102,13 +102,36 @@ void Register(List<LockGuard> list) { var other = list; _all = other; }   // SCA
 
 What this does not see is a member of the framework that keeps an argument which it takes as `object`, such as the state of `CancellationToken.UnsafeRegister(callback, state)`: nothing in its signature says so. The [conversion that hides the type](conversions.md) and [the symbol list](symbol-list-format.md) deal with that case.
 
+#### Lambdas
+
+**A lambda may keep what the delegate that it is made as keeps.** Nothing calls a lambda or an anonymous method but that delegate. Where the delegate's parameter is `[Kept]`, or its type is a type parameter, marked or not, every call through the delegate already takes the container to be kept. The lambda may then keep the container with no mark of its own:
+
+```cs
+public delegate void GuardsSink(List<LockGuard> guards);
+public delegate void KeptSink([Kept] List<LockGuard> guards);
+public delegate void MarkedSink<[NonCopyable] T>(T item);
+
+GuardsSink plain = list => _all = list;                      // SCA1032: callers of GuardsSink assume the list is still theirs
+KeptSink kept = list => _all = list;                         // OK: the delegate's parameter is [Kept]
+MarkedSink<List<LockGuard>> marked = list => _all = list;    // OK: a call through MarkedSink<T> takes the list to be kept
+Action<List<LockGuard>> action = list => _all = list;        // OK: the same for Action<T> and Func<T, TResult>
+var natural = (List<LockGuard> list) => { _all = list; };    // OK: its natural type is Action<List<LockGuard>>
+var byRef = (ref List<LockGuard> list) => { _all = list; };  // SCA1032: a method can forward its own list to it by 'ref'
+
+GuardsSink fromAction = new GuardsSink(action);              // SCA1040: Action<T> keeps, and GuardsSink's callers assume it does not
+```
+
+The delegate is the one that the lambda is made as where it stands: the type that it is converted to, or its natural type. A later conversion of that delegate to another delegate type is checked like a method group (SCA1040). A lambda of an expression tree is not made into a delegate where it stands, so it is judged as a method is.
+
+A lambda whose container parameter is passed by `ref`, `in` or `ref readonly` has a natural type that does not keep, unlike `Action<T>`. A caller that passes its own local that way gives it up. But a method that passes on its own parameter that way gets no warning, and the list would still belong to that method's caller. Behind a delegate whose parameter is of a type parameter, such as `delegate void RefSink<[NonCopyable] T>(ref T item)`, the lambda may keep, since such a method gets SCA1032 instead.
+
 ## Methods That Go On After They Return
 
 **A method that keeps running after it has returned keeps what it still uses.** An iterator runs its whole body after the call that creates it has returned. An `async` method has already returned to its caller when it runs what follows its first `await`.
 
 - An iterator keeps every container parameter that it uses.
 - An `async` method keeps every container parameter that it uses on a path after an `await`, including an `await foreach` or an `await using` (SCA1032).
-- A lambda and a local function are judged the same way.
+- A lambda and a local function are judged the same way, where the delegate that the lambda is made as does not keep what it is given (see [Lambdas](#lambdas)).
 - What an `async` method does before its first `await` runs during the call and keeps nothing.
 
 ```cs
@@ -135,9 +158,11 @@ The mark is in the signature, so it holds through an interface, an override and 
 
 ```cs
 ValueTask<LockGuard> Wrap(Task<LockGuard> task) => new(task);   // SCA1032 and SCA1030
+
+Func<Task<LockGuard>, ValueTask<LockGuard>> wrap = task => new(task);   // SCA1030: Func<T, TResult> keeps the task, which is still read
 ```
 
-It keeps the task (SCA1032) and reads from a stored one (SCA1030). No annotation changes the second, since a caller could pass the same field twice, and `[Kept]` only moves the question to the caller. Instead:
+It keeps the task (SCA1032) and reads from a stored one (SCA1030). A lambda made as a delegate that keeps, such as `Func<T, TResult>`, may keep the task, and gets only SCA1030. No annotation changes SCA1030, since a caller could pass the same field twice, and `[Kept]` only moves the question to the caller. Instead:
 
 - return the `Task<LockGuard>` as it is;
 - take the task through a `[MovedFrom] ref` parameter, which the caller has to own;

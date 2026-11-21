@@ -24,6 +24,9 @@
   - name: "SCA1008: MemberwiseClone of a Class That Can Be Derived From"
     href: sca1008.md
 
+  - name: "SCA1009: Non-copyable Value Behind a Base Class That Clones Itself"
+    href: sca1009.md
+
 - name: Declarations
   items:
   - name: "SCA1010: Field in a Copyable Struct or a Record"

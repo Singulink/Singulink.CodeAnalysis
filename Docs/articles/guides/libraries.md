@@ -9,15 +9,15 @@ If your library's public API has non-copyable structs, let the analyzer reach th
 - **Reference the analyzers package with `PrivateAssets="none"`,** or reference `Singulink.CodeAnalysis` as a normal reference: either one passes the analyzer on.
 - **The analyzer then reaches every project down the chain,** and checks there only what your library marked. In those projects, it does not check the ten built-in framework structs.
 - **A library that keeps the analyzer to itself** leaves the projects that use it without the analyzer, and a project that references both gets a warning about it (SCA1025).
-- **A [symbol list file](symbol-list.md) can ship with the library,** for the members of its own generics that are not marked.
+- **A [symbol list file](symbol-list.md) can ship with the library,** for the members of its own generics that are not marked, and for each class of the library that clones itself.
 
 ## Passing the Analyzer On
 
 ```xml
-<PackageReference Include="Singulink.CodeAnalysis.Analyzers" Version="0.6.0" PrivateAssets="none" />
+<PackageReference Include="Singulink.CodeAnalysis.Analyzers" Version="0.7.0" PrivateAssets="none" />
 ```
 
-Your package then depends on the analyzers package with all its assets (`<dependency id="Singulink.CodeAnalysis.Analyzers" version="0.6.0" include="All" />`), and a project that references your package gets the analyzer. If you reference `Singulink.CodeAnalysis` instead, keep it a normal reference and the same holds: the attributes package already passes the analyzers on.
+Your package then depends on the analyzers package with all its assets (`<dependency id="Singulink.CodeAnalysis.Analyzers" version="0.7.0" include="All" />`), and a project that references your package gets the analyzer. If you reference `Singulink.CodeAnalysis` instead, keep it a normal reference and the same holds: the attributes package already passes the analyzers on.
 
 #### Down the Chain
 
@@ -63,9 +63,25 @@ The package carries a [symbol list file](symbol-list.md) that is named after the
 | `Visible="false"` | Keeps the file out of the project tree of the user |
 | The name `NonCopyableSymbols.MyLibrary.txt` | Keeps the file apart from the project's own `NonCopyableSymbols.txt` and from the file of every other library |
 
-The `AdditionalFiles` line makes the library read its own file, wherever the file is. So a line that cannot be parsed, or that does not fit what it names, gets a warning in the library's own build (SCA1042), where its author sees it. In a project that uses the library, such a line gets a warning at the file in the package.
+The `AdditionalFiles` line makes the library read its own file, wherever the file is. So a line that cannot be parsed, or that does not fit what it names, gets a warning in the library's own build (SCA1042), where its author sees it. In a project that uses the library, such a line gets a warning at the file in the package. The exception is a line that names a member of the built-in framework symbol list for more type parameters than that list does: only the library's own build warns about it, and the line has no effect anywhere.
 
 For the project that uses the library, the file is a symbol list file like its own: all symbol list files are merged, with each other and with the [built-in framework symbol list](../rules/framework-symbol-list.md). A library that ships a symbol list file also [passes the analyzer on](#passing-the-analyzer-on), since the list is of no use without it.
+
+#### A Class That Clones Itself
+
+A class of the library that clones itself with `MemberwiseClone`, and that other projects may derive from, gets SCA1008 in the library's own build. The message of SCA1008 gives a `clones` line for the class. With that line in the shipped file, a class that derives from it in another project gets a warning for each field that holds a non-copyable value ([SCA1009](../diagnostics/sca1009.md)).
+
+Once the class has its line, SCA1008 also finds the members of the class that another project can call and that clone their object themselves, and asks for a line for each. With those lines, a project that calls such a member on an object of a derived class gets a warning there. The warnings are a help, not a proof: add a line as well for a member that clones its object through a private helper or a static helper, and for one that hands its object to other code, such as one that stores it in another object that it returns. A line for a private or internal member has no effect in the project that uses the library.
+
+Once the lines name every member that clones the object or hands it on, write the type line as `clones=complete`: a project that uses the library then gets no warning for the other members. The shipped file then has lines such as these:
+
+```text
+# NonCopyableSymbols.MyLibrary.txt
+T:MyLibrary.Options;clones=complete
+M:MyLibrary.Options.Copy;clones
+```
+
+Then suppress SCA1008 on the call: see [SCA1008](../diagnostics/sca1008.md#shipping-a-clones-line).
 
 What the lines of the file can say: [Symbol List](symbol-list.md).
 

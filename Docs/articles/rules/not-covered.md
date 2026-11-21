@@ -10,31 +10,40 @@ A few cases are left. Only one of them can happen in ordinary code. The rest eit
 
 | What | How likely you are to meet it | What to do |
 |---|---|---|
-| [A class that derives from a cloneable base class](#the-one-to-know-about) of an assembly that was not built with the analyzers | Ordinary code can hit this | Do not hold a non-copyable value in such a class |
+| [A class that derives from a base class of another library that clones itself](#the-one-to-know-about), where no symbol list file names the base class | Ordinary code can hit this | Add a `clones` line for the base class, or hold the value in an object that the class refers to |
 | [Unsafe code, pointers, reflection and `dynamic`](#code-that-steps-outside-the-languages-safety) | Only with code that steps outside the language's safety | Nothing new: these can break any guarantee of the language |
 | [Live views and value task sources](#apis-used-against-their-documentation) | Only if you ignore the API's documentation | Follow the documentation, as you would without the analyzers |
 | [A suppressed warning, a wrong symbol list entry, a `trusted` line](#what-you-vouched-for) | Only where you vouched for something | Vouch only for what you know to be true |
 | [Code that was built without the analyzers](#code-built-without-the-analyzers) | Only if a library was built without the analyzers and you vouched for it, or for the ten built-in types | Answer SCA1025 once, where it appears |
-| [Interceptors and a compiler newer than the tested ones](#rare-corners) | Rare | Know that the rules judge the method that is written at the call |
+| [Interceptors, an override that clones, and a compiler newer than the tested ones](#rare-corners) | Rare | Know that the rules judge the method that is written at the call |
 
 ## The One to Know About
 
-A base class can clone itself with <xref:System.Object.MemberwiseClone>. Take a base class of an assembly that was not built with the analyzers, and a class of yours that derives from it and holds a non-copyable value. The clone then copies that value in code that the analyzer does not see. <xref:System.Text.Encoding>, <xref:System.Globalization.CultureInfo> and <xref:System.Globalization.Calendar> are the framework's examples: each has a `Clone` that calls `MemberwiseClone`.
+A base class can clone itself with <xref:System.Object.MemberwiseClone>, and the clone copies every field of a class that derives from it. The analyzer cannot read the code of another assembly, so it goes by the symbol list. The [built-in framework symbol list](framework-symbol-list.md#classes-that-clone-themselves) names every class of the framework that clones itself, <xref:System.Text.Encoding>, <xref:System.Globalization.CultureInfo> and <xref:System.Globalization.Calendar> among them. A class of yours that derives from one of them gets a warning on each field that holds a non-copyable value, a <xref:System.Runtime.InteropServices.GCHandle> included (SCA1009).
+
+So does a non-copyable type that you bind to a generic class that derives from one, a generic class of another library included. It gets the warning where you bind it, and where such an object is used as a type that hands it to the clone.
+
+Two cases are left:
+
+- a base class of another library that clones itself, and that no symbol list file names;
+- a class of a framework newer than .NET 10 and .NET 11, the ones that the framework symbol list was checked against.
 
 ```cs
-// Encoding is of the framework, and its Clone calls MemberwiseClone
-sealed class GuardedEncoding : UTF8Encoding
+sealed class PinnedEncoding : UTF8Encoding       // the built-in framework symbol list says that Encoding clones itself
 {
-    private LockGuard _guard;                     // OK: a field of a class
+    private GCHandle _pinned;                    // SCA1009: Encoding's Clone copies the handle
 }
 
-var copy = (Encoding)encoding.Clone();         // no warning: for a GuardedEncoding, a second object with the same guard
+sealed class PinnedDocument : Contoso.Document   // Document of a library clones itself, and no symbol list file says so
+{
+    private GCHandle _pinned;                    // no warning: nothing tells the analyzer that Document clones itself
+}
 ```
 
 > [!WARNING]
-> Do not hold a non-copyable value in a class that derives from a base class that clones itself. The analyzer cannot see which base classes of other assemblies clone themselves, so it could only warn about every class that holds a non-copyable value and derives from any of them.
+> Before you hold a non-copyable value in a class that derives from a class of another library, find out whether the base class clones itself. If it does, add its `clones` line, such as `T:Contoso.Document;clones`, to a [symbol list file](../guides/symbol-list.md#a-base-class-that-clones-itself), and the field gets a warning. Or hold the value in an object of a class that your class refers to, which a clone shares.
 
-The analyzers warn about a call to `MemberwiseClone` in code that they check: see [SCA1005](../diagnostics/sca1005.md) and, for a class that another assembly can derive from, [SCA1008](../diagnostics/sca1008.md).
+The analyzer warns about a call to `MemberwiseClone` in code that it checks: see [SCA1005](../diagnostics/sca1005.md) and, for a class that another assembly can derive from, [SCA1008](../diagnostics/sca1008.md). The warnings behind a base class that clones itself are [SCA1009](../diagnostics/sca1009.md).
 
 ## Code That Steps Outside the Language's Safety
 
@@ -72,12 +81,20 @@ LockGuard* second = pointer;                  // no warning: the pointer is copi
 Buffer.MemoryCopy(pointer, target, size, size);   // no warning: the bytes of the guard are copied, and no rule sees that
 ```
 
-The same goes for the other ways to copy memory, such as <xref:System.Runtime.InteropServices.NativeMemory.Copy*?displayProperty=nameWithType>, <xref:System.Runtime.CompilerServices.Unsafe.CopyBlock*?displayProperty=nameWithType> and a span of bytes over the pointer.
+The same goes for the other ways to copy memory, such as <xref:System.Runtime.InteropServices.NativeMemory.Copy*?displayProperty=nameWithType>, <xref:System.Runtime.CompilerServices.Unsafe.CopyBlock*?displayProperty=nameWithType> and a span of bytes over the pointer. `__makeref` and <xref:System.TypedReference> are not followed either: `TypedReference.ToObject` hands out what the reference refers to as an `object`.
 
 #### Reflection and Dynamic
 
 - **Reflection** can read a field into a box, and an expression tree that a consumer evaluates by reflection gives a boxed copy of a captured value. Compiling or interpreting the tree uses the value in place.
-- **`dynamic`** reaches the result of any erasable container, a completion source and a task included: any `object` can be used as `dynamic`, and nothing checks `d.Task.Result` on it.
+- **`Delegate.Target`** hands out, as an `object`, what a method group was made on: `Action clear = list.Clear;` holds the list, and `Func<string> name = culture.ToString;` the culture. A method group is checked as a use of its member, so a method group of a member that clones gets the same warning as a call of it. Code that reads the target is not followed, as reflection is not.
+- **`dynamic`** reaches the result of any erasable container, a completion source and a task included: any `object` can be used as `dynamic`, and nothing checks `d.Task.Result` on it. Converting to `dynamic` a container, or an object whose class binds a non-copyable type behind a base class that clones itself, gets the same warning as converting it to `object`. What the dynamic binder does at run time with a member of a `dynamic` object is not checked:
+
+  ```cs
+  dynamic direct = culture;                                // SCA1009: hands the culture to code that can clone it
+  dynamic holder = new TaggedHolder { Culture = culture }; // no warning: what the binder does with the field is not checked
+  ```
+
+  Here `TaggedHolder` is a class with a field of type `TaggedCulture<LockGuard>`; the type `TaggedHolder` itself shows no binding.
 
 #### Layouts, Handles and IL
 
@@ -105,6 +122,7 @@ Where you tell the analyzer something, it takes your word:
 
 - **a suppressed warning**;
 - **a symbol list entry that is wrong**, such as an entry for a member that copies, or for a member of a type that hands itself to another holder (see [Symbol List Format](symbol-list-format.md));
+- **a `clones=complete` line for a class whose `clones` lines leave a member out:** the marker says that the lines name every member that clones the object or hands it on (see [Clones](symbol-list-format.md#clones));
 - **a `borrows` or a `new` entry, or a `trusted` line,** for code that was built without the analyzers.
 
 ## Code Built Without the Analyzers
@@ -137,6 +155,22 @@ Two things are left, and both are small:
 #### Interceptors
 
 A method with `[InterceptsLocation]` replaces the method that a call binds to after the analyzer has looked at the call. Every rule that goes by the method that is called judges the method that is written at the call: a `[NotNullRef]` parameter, <xref:Singulink.CodeAnalysis.NonCopyable.Move*?displayProperty=nameWithType>, `[Kept]` and the [symbol list](symbol-list-format.md).
+
+#### Records and Anonymous Types
+
+The `ToString`, `Equals` and `GetHashCode` that the compiler writes for a record or an anonymous type call the same member of each of their members, and the analyzer does not check those calls. That matters only for a class of another library whose own `ToString`, `Equals` or `GetHashCode` clones its object. The framework has no such class: a test checks that for .NET 10 and .NET 11.
+
+#### Overrides That Clone
+
+A symbol list line for a member says what that member's own code does. The analyzer does not follow a member of a base class into an override that a class below it adds. So where a class overrides a member with one that clones its object, a base class member that calls the overridden member runs the clone, and its use gets no warning:
+
+```cs
+// A library's culture class overrides NumberFormat with a getter that clones the culture, and a 'clones' line names the override
+var format = culture.NumberFormat;                            // SCA1009: the line says that the override clones
+var same = culture.GetFormat(typeof(NumberFormatInfo));       // no warning: CultureInfo.GetFormat reads NumberFormat, and so runs the override
+```
+
+A use of the override itself gets its warning. Do not clone the object in an override of a member that its base class calls. Where a library does, treat the base class members that run the override as members that clone.
 
 #### Compilers
 

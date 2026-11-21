@@ -104,6 +104,8 @@ class Holder
 }
 ```
 
+A class that derives from a class that clones itself, such as <xref:System.Text.Encoding>, gets a warning (SCA1009) on each field that holds a non-copyable value, since the call of `MemberwiseClone` is in code that the analyzer cannot read. So does a non-copyable type bound to a generic class that derives from one: see [SCA1009](../diagnostics/sca1009.md).
+
 A class with no such field also gets a warning when a derived class in the same compilation has one. Where another assembly can derive from it, the warning has an ID of its own (SCA1008). The exact cases, such as `MemberwiseClone(bool)` of <xref:System.MarshalByRefObject> and a method group of either, are in the articles of [SCA1005](../diagnostics/sca1005.md) and [SCA1008](../diagnostics/sca1008.md).
 
 </div>
