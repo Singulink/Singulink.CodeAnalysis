@@ -7,7 +7,8 @@ namespace Singulink.CodeAnalysis.Analyzers;
 
 /// <content>
 /// The check of the references of a compilation: an assembly that was not built with the analyzer and that references an assembly which
-/// declares a non-copyable type, or an assembly of checked code whose members let other code get at a non-copyable value (SCA1025), and
+/// declares a non-copyable type, or an assembly of checked code whose members let other code get at a non-copyable value, or of which
+/// only a reference assembly is given, so that what it references is not known (SCA1025), and
 /// the 'trusted' lines of the list files that vouch for one, or for an assembly whose class is the base class of a class of the
 /// compilation that holds a non-copyable value.
 /// </content>
@@ -113,6 +114,59 @@ public sealed partial class DoNotCopyValueAnalyzer
             }
         }
 
+        // A reference assembly names only the assemblies that its reachable members use: what its code uses inside its methods is not
+        // there. A build is given one for a project of the same solution, and for a package that has one. So the references of such an
+        // assembly say nothing of what it leaves out, and it is reported where a non-copyable value is within its reach: where another
+        // assembly that it can reference declares a non-copyable type, lets a value out or names it as a friend. An assembly of the
+        // framework is not one of these: it references no code of a project.
+        foreach (var assembly in referenced)
+        {
+            if (SymbolEqualityComparer.Default.Equals(assembly, compilation.Assembly) ||
+                AnalyzedAssemblies.IsAnalyzed(assembly) ||
+                usesNonCopyableTypes.Contains(assembly) ||
+                FrameworkAssemblies.Contains(assembly) ||
+                !IsReferenceAssembly(assembly))
+            {
+                continue;
+            }
+
+            IAssemblySymbol? within = null;
+
+            foreach (var other in referenced)
+            {
+                // The assembly cannot reference the compilation, which references it, nor an assembly that references it.
+                if (SymbolEqualityComparer.Default.Equals(other, assembly) ||
+                    SymbolEqualityComparer.Default.Equals(other, compilation.Assembly) ||
+                    (within is not null && string.CompareOrdinal(other.Name, within.Name) >= 0) ||
+                    DependsOn(other, assembly, new HashSet<IAssemblySymbol>(SymbolEqualityComparer.Default)))
+                {
+                    continue;
+                }
+
+                bool holds = declaring.ContainsKey(other);
+
+                if (!holds && AnalyzedAssemblies.IsAnalyzed(other))
+                {
+                    if (!exposing.TryGetValue(other, out var exposed))
+                        exposing[other] = exposed = FindExposedValue(other, types);
+
+                    holds = exposed is not null || IsFriend(other, assembly);
+                }
+
+                // The first one by its name is the one that the message names, the same in every build.
+                if (holds)
+                    within = other;
+            }
+
+            if (within is null)
+                continue;
+
+            usesNonCopyableTypes.Add(assembly);
+
+            if (!list.IsTrusted(assembly))
+                context.ReportDiagnostic(Diagnostic.Create(Rules.UncheckedReferenceAssembly, Location.None, assembly.Name, within.Name));
+        }
+
         hasEffect.UnionWith(usesNonCopyableTypes);
 
         foreach (var (file, text) in listFiles)
@@ -152,8 +206,8 @@ public sealed partial class DoNotCopyValueAnalyzer
 
         return named.All(AnalyzedAssemblies.IsAnalyzed)
             ? "the assembly was built with the analyzer, so it is checked code"
-            : "the assembly references no assembly that declares a non-copyable type, lets a non-copyable value out or names it as a " +
-              "friend, and the line answers no warning for a field behind a class of the assembly";
+            : "the assembly gets no warning for the line to answer: no non-copyable value of other code is within its reach, and no " +
+              "field of the compilation behind a class of the assembly holds one";
     }
 
     /// <summary>
@@ -349,6 +403,40 @@ public sealed partial class DoNotCopyValueAnalyzer
             Accessibility.Protected or Accessibility.ProtectedOrInternal => symbol.ContainingType is { IsSealed: false, IsStatic: false },
             _ => false,
         };
+    }
+
+    // Whether an assembly is a reference assembly: one that the compiler writes with no method bodies and with the reachable members
+    // alone, and marks with ReferenceAssemblyAttribute.
+    private static bool IsReferenceAssembly(IAssemblySymbol assembly)
+    {
+        foreach (var attribute in assembly.GetAttributes())
+        {
+            if (attribute.AttributeClass is { Name: "ReferenceAssemblyAttribute" } attributeClass &&
+                NonCopyableTypes.IsInNamespace(attributeClass, "System.Runtime.CompilerServices"))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // Whether an assembly references another one, directly or through the assemblies that it references.
+    private static bool DependsOn(IAssemblySymbol assembly, IAssemblySymbol other, HashSet<IAssemblySymbol> visited)
+    {
+        if (!visited.Add(assembly))
+            return false;
+
+        foreach (var module in assembly.Modules)
+        {
+            foreach (var reference in module.ReferencedAssemblySymbols)
+            {
+                if (SymbolEqualityComparer.Default.Equals(reference, other) || DependsOn(reference, other, visited))
+                    return true;
+            }
+        }
+
+        return false;
     }
 
     // Whether an assembly names another one in an InternalsVisibleTo attribute, by its simple name in any case: the attribute's argument is

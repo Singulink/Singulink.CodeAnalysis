@@ -32,8 +32,17 @@ internal static class Verify
     /// <param name="analyzed">Whether the library carries the marker of a build with the analyzer.</param>
     /// <param name="assemblyName">The simple name of the library.</param>
     /// <param name="libraries">Other libraries that the library references.</param>
+    public static Task<MetadataReference> CompileLibraryAsync(
+        ReferenceAssemblies referenceAssemblies, string source, bool analyzed, string assemblyName = "Library", params MetadataReference[] libraries) =>
+        CompileLibraryAsync(referenceAssemblies, source, analyzed, asReferenceAssembly: false, assemblyName, libraries);
+
+    /// <summary>
+    /// Compiles a library as <see cref="CompileLibraryAsync(ReferenceAssemblies, string, bool, string, MetadataReference[])"/> does, or
+    /// as the reference assembly that a build is given for a project of the same solution: with no method bodies and with the reachable
+    /// members alone, so that it names only the assemblies that those members use.
+    /// </summary>
     public static async Task<MetadataReference> CompileLibraryAsync(
-        ReferenceAssemblies referenceAssemblies, string source, bool analyzed, string assemblyName = "Library", params MetadataReference[] libraries)
+        ReferenceAssemblies referenceAssemblies, string source, bool analyzed, bool asReferenceAssembly, string assemblyName, params MetadataReference[] libraries)
     {
         var references = (await referenceAssemblies.ResolveAsync(LanguageNames.CSharp, CancellationToken.None))
             .Add(MetadataReference.CreateFromFile(typeof(NonCopyableAttribute).Assembly.Location))
@@ -49,7 +58,10 @@ internal static class Verify
             assemblyName, trees, references, new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, allowUnsafe: true));
 
         using var stream = new MemoryStream();
-        var result = compilation.Emit(stream);
+
+        var result = asReferenceAssembly
+            ? compilation.Emit(stream, options: new Microsoft.CodeAnalysis.Emit.EmitOptions(metadataOnly: true, includePrivateMembers: false))
+            : compilation.Emit(stream);
 
         if (!result.Success)
             throw new InvalidOperationException(string.Join(Environment.NewLine, result.Diagnostics));
@@ -1068,6 +1080,13 @@ internal static class Verify
             "code can copy a value of that type where it implements an interface, makes a delegate or reads an object of a type of checked " +
             $"code, which no call shows. Build '{assembly}' with the analyzer, or, if its code makes no copy of the non-copyable values that it " +
             $"gets at, vouch for it with the line 'A:{assembly};trusted' in a NonCopyableSymbols.txt file.");
+
+    public static DiagnosticResult UncheckedReferenceAssembly(string assembly, string within) =>
+        new DiagnosticResult(DiagnosticIds.UncheckedAssembly, DiagnosticSeverity.Warning).WithMessage(
+            $"Assembly '{assembly}' was not built with the analyzer, and this build is given only its reference assembly, which does not show " +
+            $"what its code uses: its code can use '{within}' and copy a non-copyable value that it gets at there, which no call shows. Build " +
+            $"'{assembly}' with the analyzer, or, if its code makes no copy of the non-copyable values that it gets at, vouch for it with the " +
+            $"line 'A:{assembly};trusted' in a NonCopyableSymbols.txt file.");
 
     public static DiagnosticResult UncheckedFriendAssembly(string assembly, string referenced) =>
         new DiagnosticResult(DiagnosticIds.UncheckedAssembly, DiagnosticSeverity.Warning).WithMessage(

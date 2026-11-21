@@ -342,12 +342,16 @@ marked type parameter is copied by generic code that names no type at all. Since
   code only where checked code hands it over, and that use gets its own warning (SCA1020, SCA1023 or SCA1024).
 - **Only the code of checked assemblies is read for this,** and only where an unchecked assembly references one: the values of
   unchecked code are that code's own business, as its types are.
-- **A project reference gives the compiler a reference assembly,** which has no method bodies and names only the assemblies that
-  its reachable members use. An unchecked project of the same solution that uses checked code only inside its methods has no
-  reference to it there, and gets no SCA1025, from the check of the declaring assemblies or from this one. The analyzer cannot
-  read the implementation assembly, and making every project compile against implementation assemblies
-  (`CompileUsingReferenceAssemblies`) would slow every incremental build, so this is documented and left: see SCA1025, "Project
-  References". A package whose `lib` assembly is referenced is not affected (QA round 13).
+- **A reference assembly does not show what its code uses.** A project reference gives the compiler one: it has no method bodies
+  and names only the assemblies that its reachable members use, so an unchecked project of the same solution that uses checked
+  code only inside its methods has no reference to it there (QA round 13). The compiler marks such an assembly with
+  `ReferenceAssemblyAttribute`, so the analyzer knows when a reference list is one of these. Since 0.7.2 an unchecked assembly
+  that is given as a reference assembly gets SCA1025 where a non-copyable value is within its reach: where another referenced
+  assembly declares a non-copyable type, lets a value out or names it as a friend, and does not itself reference the unchecked
+  one, which rules out that it is used there. The compilation's own types are never within reach of an assembly that it references.
+  The assemblies of the framework are left out by name, as for a base class. This is the cautious reading: the assembly may use
+  nothing of the kind, and the `trusted` line says so. Making every project compile against implementation assemblies
+  (`CompileUsingReferenceAssemblies`) would show the real references, and would slow every incremental build.
 - **Internal members are not imported from a referenced assembly,** so what they let out cannot be seen. An unchecked assembly that
   checked code names in an `InternalsVisibleTo` attribute can use them, and gets the warning whatever that code holds. This also
   covers an internal `[NonCopyable]` struct, which the check of the declaring assemblies cannot see either.

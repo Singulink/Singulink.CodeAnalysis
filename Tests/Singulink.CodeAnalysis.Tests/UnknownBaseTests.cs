@@ -247,7 +247,7 @@ public class UnknownBaseTests
             1,
             15,
             "Docs",
-            "the assembly references no assembly that declares a non-copyable type, lets a non-copyable value out or names it as a friend, and the line answers no warning for a field behind a class of the assembly"));
+            "the assembly gets no warning for the line to answer: no non-copyable value of other code is within its reach, and no field of the compilation behind a class of the assembly holds one"));
 
         await test.RunAsync();
     }
@@ -447,7 +447,7 @@ public class UnknownBaseTests
                 1,
                 15,
                 "Docs",
-                "the assembly references no assembly that declares a non-copyable type, lets a non-copyable value out or names it as a friend, and the line answers no warning for a field behind a class of the assembly"));
+                "the assembly gets no warning for the line to answer: no non-copyable value of other code is within its reach, and no field of the compilation behind a class of the assembly holds one"));
         }
 
         await test.RunAsync();

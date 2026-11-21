@@ -376,6 +376,12 @@ internal static class Rules
         "shows. Build '{0}' with the analyzer, or, if its code makes no copy of the non-copyable values that it gets at, vouch for it " +
         "with the line 'A:{0};trusted' in a NonCopyableSymbols.txt file.";
 
+    private const string UncheckedReferenceAssemblyMessage =
+        "Assembly '{0}' was not built with the analyzer, and this build is given only its reference assembly, which does not show what its " +
+        "code uses: its code can use '{1}' and copy a non-copyable value that it gets at there, which no call shows. Build '{0}' with the " +
+        "analyzer, or, if its code makes no copy of the non-copyable values that it gets at, vouch for it with the line 'A:{0};trusted' in " +
+        "a NonCopyableSymbols.txt file.";
+
     private const string UncheckedAssemblyDescription =
         "A call is judged by the member that it binds to, so code of an assembly that was not built with the analyzer and that runs behind " +
         "a type of checked code or of the framework is not seen: an implementation of an interface or of an abstract class, a delegate or a " +
@@ -386,8 +392,10 @@ internal static class Rules
         "what is bound to a marked type parameter, the reference that counts is one to an assembly of checked code whose members let " +
         "other code get at such a value: a field, a member that returns a reference or a container, or a member that other code can " +
         "implement and that is given one. The internal members of an assembly are not seen where it is referenced, so an assembly that " +
-        "checked code names in an InternalsVisibleTo attribute gets the warning whatever that code holds. A line 'A:<name>;trusted' of a " +
-        "symbol list file vouches for one assembly.";
+        "checked code names in an InternalsVisibleTo attribute gets the warning whatever that code holds. A reference assembly, which a " +
+        "build is given for a project of the same solution, names only the assemblies that its reachable members use, so what its code " +
+        "uses is not known: such an assembly gets the warning where another assembly that it can reference declares a non-copyable type " +
+        "or lets a value out. A line 'A:<name>;trusted' of a symbol list file vouches for one assembly.";
 
     private const string SafeListTrustedHasNoEffectMessage =
         "This line of the symbol list file vouches for assembly '{0}'. It has no effect, because {1}.";
@@ -1173,6 +1181,13 @@ internal static class Rules
         UncheckedAssemblyDescription,
         WellKnownDiagnosticTags.CompilationEnd);
 
+    public static readonly DiagnosticDescriptor UncheckedReferenceAssembly = Create(
+        DiagnosticIds.UncheckedAssembly,
+        "Build an assembly that uses a non-copyable type with the analyzer",
+        UncheckedReferenceAssemblyMessage,
+        UncheckedAssemblyDescription,
+        WellKnownDiagnosticTags.CompilationEnd);
+
     public static readonly DiagnosticDescriptor RequiresCopyableMember = Create(
         DiagnosticIds.RequiresCopyable,
         "Do not use a member that requires a copyable type with a non-copyable type",
@@ -1733,6 +1748,7 @@ internal static class Rules
         UncheckedAssembly,
         UncheckedAssemblyOfExposedValue,
         UncheckedFriendAssembly,
+        UncheckedReferenceAssembly,
         RequiresCopyableMember,
         UntypedCollectionConversion,
         UntypedCollectionVariance,
