@@ -14,10 +14,10 @@ If your library's public API has non-copyable structs, let the analyzer reach th
 ## Passing the Analyzer On
 
 ```xml
-<PackageReference Include="Singulink.CodeAnalysis.Analyzers" Version="0.7.1" PrivateAssets="none" />
+<PackageReference Include="Singulink.CodeAnalysis.Analyzers" Version="0.7.2" PrivateAssets="none" />
 ```
 
-Your package then depends on the analyzers package with all its assets (`<dependency id="Singulink.CodeAnalysis.Analyzers" version="0.7.1" include="All" />`), and a project that references your package gets the analyzer. If you reference `Singulink.CodeAnalysis` instead, keep it a normal reference and the same holds: the attributes package already passes the analyzers on.
+Your package then depends on the analyzers package with all its assets (`<dependency id="Singulink.CodeAnalysis.Analyzers" version="0.7.2" include="All" />`), and a project that references your package gets the analyzer. If you reference `Singulink.CodeAnalysis` instead, keep it a normal reference and the same holds: the attributes package already passes the analyzers on.
 
 #### Down the Chain
 

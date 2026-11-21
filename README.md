@@ -235,14 +235,14 @@ There are two packages:
 Install **`Singulink.CodeAnalysis`** if you want to use the attributes from the package:
 
 ```xml
-<PackageReference Include="Singulink.CodeAnalysis" Version="0.7.1" />
+<PackageReference Include="Singulink.CodeAnalysis" Version="0.7.2" />
 ```
 
 Install **`Singulink.CodeAnalysis.Analyzers`** alone if you declare the attributes yourself (see [Marking a Struct of Your Own](#marking-a-struct-of-your-own) above) and want
 no runtime dependency:
 
 ```xml
-<PackageReference Include="Singulink.CodeAnalysis.Analyzers" Version="0.7.1" PrivateAssets="all" />
+<PackageReference Include="Singulink.CodeAnalysis.Analyzers" Version="0.7.2" PrivateAssets="all" />
 ```
 
 In a project that references one of the two packages directly, the analyzers also treat ten framework structs as non-copyable, such as
