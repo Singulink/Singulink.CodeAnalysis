@@ -94,7 +94,7 @@ The line may stand in the project's symbol list file or in one that comes with t
 
 Write the type line as `clones=complete` only where the lines name every member that clones the object or hands it on. Such a line counts from any file, and a plain `clones` line elsewhere does not undo it: see [Clones](../rules/symbol-list-format.md#clones).
 
-A class of a library that was not built with the analyzers gets the same warning until a line says what the class does. Where you know that it never clones its objects, say so with `T:Contoso.Document;clones=none`: see [SCA1009](../diagnostics/sca1009.md#a-base-class-that-is-not-known).
+A class of yours that derives from a class of a library that was not built with the analyzers gets the same warning on a field until a line says what the base class does. Where you know that the base class never clones its objects, say so with `T:Contoso.Document;clones=none`: see [SCA1009](../diagnostics/sca1009.md#a-base-class-that-is-not-known).
 
 ## Code Not Built With the Analyzer
 

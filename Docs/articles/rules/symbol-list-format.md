@@ -12,7 +12,7 @@ A symbol list file tells the analyzer what it cannot see for itself in code that
 - **Entries are exact per overload.** There is no entry for every member of a type, and no wildcard.
 - **The files:** the project's own symbol list files and those that come with a library are read alike and merged with the [built-in framework symbol list](framework-symbol-list.md).
 - **Where two entries disagree,** the one that claims less applies, even between a project's file and a library's. Two exceptions: `copyable` overrides the framework symbol list, and `clones=complete` counts where any line for the class says it, in any file.
-- **Three kinds of line of a symbol list file get a warning (SCA1042):** a line that cannot be parsed; a `noncopyable`, `copyable`, `trusted` or `clones` line that has no effect; and a line that says a member which clones makes no copy. The analyzer's own tests check the framework symbol list, so it never gets one.
+- **Three kinds of line of a symbol list file get a warning (SCA1042):** a line that cannot be parsed; a `noncopyable`, `copyable`, `trusted`, `clones` or `clones=none` line that has no effect; and a line that says a member which clones makes no copy. The analyzer's own tests check the framework symbol list, so it never gets one.
 
 ## Lines
 
@@ -150,7 +150,9 @@ A `copyable` line gets a warning (SCA1042), and does nothing, where it names:
 
 #### Trusted
 
-An assembly marked `trusted` was not built with the analyzer, and its code makes no copy of the non-copyable values that it gets at. That holds even where its code runs behind a type of checked code or of the framework. The line turns off SCA1025 for the assembly, and the warning on a field of a class of the project that derives from one of its classes (see [SCA1009](../diagnostics/sca1009.md#a-base-class-that-is-not-known)). It changes nothing else: its members stay unchecked code for every other rule. The name is matched without regard to case, as the runtime binds it. See [SCA1025](../diagnostics/sca1025.md).
+An assembly marked `trusted` was not built with the analyzer, and its code makes no copy of the non-copyable values that it gets at. That holds even where its code runs behind a type of checked code or of the framework. The name is matched without regard to case, as the runtime binds it.
+
+The line turns off two warnings for the assembly: SCA1025, and SCA1009 on a field of a class of the project that derives from one of its classes (see [SCA1009](../diagnostics/sca1009.md#a-base-class-that-is-not-known)). It changes nothing else: its members stay unchecked code for every other rule. See [SCA1025](../diagnostics/sca1025.md).
 
 #### Clones
 
@@ -241,13 +243,14 @@ An entry that names something the project does not reference is ignored, so one 
 | A line that cannot be parsed | Always; it is then ignored |
 | `copyable` | It has no effect |
 | `trusted` | It has no effect |
+| `clones=none` | It has no effect |
 | `clones` | It names no type, method, property or event, or has no effect |
 | A member line of any marker that names an accessor, such as `M:Contoso.Document.get_Title` or `M:Contoso.Document.add_Changed(System.EventHandler)` | Always: the analyzer looks up every use of an accessor under its property or event, so write the `P:` or `E:` line instead |
 | A member line with no marker, `new`, `borrows`, `drains` or `owned` | A `clones` line names the member; the line is left out |
 
 - **A `noncopyable` line that names no type** gets a warning because a mistyped ID would leave the type copyable in a build that looks clean. A project that does not reference the type should take the line out of its file.
 - **A `copyable` line has no effect** in the cases that [Copyable](#copyable) gives.
-- **A `trusted` line has no effect** for an assembly that the project does not reference, for the project's own, and for one that was built with the analyzer. Nor does it for an assembly that does neither of two things: reference an assembly which declares a non-copyable type, or declare a class that a class of the project derives from with a non-copyable value in a field.
+- **A `trusted` line has no effect** for an assembly that the project does not reference, for the project's own, and for one that was built with the analyzer. Nor does it for an assembly that references no assembly which declares a non-copyable type, unless a class of the project that derives from one of its classes holds a non-copyable value in a field.
 - **A `clones=none` line has no effect** for a class of the project, of the framework or of a library that was built with the analyzers, since the analyzer already knows what those do. Nor does it for a class that is static or sealed, since no class can derive from it, or where a `clones` line names the class or a class above it.
 - **A `clones` line has no effect** for a class that is static, or sealed and not generic, since no class can derive from it and no type can be bound to it. A line that names no type, no method, no property or no event gets a warning as a `noncopyable` line does, since a mistyped ID would leave the fields of every derived class with no warning. A line that repeats one of the built-in framework symbol list, or that names a class whose base class has a line, gets no warning: it has its effect already, and with `clones=complete` it covers the members of the class.
 
@@ -284,6 +287,7 @@ Where two entries for the same ID disagree, the one that claims less applies, wh
 | `clones` and any other line for the same class | Both: `clones` is kept apart, and nothing takes it away |
 | `clones` and a line that says the same method makes no copy | `clones`: the other line is left out, with a warning |
 | `clones=complete` and `clones` alone, for the same class | `clones=complete`: a plain `clones` line says nothing about completeness, and nothing takes `complete` away |
+| `clones=none`, and `clones` for the same class or a class above it | `clones`: the `clones=none` line has no effect, and gets a warning |
 
 So a file can add entries and can tighten a built-in one, but cannot loosen it. Two kinds of line do loosen: `copyable`, and `clones=complete`, by which you vouch for the members of a class.
 

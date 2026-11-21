@@ -13,7 +13,7 @@ A few cases are left, and none of them comes up in ordinary code. Each either ca
 | [Unsafe code, pointers, reflection and `dynamic`](#code-that-steps-outside-the-languages-safety) | Only with code that steps outside the language's safety | Nothing new: these can break any guarantee of the language |
 | [Live views and value task sources](#apis-used-against-their-documentation) | Only if you ignore the API's documentation | Follow the documentation, as you would without the analyzers |
 | [A suppressed warning, a wrong symbol list entry, a `trusted` line](#what-you-vouched-for) | Only where you vouched for something | Vouch only for what you know to be true |
-| [Code that was built without the analyzers](#code-built-without-the-analyzers) | Only if a library was built without the analyzers and you vouched for it, or for the ten built-in types | Answer SCA1025 once, where it appears |
+| [Code that was built without the analyzers](#code-built-without-the-analyzers) | Only if a library was built without the analyzers and you vouched for it | Answer SCA1025 once, where it appears |
 | [Interceptors, an override that clones, and a framework or compiler newer than the tested ones](#rare-corners) | Rare | Know that the rules judge the method that is written at the call |
 
 ## Code That Steps Outside the Language's Safety
@@ -106,7 +106,7 @@ A third-party library does not void the protection:
 - **Any other assembly** cannot be handed a non-copyable value directly to copy it silently. Passed by reference, in a container, in a view or through a pointer, the use gets a warning until you vouch for the member (SCA1024). Passed through a generic, it gets a warning until the member is on the [symbol list](symbol-list-format.md) (SCA1020).
 - **A container that such an assembly hands out** counts as stored.
 - **A base class of such an assembly** may clone itself, and the analyzer cannot tell. A class of yours that derives from it gets a warning on each field that holds a non-copyable value, until a symbol list line says whether the base class clones itself ([SCA1009](../diagnostics/sca1009.md#a-base-class-that-is-not-known)).
-- **An assembly that was not built with the analyzers and uses your non-copyable types** itself gets a warning, once ([SCA1025](../diagnostics/sca1025.md)).
+- **An assembly that was not built with the analyzers** itself gets a warning, once, where it uses your non-copyable types or can get at a non-copyable value through a member of your code ([SCA1025](../diagnostics/sca1025.md)).
 
 A library that uses non-copyable types is usually built with the analyzers. The attributes package brings them with it, and passes them on unless a library keeps them private (see [Sharing Your Library](../guides/libraries.md)).
 
@@ -116,10 +116,7 @@ So for a copy to go unseen, three things have to come together:
 2. **Its code breaks the rule of `[NonCopyable]`:** it copies a value of the type.
 3. **Your project vouched for it** with a `trusted` or a `clones=none` line, or suppressed the warning about it (SCA1025 or SCA1009).
 
-Two things are left, and both are small:
-
-- **A value that you pass by value belongs to the callee from then on.** That is a move, and it is the same for every callee, analyzed or not.
-- **The ten framework structs that the analyzers treat as non-copyable,** such as <xref:System.Threading.SpinLock> and <xref:System.Runtime.InteropServices.GCHandle>, get no SCA1025. That warning works by spotting an unanalyzed assembly that references the assembly which declares your non-copyable type. Every assembly references the framework, so for the framework's own types that reference says nothing. If an unanalyzed library copies a `SpinLock` or a `GCHandle` that it reached through an interface of yours, you get no warning.
+One thing is left, and it is small: a value that you pass by value belongs to the callee from then on. That is a move, and it is the same for every callee, analyzed or not.
 
 [Code Not Built With the Analyzer](unchecked-code.md#what-stays-out-of-reach) lists the ways in which such a library can reach a value.
 

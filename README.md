@@ -44,7 +44,7 @@ in two places. A type that the project takes out with a [`copyable` line of a sy
 and the guarantee does not cover it. Nothing guarantees that a value is disposed, or disposed only once: a guard should clear itself in `Dispose`, so that a second call on the
 same instance does nothing. A `readonly struct` guard cannot do that.
 
-**What it cannot see is small.** It takes unsafe code, reflection or `dynamic`, an API used against its documentation, or something that
+**What it cannot see is small.** What is left takes unsafe code, reflection or `dynamic`, an API used against its documentation, or something that
 you vouched for. See
 [What Is Not Covered](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/rules/not-covered.html).
 
