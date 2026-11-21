@@ -106,7 +106,7 @@ A third-party library does not void the protection:
 - **Any other assembly** cannot be handed a non-copyable value directly to copy it silently. Passed by reference, in a container, in a view or through a pointer, the use gets a warning until you vouch for the member (SCA1024). Passed through a generic, it gets a warning until the member is on the [symbol list](symbol-list-format.md) (SCA1020).
 - **A container that such an assembly hands out** counts as stored.
 - **A base class of such an assembly** may clone itself, and the analyzer cannot tell. A class of yours that derives from it gets a warning on each field that holds a non-copyable value, until a symbol list line says whether the base class clones itself ([SCA1009](../diagnostics/sca1009.md#a-base-class-that-is-not-known)).
-- **An assembly that was not built with the analyzers** itself gets a warning, once, where it uses your non-copyable types or can get at a non-copyable value through a member of your code ([SCA1025](../diagnostics/sca1025.md)).
+- **An assembly that was not built with the analyzers** itself gets a warning, once, where it uses your non-copyable types or can get at a non-copyable value through a member of your code ([SCA1025](../diagnostics/sca1025.md)). For a project of your own solution with the analyzers turned off, that warning can be missing: see [Project References](../diagnostics/sca1025.md#project-references).
 
 A library that uses non-copyable types is usually built with the analyzers. The attributes package brings them with it, and passes them on unless a library keeps them private (see [Sharing Your Library](../guides/libraries.md)).
 
