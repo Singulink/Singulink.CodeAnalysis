@@ -1069,6 +1069,20 @@ internal static class Verify
             $"code, which no call shows. Build '{assembly}' with the analyzer, or, if its code makes no copy of the non-copyable values that it " +
             $"gets at, vouch for it with the line 'A:{assembly};trusted' in a NonCopyableSymbols.txt file.");
 
+    public static DiagnosticResult UncheckedFriendAssembly(string assembly, string referenced) =>
+        new DiagnosticResult(DiagnosticIds.UncheckedAssembly, DiagnosticSeverity.Warning).WithMessage(
+            $"Assembly '{assembly}' was not built with the analyzer, and '{referenced}' names it in an InternalsVisibleTo attribute, so it can use " +
+            $"the internal members of '{referenced}', which this build does not see: its code can copy a non-copyable value that it gets at " +
+            $"there, which no call shows. Build '{assembly}' with the analyzer, or, if its code makes no copy of the non-copyable values that it " +
+            $"gets at, vouch for it with the line 'A:{assembly};trusted' in a NonCopyableSymbols.txt file.");
+
+    public static DiagnosticResult UncheckedAssemblyOfExposedValue(string assembly, string referenced, string member, string type) =>
+        new DiagnosticResult(DiagnosticIds.UncheckedAssembly, DiagnosticSeverity.Warning).WithMessage(
+            $"Assembly '{assembly}' was not built with the analyzer, and it references '{referenced}', where '{member}' lets other code get at " +
+            $"a value of non-copyable type '{type}': its code can copy such a value where it implements an interface, makes a delegate or " +
+            $"reads an object of a type of checked code, which no call shows. Build '{assembly}' with the analyzer, or, if its code makes no " +
+            $"copy of the non-copyable values that it gets at, vouch for it with the line 'A:{assembly};trusted' in a NonCopyableSymbols.txt file.");
+
     public static DiagnosticResult SafeListTrustedHasNoEffect(int line, int startColumn, int endColumn, string assembly, string reason) =>
         new DiagnosticResult(DiagnosticIds.SafeListLine, DiagnosticSeverity.Warning)
             .WithSpan(ListFileName, line, startColumn, line, endColumn)

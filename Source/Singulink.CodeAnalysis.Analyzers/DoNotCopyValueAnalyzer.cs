@@ -69,7 +69,7 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
             // the end of the compilation by the check of the 'trusted' lines.
             var trustedForBase = new ConcurrentDictionary<IAssemblySymbol, bool>(SymbolEqualityComparer.Default);
 
-            context.RegisterCompilationEndAction(context => AnalyzeUncheckedReferences(context, list, listFiles, trustedForBase));
+            context.RegisterCompilationEndAction(context => AnalyzeUncheckedReferences(context, list, types, listFiles, trustedForBase));
             context.RegisterSymbolAction(context => AnalyzeCloningBases(context, types, trustedForBase), SymbolKind.NamedType);
             context.RegisterSyntaxNodeAction(context => AnalyzeCloningBinding(context, types), SyntaxKind.ClassDeclaration);
 

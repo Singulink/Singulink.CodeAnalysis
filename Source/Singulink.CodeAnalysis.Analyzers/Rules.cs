@@ -364,13 +364,30 @@ internal static class Rules
         "call shows. Build '{0}' with the analyzer, or, if its code makes no copy of the non-copyable values that it gets at, vouch for it " +
         "with the line 'A:{0};trusted' in a NonCopyableSymbols.txt file.";
 
+    private const string UncheckedAssemblyOfExposedValueMessage =
+        "Assembly '{0}' was not built with the analyzer, and it references '{1}', where '{2}' lets other code get at a value of non-copyable " +
+        "type '{3}': its code can copy such a value where it implements an interface, makes a delegate or reads an object of a type of " +
+        "checked code, which no call shows. Build '{0}' with the analyzer, or, if its code makes no copy of the non-copyable values that it " +
+        "gets at, vouch for it with the line 'A:{0};trusted' in a NonCopyableSymbols.txt file.";
+
+    private const string UncheckedFriendAssemblyMessage =
+        "Assembly '{0}' was not built with the analyzer, and '{1}' names it in an InternalsVisibleTo attribute, so it can use the internal " +
+        "members of '{1}', which this build does not see: its code can copy a non-copyable value that it gets at there, which no call " +
+        "shows. Build '{0}' with the analyzer, or, if its code makes no copy of the non-copyable values that it gets at, vouch for it " +
+        "with the line 'A:{0};trusted' in a NonCopyableSymbols.txt file.";
+
     private const string UncheckedAssemblyDescription =
         "A call is judged by the member that it binds to, so code of an assembly that was not built with the analyzer and that runs behind " +
         "a type of checked code or of the framework is not seen: an implementation of an interface or of an abstract class, a delegate or a " +
         "function pointer that it made, an object of a class that holds a non-copyable value. Such code can use a non-copyable type only " +
         "where its assembly references the assembly that declares it, so that reference gets a warning, once for each assembly. A type " +
         "counts that a [NonCopyable] mark or a 'noncopyable' line of a symbol list file makes non-copyable, and that no 'copyable' line takes " +
-        "out; the built-in non-copyable types of the framework do not. A line 'A:<name>;trusted' of a symbol list file vouches for one assembly.";
+        "out. The built-in non-copyable types of the framework are declared where every assembly references them, so for them, and for " +
+        "what is bound to a marked type parameter, the reference that counts is one to an assembly of checked code whose members let " +
+        "other code get at such a value: a field, a member that returns a reference or a container, or a member that other code can " +
+        "implement and that is given one. The internal members of an assembly are not seen where it is referenced, so an assembly that " +
+        "checked code names in an InternalsVisibleTo attribute gets the warning whatever that code holds. A line 'A:<name>;trusted' of a " +
+        "symbol list file vouches for one assembly.";
 
     private const string SafeListTrustedHasNoEffectMessage =
         "This line of the symbol list file vouches for assembly '{0}'. It has no effect, because {1}.";
@@ -1142,6 +1159,20 @@ internal static class Rules
         UncheckedAssemblyDescription,
         WellKnownDiagnosticTags.CompilationEnd);
 
+    public static readonly DiagnosticDescriptor UncheckedAssemblyOfExposedValue = Create(
+        DiagnosticIds.UncheckedAssembly,
+        "Build an assembly that uses a non-copyable type with the analyzer",
+        UncheckedAssemblyOfExposedValueMessage,
+        UncheckedAssemblyDescription,
+        WellKnownDiagnosticTags.CompilationEnd);
+
+    public static readonly DiagnosticDescriptor UncheckedFriendAssembly = Create(
+        DiagnosticIds.UncheckedAssembly,
+        "Build an assembly that uses a non-copyable type with the analyzer",
+        UncheckedFriendAssemblyMessage,
+        UncheckedAssemblyDescription,
+        WellKnownDiagnosticTags.CompilationEnd);
+
     public static readonly DiagnosticDescriptor RequiresCopyableMember = Create(
         DiagnosticIds.RequiresCopyable,
         "Do not use a member that requires a copyable type with a non-copyable type",
@@ -1700,6 +1731,8 @@ internal static class Rules
         UnlistedMemberThatClones,
         UncheckedMember,
         UncheckedAssembly,
+        UncheckedAssemblyOfExposedValue,
+        UncheckedFriendAssembly,
         RequiresCopyableMember,
         UntypedCollectionConversion,
         UntypedCollectionVariance,

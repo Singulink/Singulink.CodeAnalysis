@@ -318,9 +318,25 @@ an override, a delegate that the unchecked assembly made. A call is judged by th
 seen. Code can name a type only where its assembly references the assembly that declares the type, so that reference is what gets the
 warning (SCA1025), once per assembly, with the `trusted` line of a symbol list file as the answer.
 
-The ten built-in non-copyable types never count for SCA1025, since every assembly references the framework. A struct of unchecked code
-that only a symbol list file makes non-copyable does not count either: a line for a struct of the framework would otherwise give a
-warning on every assembly of the framework.
+The reference to a declaring assembly says nothing of three kinds of value. The ten built-in non-copyable types are declared by the
+framework, which every assembly references. A struct of unchecked code that only a symbol list file makes non-copyable is the same: a
+line for a struct of the framework would otherwise give a warning on every assembly of the framework. And a value that is bound to a
+marked type parameter is copied by generic code that names no type at all. Since 0.7.1 these are covered from the other side:
+
+- **What unchecked code needs is a way to the value,** and the ways that no call shows all start at a member of checked code. So an
+  unchecked assembly that references an assembly of checked code whose members let other code get at such a value gets SCA1025 too,
+  with a text that names the member.
+- **A member lets a value out in three ways.** It is a field that carries one. It returns a reference to one, or a container or
+  another object that carries one. Or other code can implement it, as a member of an interface, a virtual member or a delegate, and
+  it is given a reference or a container. A base class or an interface that carries a value counts for its type. What a member of
+  checked code returns or takes by value does not count: that is a new value, or a move.
+- **A framework generic that is bound to the value needs no entry here.** `StrongBox<SpinLock>` or `SpinLock[]` reaches unchecked
+  code only where checked code hands it over, and that use gets its own warning (SCA1020, SCA1023 or SCA1024).
+- **Only the code of checked assemblies is read for this,** and only where an unchecked assembly references one: the values of
+  unchecked code are that code's own business, as its types are.
+- **Internal members are not imported from a referenced assembly,** so what they let out cannot be seen. An unchecked assembly that
+  checked code names in an `InternalsVisibleTo` attribute can use them, and gets the warning whatever that code holds. This also
+  covers an internal `[NonCopyable]` struct, which the check of the declaring assemblies cannot see either.
 
 ## Symbol List
 
@@ -652,8 +668,6 @@ leaving one open, it is here.
 - **The members that the compiler writes for a record or an anonymous type.** Their `ToString`, `Equals` and `GetHashCode` call the
   same member of each of their members, and those calls are not checked. It is left off the page: it takes a class of a library
   whose own `ToString`, `Equals` or `GetHashCode` clones its object, and the framework has none, which two tests check.
-- **Unchecked code behind a checked type, for the ten built-in types.** SCA1025 works by the reference to the declaring assembly, and
-  every assembly references the framework.
 - **What the unsafe classes allow.** The symbol list says of a member only that it makes no copy. The two rules that ask what can throw
   are the exception: they follow a null reference.
 - **A handle rebuilt from its value.** The analyzer cannot follow an `IntPtr`.
