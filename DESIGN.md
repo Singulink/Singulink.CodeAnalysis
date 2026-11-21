@@ -349,12 +349,25 @@ marked type parameter is copied by generic code that names no type at all. These
   a non-copyable type, lets a value out or names it as a friend, and does not itself reference the unchecked one, which rules out
   that it is used there. The message says which of the three it is. The compilation's own types are never within reach of an
   assembly that it references. The assemblies of the framework are left out by name, as for a base class.
-- **That check is the cautious reading, in three ways.** The assembly may use nothing of the other one, and the `trusted` line
-  says so. The other assembly can be built on the unchecked one and use it only inside its methods: its own reference assembly
-  does not show that, so the unchecked one is reported though it cannot use the other. And a package that comes with a reference
-  assembly is judged like a project, though it cannot use a project of the solution. Making every project compile against
-  implementation assemblies (`CompileUsingReferenceAssemblies`) would show the real references, and would slow every incremental
-  build.
+- **A package is judged by what it depends on.** The code of a package can use only what it was compiled against, and NuGet
+  gives a project the packages that a package names as its dependencies, and theirs. The targets file of the package gives the
+  compiler the assets file that NuGet writes for the project (`project.assets.json`) as an additional file, and `PackageGraph`
+  reads from it what each package depends on. A package that comes with a reference assembly is reported only for an assembly of
+  a package in its chain of dependencies, or of its own package. Where the chain has a project of the solution, or an ID that
+  the file has no entry for, the file does not name the assemblies, and the package is also reported for an assembly that is of
+  no package.
+- **That rests on one assumption: a package names what it is compiled against as its dependencies.** One that does not, such as
+  one that references a library with private assets, fails in every project that lacks the library, and is not reported.
+- **A project is not judged by the file.** The file names the assembly of a project by a placeholder, and it leaves out what
+  the project references with private assets. Every target of the file is read, as the compilation does not say which one is its
+  own: an assembly is out of reach only where it is in every target that has the package. A build with no such file, or with one
+  that cannot be read, judges every reference assembly like a project's. The file is read by a small reader of its own, as an
+  analyzer cannot count on a JSON library in every host.
+- **For a project the check is the cautious reading, in two ways.** The assembly may use nothing of the other one, and the
+  `trusted` line says so. The other assembly can be built on the unchecked one and use it only inside its methods: its own
+  reference assembly does not show that, so the unchecked one is reported though it cannot use the other. Making every project
+  compile against implementation assemblies (`CompileUsingReferenceAssemblies`) would show the real references, and would slow
+  every incremental build.
 - **Internal members are not imported from a referenced assembly,** so what they let out cannot be seen. An unchecked assembly that
   checked code names in an `InternalsVisibleTo` attribute can use them, and gets the warning whatever that code holds. This also
   covers an internal `[NonCopyable]` struct, which the check of the declaring assemblies cannot see either.

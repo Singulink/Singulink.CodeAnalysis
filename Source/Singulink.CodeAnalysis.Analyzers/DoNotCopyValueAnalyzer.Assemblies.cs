@@ -118,7 +118,11 @@ public sealed partial class DoNotCopyValueAnalyzer
         // there. A build is given one for a project of the same solution, and for a package that has one. So the references of such an
         // assembly say nothing of what it leaves out, and it is reported where a non-copyable value is within its reach: where another
         // assembly that it can reference declares a non-copyable type, lets a value out or names it as a friend. An assembly of the
-        // framework is not one of these: it references no code of a project.
+        // framework is not one of these: it references no code of a project. Nor is an assembly of a package that does not depend on
+        // the other one, which the assets file of the build says where the build gives it: see PackageGraph.
+        PackageGraph? packages = null;
+        bool packagesAreRead = false;
+
         foreach (var assembly in referenced)
         {
             if (SymbolEqualityComparer.Default.Equals(assembly, compilation.Assembly) ||
@@ -158,12 +162,22 @@ public sealed partial class DoNotCopyValueAnalyzer
                         reason = "opens its internal members to it with an InternalsVisibleTo attribute";
                 }
 
-                // The first one by its name is the one that the message names, the same in every build.
-                if (reason is not null)
+                if (reason is null)
+                    continue;
+
+                // The file is read only where there is something to report.
+                if (!packagesAreRead)
                 {
-                    within = other;
-                    why = reason;
+                    packagesAreRead = true;
+                    packages = FindPackageGraph(context.Options, context.CancellationToken);
                 }
+
+                if (packages?.IsOutOfReach(assembly.Name, other.Name) is true)
+                    continue;
+
+                // The first one by its name is the one that the message names, the same in every build.
+                within = other;
+                why = reason;
             }
 
             if (within is null)
@@ -427,6 +441,22 @@ public sealed partial class DoNotCopyValueAnalyzer
         }
 
         return false;
+    }
+
+    // What the packages of the build depend on: the assets file of the project, which the targets file of the package gives the compiler
+    // as an additional file. A build that does not give it has no graph, and every reference assembly is then judged alike.
+    private static PackageGraph? FindPackageGraph(AnalyzerOptions options, CancellationToken cancellationToken)
+    {
+        foreach (var file in options.AdditionalFiles)
+        {
+            if (string.Equals(Path.GetFileName(file.Path), PackageGraph.FileName, StringComparison.OrdinalIgnoreCase) &&
+                file.GetText(cancellationToken) is { } text)
+            {
+                return PackageGraph.Get(text);
+            }
+        }
+
+        return null;
     }
 
     // Whether an assembly references another one, directly or through the assemblies that it references.

@@ -23,7 +23,7 @@
     without it needs a list entry where it gets at a non-copyable value other than by value. A build that does not run analyzers does
     not get it. A project with GenerateAssemblyInfo false gets nothing from this item, and writes the attribute itself with the version
     of the analyzers that it is built with, such as:
-    [assembly: System.Reflection.AssemblyMetadata("Singulink.CodeAnalysis.Analyzed", "0.7.2")]
+    [assembly: System.Reflection.AssemblyMetadata("Singulink.CodeAnalysis.Analyzed", "0.7.3")]
     The version is the package's own: pack writes this file with it in place of the value below (see the project file).
   -->
   <ItemGroup Condition="'$(RunAnalyzers)' != 'false' and '$(RunAnalyzersDuringBuild)' != 'false'">
@@ -32,6 +32,20 @@
       <_Parameter2>0.0.0-unpacked</_Parameter2>
     </AssemblyAttribute>
   </ItemGroup>
+
+  <!--
+    The assets file that NuGet writes for the project says what each package depends on. The analyzer reads it for a package that comes
+    with a reference assembly, which does not show what the code of the package uses: such a package gets SCA1025 only for an assembly
+    of a package that it depends on. The property is set after this file is read, so the item is added in a target; it runs in a
+    design-time build as well.
+  -->
+  <Target Name="_NonCopyableAddAssetsFile"
+          BeforeTargets="CoreCompile"
+          Condition="'$(ProjectAssetsFile)' != '' and Exists('$(ProjectAssetsFile)')">
+    <ItemGroup>
+      <AdditionalFiles Include="$(ProjectAssetsFile)" Visible="false" />
+    </ItemGroup>
+  </Target>
 
   <!--
     The built-in non-copyable types are on in a project that references one of the two packages itself, and off in one that only gets the
