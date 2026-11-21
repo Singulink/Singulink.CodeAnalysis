@@ -40,13 +40,12 @@ of a moved-from variable finds a default value, not a second guard.
 
 Two more principles grew out of the work.
 
-**Every "this is fine" is said by naming what is allowed.** Again and again, a rule was first written as a list of what is forbidden,
-and each round of testing found a way that the list missed. Each such list was turned round into a list of what is allowed, so that a
-form that nobody thought of gets a warning instead of passing. A review of the whole analyzer before the first release found every
-"this is fine" made this way, with a few exceptions that it then closed: an operation that the analyzer has no judgment for, used by
-value, now counts as a stored value; code nested too deeply gets SCA1048; and a `noncopyable` line of a symbol list file that names
+**Every "this is fine" is said by naming what is allowed.** A rule that lists what is forbidden misses the forms that nobody thought
+of. So each rule lists what is allowed, and a form that it does not know gets a warning instead of passing. Every "this is fine" of
+the analyzer is made this way, down to the cases that have no rule of their own: an operation that the analyzer has no judgment for,
+used by value, counts as a stored value; code nested too deeply gets SCA1048; and a `noncopyable` line of a symbol list file that names
 nothing gets a warning.
-The places where a list was turned round are in [Alternatives That Were Given Up](#alternatives-that-were-given-up).
+The rules that could have been lists of what is forbidden are in [Alternatives That Were Given Up](#alternatives-that-were-given-up).
 
 **A member that was not checked never looks clean.** The analyzer walks expressions by recursion. Where the stack would run out, it
 stops and gives the member one warning, SCA1048, instead of skipping it or failing with an exception. An exception of the analyzer is a
@@ -122,9 +121,9 @@ versions:
 2. Then a reference was taken to refer to something. This was taken back after advice from people who write such code.
 3. The rule today: a reference counts as able to fail unless it is known to refer to something, by one of three proofs.
 
-The proofs are a call with `[NotNullRef]`, a plain store, and a by-value read whose value is stored. Earlier versions also counted a
-read into a discard, a read as an argument and a read as an operand. Each of those needed its own account of what the compiler leaves
-out, and the accounts differed by reference and by compiler. Measured in an optimized build, the compiler of the .NET 10 SDK emits
+The proofs are a call with `[NotNullRef]`, a plain store, and a by-value read whose value is stored. A read into a discard, a read as an
+argument and a read as an operand are no proofs. Each of them would need its own account of what the compiler leaves out, and the
+accounts differ by reference and by compiler. Measured in an optimized build, the compiler of the .NET 10 SDK emits
 nothing for `_ = x;` through a reference to a struct, and that of the .NET 11 SDK emits the read. A store cannot be left out, and
 neither can a read whose value is stored, so those two are the proofs: the same for every reference and for both SDKs.
 
@@ -285,16 +284,16 @@ library and be gone for everyone who uses it.
 #### Why There Is a Marker
 
 The rules trust what a signature says: a marked type parameter, `[MovedFrom]`, `[NotNullRef]`. That holds only for code whose build ran
-the analyzer. Up to version 0.5.x every referenced assembly was trusted that way. Version 0.6.0 added the marker of an analyzed build,
-an `AssemblyMetadata` attribute that the package's targets file adds to every project that runs the analyzers, so that the analyzer can
-tell [code that was not built with it](Docs/articles/rules/unchecked-code.md) from the rest.
+the analyzer. So an analyzed build carries a marker: an `AssemblyMetadata` attribute that the package's targets file adds to every
+project that runs the analyzers, so that the analyzer can tell
+[code that was not built with it](Docs/articles/rules/unchecked-code.md) from the rest.
 
 - **The marker is a statement by the build,** like a line of a symbol list file. A project that suppresses warnings still carries it.
 - **Its value is the version of the analyzers** that built the assembly, such as `0.7.0` or `0.7.1-local.2`. The analyzers project
   writes the version of the package into the copy of the targets file that it packs, and the attributes project writes its own version
   into its own marker.
 - **Any value counts,** so that a later version of the marker is still read as one.
-- **An assembly built with 0.5.x carries no marker** and counts as unchecked for 0.6.0. Versions on the 0.x line may break each other.
+- **An assembly with no marker counts as unchecked,** whatever built it.
 
 #### Granting Marks and Restricting Marks
 
@@ -313,15 +312,15 @@ unchecked code. Each promises what only a checked body holds. Marks that only re
 
 #### Unchecked Code Behind a Checked Type
 
-Two rounds of testing after the marker was added found routes that no call shows: an implementation of an interface of checked code,
-an override, a delegate that the unchecked assembly made. A call is judged by the member that it binds to, so code behind it is never
+Some routes show at no call: an implementation of an interface of checked code, an override, a delegate that the unchecked
+assembly made. A call is judged by the member that it binds to, so code behind it is never
 seen. Code can name a type only where its assembly references the assembly that declares the type, so that reference is what gets the
 warning (SCA1025), once per assembly, with the `trusted` line of a symbol list file as the answer.
 
 The reference to a declaring assembly says nothing of three kinds of value. The ten built-in non-copyable types are declared by the
 framework, which every assembly references. A struct of unchecked code that only a symbol list file makes non-copyable is the same: a
 line for a struct of the framework would otherwise give a warning on every assembly of the framework. And a value that is bound to a
-marked type parameter is copied by generic code that names no type at all. Since 0.7.1 these are covered from the other side:
+marked type parameter is copied by generic code that names no type at all. These are covered from the other side:
 
 - **What unchecked code needs is a way to the value,** and the ways that no call shows all start at a member of checked code. So an
   unchecked assembly that references an assembly of checked code whose members let other code get at such a value gets SCA1025 too,
@@ -337,21 +336,25 @@ marked type parameter is copied by generic code that names no type at all. Since
 - **A protected member counts only in a class that can be derived from,** and a type that an assembly forwards counts through the
   assembly that it moved to, with that assembly named in the message.
 - **The message names the member and no type.** The type of a member is what carries the value, such as `List<GCHandle>`, and not
-  the non-copyable type itself, so naming it as that was wrong (QA round 13).
+  the non-copyable type itself.
 - **A framework generic that is bound to the value needs no entry here.** `StrongBox<SpinLock>` or `SpinLock[]` reaches unchecked
   code only where checked code hands it over, and that use gets its own warning (SCA1020, SCA1023 or SCA1024).
 - **Only the code of checked assemblies is read for this,** and only where an unchecked assembly references one: the values of
   unchecked code are that code's own business, as its types are.
 - **A reference assembly does not show what its code uses.** A project reference gives the compiler one: it has no method bodies
   and names only the assemblies that its reachable members use, so an unchecked project of the same solution that uses checked
-  code only inside its methods has no reference to it there (QA round 13). The compiler marks such an assembly with
-  `ReferenceAssemblyAttribute`, so the analyzer knows when a reference list is one of these. Since 0.7.2 an unchecked assembly
-  that is given as a reference assembly gets SCA1025 where a non-copyable value is within its reach: where another referenced
-  assembly declares a non-copyable type, lets a value out or names it as a friend, and does not itself reference the unchecked
-  one, which rules out that it is used there. The compilation's own types are never within reach of an assembly that it references.
-  The assemblies of the framework are left out by name, as for a base class. This is the cautious reading: the assembly may use
-  nothing of the kind, and the `trusted` line says so. Making every project compile against implementation assemblies
-  (`CompileUsingReferenceAssemblies`) would show the real references, and would slow every incremental build.
+  code only inside its methods has no reference to it there. The compiler marks such an assembly with
+  `ReferenceAssemblyAttribute`, so the analyzer knows when a reference list is one of these. An unchecked assembly that is given
+  as a reference assembly gets SCA1025 where a non-copyable value is within its reach: where another referenced assembly declares
+  a non-copyable type, lets a value out or names it as a friend, and does not itself reference the unchecked one, which rules out
+  that it is used there. The message says which of the three it is. The compilation's own types are never within reach of an
+  assembly that it references. The assemblies of the framework are left out by name, as for a base class.
+- **That check is the cautious reading, in three ways.** The assembly may use nothing of the other one, and the `trusted` line
+  says so. The other assembly can be built on the unchecked one and use it only inside its methods: its own reference assembly
+  does not show that, so the unchecked one is reported though it cannot use the other. And a package that comes with a reference
+  assembly is judged like a project, though it cannot use a project of the solution. Making every project compile against
+  implementation assemblies (`CompileUsingReferenceAssemblies`) would show the real references, and would slow every incremental
+  build.
 - **Internal members are not imported from a referenced assembly,** so what they let out cannot be seen. An unchecked assembly that
   checked code names in an `InternalsVisibleTo` attribute can use them, and gets the warning whatever that code holds. This also
   covers an internal `[NonCopyable]` struct, which the check of the declaring assemblies cannot see either.
@@ -408,7 +411,7 @@ see the call. A warning on every class that holds a non-copyable value and has a
 that derives from a framework class: every stream, form or control that holds a pinned buffer. So a `clones` line names the classes
 that do clone themselves, and a class that derives from one of them gets the warning (SCA1009).
 
-That leaves the base classes of which nothing is known, and since 0.7.1 they get the warning too, with a text of its own:
+That leaves the base classes of which nothing is known. They get the warning too, with a text of its own:
 
 - **A base class is known in three cases.** Its assembly is the compilation or was built with the analyzers, where a call of
   `MemberwiseClone` gets its own warning. Or its assembly is part of the framework, of which the built-in list says which classes
@@ -782,7 +785,7 @@ messages that say why: what made a local not the method's own, what makes a clas
 | `DeepCodeTests`, `EdgeCaseTests` | Deep and long code, and the paths that only unusual code reaches |
 | `ProbeTests` | The probe projects under `Probes`, each with a `baseline.txt` of every warning by file, line, column and ID |
 
-`ProbeTests` guards against a change that loosens the analyzer by mistake. The probes are programs written in rounds of testing to find
+`ProbeTests` guards against a change that loosens the analyzer by mistake. The probes are programs written to find
 what the analyzer misses or gets wrong, about 2,200 warnings in all. A warning that goes away shows there even where no test of its own
 names the form. Changing a baseline is a deliberate edit that shows in a diff; set the environment variable `SCA_PROBE_WRITE` to a
 folder to have a run write the warnings that it got there, in the form of a baseline.

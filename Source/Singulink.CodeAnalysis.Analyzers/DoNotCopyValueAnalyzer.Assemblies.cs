@@ -131,6 +131,7 @@ public sealed partial class DoNotCopyValueAnalyzer
             }
 
             IAssemblySymbol? within = null;
+            string why = string.Empty;
 
             foreach (var other in referenced)
             {
@@ -143,19 +144,26 @@ public sealed partial class DoNotCopyValueAnalyzer
                     continue;
                 }
 
-                bool holds = declaring.ContainsKey(other);
+                // What puts a non-copyable value within reach is said in the message.
+                string? reason = declaring.ContainsKey(other) ? "declares a non-copyable type" : null;
 
-                if (!holds && AnalyzedAssemblies.IsAnalyzed(other))
+                if (reason is null && AnalyzedAssemblies.IsAnalyzed(other))
                 {
                     if (!exposing.TryGetValue(other, out var exposed))
                         exposing[other] = exposed = FindExposedValue(other, types);
 
-                    holds = exposed is not null || IsFriend(other, assembly);
+                    if (exposed is not null)
+                        reason = "lets other code get at a non-copyable value";
+                    else if (IsFriend(other, assembly))
+                        reason = "opens its internal members to it with an InternalsVisibleTo attribute";
                 }
 
                 // The first one by its name is the one that the message names, the same in every build.
-                if (holds)
+                if (reason is not null)
+                {
                     within = other;
+                    why = reason;
+                }
             }
 
             if (within is null)
@@ -164,7 +172,7 @@ public sealed partial class DoNotCopyValueAnalyzer
             usesNonCopyableTypes.Add(assembly);
 
             if (!list.IsTrusted(assembly))
-                context.ReportDiagnostic(Diagnostic.Create(Rules.UncheckedReferenceAssembly, Location.None, assembly.Name, within.Name));
+                context.ReportDiagnostic(Diagnostic.Create(Rules.UncheckedReferenceAssembly, Location.None, assembly.Name, within.Name, why));
         }
 
         hasEffect.UnionWith(usesNonCopyableTypes);

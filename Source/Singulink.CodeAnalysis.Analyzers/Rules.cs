@@ -378,7 +378,7 @@ internal static class Rules
 
     private const string UncheckedReferenceAssemblyMessage =
         "Assembly '{0}' was not built with the analyzer, and this build is given only its reference assembly, which does not show what its " +
-        "code uses: its code can use '{1}' and copy a non-copyable value that it gets at there, which no call shows. Build '{0}' with the " +
+        "code uses: its code can use '{1}', which {2}, and copy a non-copyable value that it gets at there, which no call shows. Build '{0}' with the " +
         "analyzer, or, if its code makes no copy of the non-copyable values that it gets at, vouch for it with the line 'A:{0};trusted' in " +
         "a NonCopyableSymbols.txt file.";
 

@@ -1081,10 +1081,10 @@ internal static class Verify
             $"code, which no call shows. Build '{assembly}' with the analyzer, or, if its code makes no copy of the non-copyable values that it " +
             $"gets at, vouch for it with the line 'A:{assembly};trusted' in a NonCopyableSymbols.txt file.");
 
-    public static DiagnosticResult UncheckedReferenceAssembly(string assembly, string within) =>
+    public static DiagnosticResult UncheckedReferenceAssembly(string assembly, string within, string why = "declares a non-copyable type") =>
         new DiagnosticResult(DiagnosticIds.UncheckedAssembly, DiagnosticSeverity.Warning).WithMessage(
             $"Assembly '{assembly}' was not built with the analyzer, and this build is given only its reference assembly, which does not show " +
-            $"what its code uses: its code can use '{within}' and copy a non-copyable value that it gets at there, which no call shows. Build " +
+            $"what its code uses: its code can use '{within}', which {why}, and copy a non-copyable value that it gets at there, which no call shows. Build " +
             $"'{assembly}' with the analyzer, or, if its code makes no copy of the non-copyable values that it gets at, vouch for it with the " +
             $"line 'A:{assembly};trusted' in a NonCopyableSymbols.txt file.");
 

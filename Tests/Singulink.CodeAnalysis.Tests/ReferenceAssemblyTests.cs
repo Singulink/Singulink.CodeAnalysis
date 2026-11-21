@@ -101,7 +101,22 @@ public class ReferenceAssemblyTests
         var helper = await CompileAsync(Plain, analyzed: false, asReferenceAssembly: true, "Helper");
         var test = CreateTest(null, jobs, helper);
 
-        test.ExpectedDiagnostics.Add(Verify.UncheckedReferenceAssembly("Helper", "Jobs"));
+        test.ExpectedDiagnostics.Add(Verify.UncheckedReferenceAssembly("Helper", "Jobs", "lets other code get at a non-copyable value"));
+        await test.RunAsync();
+    }
+
+    // A library that names the assembly in an InternalsVisibleTo attribute opens its internal members to it, which a project that
+    // references both does not see. The message says so.
+    [TestMethod]
+    public async Task UncheckedAssembly_IsReportedWhereCheckedCodeNamesItAsAFriend()
+    {
+        var jobs = await CompileAsync(
+            "[assembly: System.Runtime.CompilerServices.InternalsVisibleTo(\"Helper\")] public class Job { public int Count; }", analyzed: true, asReferenceAssembly: false, "Jobs");
+
+        var helper = await CompileAsync(Plain, analyzed: false, asReferenceAssembly: true, "Helper");
+        var test = CreateTest(null, jobs, helper);
+
+        test.ExpectedDiagnostics.Add(Verify.UncheckedReferenceAssembly("Helper", "Jobs", "opens its internal members to it with an InternalsVisibleTo attribute"));
         await test.RunAsync();
     }
 
@@ -177,7 +192,7 @@ public class ReferenceAssemblyTests
         var test = CreateTest(listFile, guards, jobs, helper);
 
         if (listFile is null)
-            test.ExpectedDiagnostics.Add(Verify.UncheckedReferenceAssembly("Helper", "Able"));
+            test.ExpectedDiagnostics.Add(Verify.UncheckedReferenceAssembly("Helper", "Able", "lets other code get at a non-copyable value"));
 
         await test.RunAsync();
     }
