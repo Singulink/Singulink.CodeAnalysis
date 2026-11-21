@@ -241,7 +241,12 @@ public class UncheckedAssemblyTests
         test.ExpectedDiagnostics.AddRange([
             Verify.SafeListTrustedHasNoEffect(1, 1, 18, "Missing", "the compilation references no assembly of that name"),
             Verify.SafeListTrustedHasNoEffect(2, 1, 23, "MarkedPlugin", "the assembly was built with the analyzer, so it is checked code"),
-            Verify.SafeListTrustedHasNoEffect(3, 1, 16, "Clean", "the assembly references no assembly that declares a non-copyable type"),
+            Verify.SafeListTrustedHasNoEffect(
+                3,
+                1,
+                16,
+                "Clean",
+                "the assembly references no assembly that declares a non-copyable type, and no class of the compilation that holds a non-copyable value derives from a class of the assembly"),
             Verify.SafeListTrustedHasNoEffect(4, 1, 22, "TestProject", "it is the assembly of the compilation, which is checked code"),
         ]);
 

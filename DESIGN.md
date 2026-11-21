@@ -372,7 +372,30 @@ A base class of another assembly can clone itself with `MemberwiseClone`, as `En
 clone copies every field of a class that derives from it. The analyzer cannot read the bodies of referenced assemblies, so it cannot
 see the call. A warning on every class that holds a non-copyable value and has a base class of another assembly would hit every class
 that derives from a framework class: every stream, form or control that holds a pinned buffer. So a `clones` line names the classes
-that do clone themselves, and only a class that derives from one of them gets the warning (SCA1009).
+that do clone themselves, and a class that derives from one of them gets the warning (SCA1009).
+
+That leaves the base classes of which nothing is known, and since 0.7.1 they get the warning too, with a text of its own:
+
+- **A base class is known in three cases.** Its assembly is the compilation or was built with the analyzers, where a call of
+  `MemberwiseClone` gets its own warning. Or its assembly is part of the framework, of which the built-in list says which classes
+  clone themselves. Every other base class may clone itself, and a field behind it gets the warning until a line says what it does.
+- **The framework is the assemblies that the scan read,** by their simple names: `FrameworkAssemblies.txt` lists the assemblies of the
+  shared frameworks `Microsoft.NETCore.App`, `Microsoft.AspNetCore.App` and `Microsoft.WindowsDesktop.App` of .NET 10 and .NET 11, and
+  `FrameworkScanTests` fails for an assembly of a shared framework that the file does not name. The reference assemblies of
+  .NET Standard and the .NET Framework, such as `netstandard` and `mscorlib`, are among them. A library of Microsoft's that is no
+  part of a shared framework, such as WinUI, was not read, so it is another library. The name was chosen over the publisher on
+  purpose: the list says what was checked, not who wrote the code.
+- **Three lines answer it.** `clones` says that the class clones itself. `clones=none` says that neither the class nor a class above it
+  does, so one line for the direct base class is enough. A `trusted` line for the assembly says that no code of it copies a
+  non-copyable value, and the walk goes on above the classes of that assembly.
+- **`clones=none` is a value of its own, and not an empty `clones=complete`.** A class can be cloned through a member of another
+  class, as a static `Cloner.Copy(Document)` that calls an internal member does. Its correct lines are `T:Document;clones=complete` and
+  `M:Cloner.Copy(Document);clones`, with no member line for `Document` itself, so "complete, and no member line" cannot mean that
+  the class never clones.
+- **`clones` wins.** A class that a `clones` line names, itself or above it, is looked for first, and a `clones=none` line for such a
+  class has no effect and gets SCA1042.
+- **Only the field check changed.** A generic class of such an assembly was covered before: binding a non-copyable type to it gets
+  SCA1020, and each use of a member on such an object gets SCA1023 until a line vouches for the member.
 
 SCA1009 has an ID of its own, apart from SCA1005 for a call of `MemberwiseClone` in the compilation: turning down or suppressing one
 leaves the other. Its descriptors are the field, the binding, and the uses below.
@@ -621,11 +644,14 @@ gets a warning. These were accepted:
 
 ## Limits That Were Accepted
 
-[What Is Not Covered](Docs/articles/rules/not-covered.md) lists every gap. Where a reason was recorded for leaving one open, it is here.
+[What Is Not Covered](Docs/articles/rules/not-covered.md) lists the gaps that a project can meet. Where a reason was recorded for
+leaving one open, it is here.
 
-- **A base class of another library that clones itself and that no symbol list file names,** and a class of a framework newer than
-  the ones that the built-in framework symbol list was checked against. The analyzer cannot read the bodies of referenced assemblies;
-  see [Classes That Clone Themselves](#classes-that-clone-themselves).
+- **A class of a framework newer than the ones that the built-in framework symbol list was checked against.** The analyzer cannot
+  read the bodies of referenced assemblies; see [Classes That Clone Themselves](#classes-that-clone-themselves).
+- **The members that the compiler writes for a record or an anonymous type.** Their `ToString`, `Equals` and `GetHashCode` call the
+  same member of each of their members, and those calls are not checked. It is left off the page: it takes a class of a library
+  whose own `ToString`, `Equals` or `GetHashCode` clones its object, and the framework has none, which two tests check.
 - **Unchecked code behind a checked type, for the ten built-in types.** SCA1025 works by the reference to the declaring assembly, and
   every assembly references the framework.
 - **What the unsafe classes allow.** The symbol list says of a member only that it makes no copy. The two rules that ask what can throw

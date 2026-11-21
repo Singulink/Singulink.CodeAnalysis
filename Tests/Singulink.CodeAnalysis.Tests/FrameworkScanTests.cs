@@ -159,6 +159,45 @@ public partial class FrameworkScanTests
     private static bool IsVisible(ISymbol symbol) =>
         symbol.DeclaredAccessibility is Accessibility.Public or Accessibility.Protected or Accessibility.ProtectedOrInternal && !symbol.IsImplicitlyDeclared;
 
+    // The check of a base class of which nothing is known takes an assembly for one of the framework by its simple name, from the file
+    // FrameworkAssemblies.txt: of those assemblies the built-in list says which classes clone themselves, because the scans of this
+    // class read them. So the file must name every assembly that the scans read. A new assembly of a shared framework fails here, and
+    // is added to the file together with what the scans find in it.
+    [TestMethod]
+    public void FrameworkAssemblies_NameEveryAssemblyOfTheSharedFrameworks()
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        using (var stream = typeof(Singulink.CodeAnalysis.Analyzers.DoNotCopyValueAnalyzer).Assembly
+            .GetManifestResourceStream("Singulink.CodeAnalysis.Analyzers.FrameworkAssemblies.txt")!)
+        using (var reader = new StreamReader(stream))
+        {
+            while (reader.ReadLine() is { } line)
+            {
+                if (line.Trim() is { Length: > 0 } name && name[0] is not '#')
+                    names.Add(name);
+            }
+        }
+
+        var missing = new SortedSet<string>(StringComparer.Ordinal);
+        int read = 0;
+
+        foreach (string path in FindSharedFrameworks().SelectMany(directory => Directory.GetFiles(directory, "*.dll")).Where(HasMetadata))
+        {
+            read++;
+            string name = System.Reflection.AssemblyName.GetAssemblyName(path).Name!;
+
+            if (!names.Contains(name))
+                missing.Add(name);
+        }
+
+        Assert.IsGreaterThan(100, read, "The scan reads the assemblies of the shared frameworks.");
+        Assert.IsEmpty(missing, $"FrameworkAssemblies.txt does not name: {string.Join(", ", missing)}");
+
+        foreach (string name in new[] { "System.Runtime", "System.Private.CoreLib", "netstandard", "mscorlib", "System" })
+            Assert.Contains(name, names, $"FrameworkAssemblies.txt names {name}.");
+    }
+
     private static bool HasMetadata(string path)
     {
         try

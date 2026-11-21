@@ -1162,7 +1162,7 @@ public class CloningUseTests
         T:Closed;clones=complete
         """,
         Verify.SafeListLine(3, 1, 28, "'clones=complete' is for a class; a method, a property or an event takes 'clones' alone"),
-        Verify.SafeListLine(4, 1, 18, "'clones' takes no value other than 'complete', as in 'clones=complete'"),
+        Verify.SafeListLine(4, 1, 18, "'clones' takes no value other than 'complete' or 'none', as in 'clones=complete'"),
         Verify.SafeListLine(5, 1, 16, "'complete' is a value of the marker 'clones', written 'clones=complete'"),
         Verify.SafeListLine(6, 1, 23, "'complete' is a value of the marker 'clones', written 'clones=complete'"),
         Verify.SafeListLine(7, 1, 24, "the marker 'clones' is for a class, a method, a property or an event"),

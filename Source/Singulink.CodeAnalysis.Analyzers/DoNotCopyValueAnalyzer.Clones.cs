@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Diagnostics;
@@ -8,7 +9,8 @@ namespace Singulink.CodeAnalysis.Analyzers;
 /// The checks of a class whose objects a class that the symbol list marks 'clones' clones with MemberwiseClone, in code of its own that
 /// the analyzer does not read: every field of a class of the compilation that holds a non-copyable value, and every binding of a
 /// non-copyable type to a type parameter of such a class in a base list, is copied by that clone (SCA1009). The bindings in an object
-/// creation and the uses of an object whose binding no declaration of the compilation judged are checked by the walker.
+/// creation and the uses of an object whose binding no declaration of the compilation judged are checked by the walker. A base class of
+/// which nothing says whether it clones itself gets the same warning on each such field, until a line of the symbol list says so.
 /// </content>
 public sealed partial class DoNotCopyValueAnalyzer
 {
@@ -29,25 +31,58 @@ public sealed partial class DoNotCopyValueAnalyzer
     /// of the base class are two routes, with two answers.
     /// </para>
     /// </remarks>
-    private static void AnalyzeCloningBases(SymbolAnalysisContext context, NonCopyableTypes types)
+    /// <param name="context">The context of the class.</param>
+    /// <param name="types">The classifier of the compilation.</param>
+    /// <param name="trustedForBase">Takes each assembly whose 'trusted' line answers the warning for a base class of which nothing else
+    /// says whether it clones itself: the line has an effect there, which the check of the 'trusted' lines reads at the end of the
+    /// compilation.</param>
+    private static void AnalyzeCloningBases(SymbolAnalysisContext context, NonCopyableTypes types, ConcurrentDictionary<IAssemblySymbol, bool> trustedForBase)
     {
         var type = (INamedTypeSymbol)context.Symbol;
 
         if (type.TypeKind is not TypeKind.Class)
             return;
 
-        if (types.FindCloningBase(type) is { } cloning)
-        {
-            foreach (var field in type.GetMembers().OfType<IFieldSymbol>())
-            {
-                if (field is not { IsStatic: false, RefKind: RefKind.None } || !types.IsNonCopyableType(field.Type))
-                    continue;
+        var cloning = types.FindCloningBase(type);
 
+        // A class that clones itself is the answer for every class above and below it, so an unknown base class is looked for only where
+        // there is none.
+        var trusted = new List<IAssemblySymbol>();
+        var unknown = cloning is null ? types.FindUnknownBase(type, trusted) : null;
+
+        if (cloning is null && unknown is null && trusted.Count is 0)
+            return;
+
+        bool holdsValue = false;
+
+        foreach (var field in type.GetMembers().OfType<IFieldSymbol>())
+        {
+            if (field is not { IsStatic: false, RefKind: RefKind.None } || !types.IsNonCopyableType(field.Type))
+                continue;
+
+            holdsValue = true;
+
+            if (cloning is not null)
+            {
                 var rule = NonCopyableTypes.MentionsTypeParameter(field.Type) ? Rules.MemberwiseCloneOfTypeParameterThroughListedBase : Rules.MemberwiseCloneThroughListedBase;
                 object?[] arguments = [type, cloning, DisplayField(field), field.Type];
                 WithoutNullableAnnotations(arguments);
                 context.ReportDiagnostic(Diagnostic.Create(rule, GetFieldLocation(field), arguments));
             }
+            else if (unknown is not null)
+            {
+                var definition = unknown.OriginalDefinition;
+                object?[] arguments = [type, unknown, definition.ContainingAssembly.Name, DisplayField(field), field.Type, definition.GetDocumentationCommentId()];
+                WithoutNullableAnnotations(arguments);
+                context.ReportDiagnostic(Diagnostic.Create(Rules.FieldBehindUnknownBase, GetFieldLocation(field), arguments));
+            }
+        }
+
+        // The 'trusted' line of the assembly of a base class answers the question for that class, where the class holds a value.
+        if (holdsValue)
+        {
+            foreach (var assembly in trusted)
+                trustedForBase.TryAdd(assembly, true);
         }
     }
 

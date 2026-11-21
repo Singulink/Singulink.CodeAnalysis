@@ -24,6 +24,7 @@ internal sealed class SafeMemberList
     private const string ForKeyword = "for";
     private const string ClonesKeyword = "clones";
     private const string CompleteValue = "complete";
+    private const string NoneValue = "none";
     private const string AssemblyPrefix = "A:";
     private const string OwnedIsForATask = "the marker 'owned' is for an instance property of a class whose type is 'Task<TResult>'";
 
@@ -61,6 +62,10 @@ internal sealed class SafeMemberList
     // The IDs of the classes that a 'clones' line of the built-in list or of a user file names with 'clones=complete'.
     private readonly HashSet<string> _complete;
 
+    // The IDs of the classes that a line of a user file names with 'clones=none': neither their own code nor that of a class above them
+    // clones an object. It is kept apart from the 'clones' lines, which it never takes away.
+    private readonly HashSet<string> _neverClones;
+
     // Null for a symbol that has no entry.
     private readonly ConcurrentDictionary<ISymbol, SafeListEntry?> _entriesBySymbol = new(SymbolEqualityComparer.Default);
 
@@ -70,7 +75,8 @@ internal sealed class SafeMemberList
         HashSet<string>? userNonCopyable = null,
         HashSet<string>? trustedAssemblies = null,
         HashSet<string>? clones = null,
-        HashSet<string>? complete = null)
+        HashSet<string>? complete = null,
+        HashSet<string>? neverClones = null)
     {
         _entries = entries;
         _copyable = copyable ?? [];
@@ -78,6 +84,7 @@ internal sealed class SafeMemberList
         _trustedAssemblies = trustedAssemblies ?? [];
         _clones = clones ?? s_builtInClones.Value;
         _complete = complete ?? s_builtInComplete.Value;
+        _neverClones = neverClones ?? [];
     }
 
     /// <summary>
@@ -94,6 +101,14 @@ internal sealed class SafeMemberList
     /// </summary>
     public bool IsComplete(INamedTypeSymbol definition) =>
         _complete.Count > 0 && definition.GetDocumentationCommentId() is { } id && _complete.Contains(id);
+
+    /// <summary>
+    /// Gets a value indicating whether a 'clones=none' line of a user file names a class, by its original definition: neither the class's
+    /// own code nor that of a class above it clones an object with MemberwiseClone. The line answers the question that a class of code
+    /// which was not built with the analyzer leaves open, and loses to a 'clones' line for the class or for a class above it.
+    /// </summary>
+    public bool IsNeverClones(INamedTypeSymbol definition) =>
+        _neverClones.Count > 0 && definition.TypeKind is TypeKind.Class && definition.GetDocumentationCommentId() is { } id && _neverClones.Contains(id);
 
     /// <summary>
     /// Gets a value indicating whether a line says that a member makes no copy where the built-in list, or a 'clones' line of the given
@@ -152,6 +167,7 @@ internal sealed class SafeMemberList
         // A class has complete member lines where any 'clones' line for it says so. A plain 'clones' line says nothing of completeness,
         // and, as with 'clones' itself, nothing takes it away: a member that the lines miss gets a 'clones' line of its own, in any file.
         var complete = new HashSet<string>(s_builtInComplete.Value, StringComparer.Ordinal);
+        var neverClones = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var entry in parsed)
         {
@@ -179,6 +195,14 @@ internal sealed class SafeMemberList
                 continue;
             }
 
+            // A 'clones=none' line is kept apart as a 'clones' line is. Where a 'clones' line names the class or a class above it, that
+            // line applies: the check of a class looks for a class that clones itself first.
+            if (entry.Marker is SafeListMarker.NeverClones)
+            {
+                neverClones.Add(entry.Id);
+                continue;
+            }
+
             if (entry.Marker is SafeListMarker.Copyable)
             {
                 if (GetWhyCopyableHasNoEffect(entry, compilation) is null)
@@ -198,7 +222,7 @@ internal sealed class SafeMemberList
         }
 
         copyable.ExceptWith(userNonCopyable);
-        return new SafeMemberList(entries, copyable, userNonCopyable, trustedAssemblies, clones, complete);
+        return new SafeMemberList(entries, copyable, userNonCopyable, trustedAssemblies, clones, complete, neverClones);
     }
 
     /// <summary>
@@ -278,6 +302,9 @@ internal sealed class SafeMemberList
         if (entry.Marker is SafeListMarker.Clones && entry.Id[0] is 'T' && !symbols.Any(s => s is INamedTypeSymbol { TypeKind: TypeKind.Class }))
             return "the marker 'clones' is for a class, a method, a property or an event";
 
+        if (entry.Marker is SafeListMarker.NeverClones && !symbols.Any(s => s is INamedTypeSymbol { TypeKind: TypeKind.Class }))
+            return "'clones=none' is for a class";
+
         if (entry.Marker is SafeListMarker.View or SafeListMarker.NonCopyable or SafeListMarker.Copyable &&
             !symbols.Any(s => s is INamedTypeSymbol { TypeKind: TypeKind.Struct }))
         {
@@ -330,6 +357,58 @@ internal sealed class SafeMemberList
         // A sealed generic class can still be bound: a non-copyable type bound to it is cloned with the object.
         if (classes.All(c => c.IsSealed && !IsGenericOrInGeneric(c)))
             return "the class is sealed and not generic, so no class can derive from it and no type can be bound to it";
+
+        return null;
+    }
+
+    /// <summary>
+    /// Gets why a 'clones=none' line of a user file has no effect in a compilation. Null if the line has an effect, for a line that names
+    /// nothing there, which is ignored so that one file can serve several projects, and for a line that does not fit what it names, which
+    /// <see cref="GetErrorInCompilation"/> reports.
+    /// </summary>
+    /// <remarks>
+    /// The line answers what is not known of a class: whether code that the analyzer cannot read clones an object of it. So it has no
+    /// effect for a class that no class can derive from, and for a class whose code is known: one of the compilation or of an assembly
+    /// that was built with the analyzer, which is checked in its own build, and one of the framework, of which the built-in list says
+    /// which classes clone themselves. Nor does it where a 'clones' line names the class or a class above it: that line applies.
+    /// </remarks>
+    /// <param name="entry">The line.</param>
+    /// <param name="compilation">The compilation.</param>
+    /// <param name="clonesOfFiles">The IDs that the 'clones' lines of the symbol list files of the project name.</param>
+    public static string? GetWhyNeverClonesHasNoEffect(SafeListEntry entry, Compilation compilation, ICollection<string> clonesOfFiles)
+    {
+        var classes = DocumentationCommentId.GetSymbolsForDeclarationId(entry.Id, compilation)
+            .OfType<INamedTypeSymbol>()
+            .Where(s => s.TypeKind is TypeKind.Class)
+            .ToList();
+
+        if (classes.Count is 0)
+            return null;
+
+        if (classes.All(c => c.IsStatic || c.IsSealed))
+            return "the class is static or sealed, so no class can derive from it";
+
+        if (classes.All(c => SymbolEqualityComparer.Default.Equals(c.ContainingAssembly, compilation.Assembly)))
+            return "the class is of the compilation, which is checked code";
+
+        if (classes.All(c => AnalyzedAssemblies.IsOfAnalyzedAssembly(c)))
+            return "the class is of an assembly that was built with the analyzer, so it is checked code";
+
+        if (classes.All(c => FrameworkAssemblies.Contains(c.ContainingAssembly)))
+            return "the class is of the framework, and the built-in symbol list says which classes of the framework clone themselves";
+
+        foreach (var type in classes)
+        {
+            for (var current = type; current is not null; current = current.BaseType)
+            {
+                if (current.OriginalDefinition.GetDocumentationCommentId() is { } id && (s_builtInClones.Value.Contains(id) || clonesOfFiles.Contains(id)))
+                {
+                    return SymbolEqualityComparer.Default.Equals(current, type)
+                        ? "a 'clones' line says that the class clones itself, and that line applies"
+                        : $"a 'clones' line says that its base class '{current.OriginalDefinition.ToDisplayString()}' clones itself, and that line applies";
+                }
+            }
+        }
 
         return null;
     }
@@ -476,10 +555,10 @@ internal sealed class SafeMemberList
     {
         var result = new Dictionary<string, SafeListEntry>(entries.Count, StringComparer.Ordinal);
 
-        // A 'clones' line is kept apart: see s_builtInClones.
+        // A 'clones' line is kept apart: see s_builtInClones. A 'clones=none' line is a line of a user file only.
         foreach (var entry in entries)
         {
-            if (entry.Marker is not SafeListMarker.Clones)
+            if (entry.Marker is not (SafeListMarker.Clones or SafeListMarker.NeverClones))
                 result[entry.Id] = entry;
         }
 
@@ -627,10 +706,10 @@ internal sealed class SafeMemberList
                 continue;
             }
 
-            // 'complete' is the value of 'clones', not a marker of its own.
-            if (part is CompleteValue)
+            // 'complete' and 'none' are values of 'clones', not markers of their own.
+            if (part is CompleteValue or NoneValue)
             {
-                reason = "'complete' is a value of the marker 'clones', written 'clones=complete'";
+                reason = $"'{part}' is a value of the marker 'clones', written 'clones={part}'";
                 return false;
             }
 
@@ -644,16 +723,25 @@ internal sealed class SafeMemberList
             // space is allowed around the '=', as for 'for='.
             if (part.StartsWith(ClonesKeyword, StringComparison.Ordinal) && part[ClonesKeyword.Length..].TrimStart() is ['=', .. var value])
             {
-                if (!isType)
+                string valueText = value.Trim();
+
+                if (valueText is not (CompleteValue or NoneValue))
                 {
-                    reason = "'clones=complete' is for a class; a method, a property or an event takes 'clones' alone";
+                    reason = "'clones' takes no value other than 'complete' or 'none', as in 'clones=complete'";
                     return false;
                 }
 
-                if (value.Trim() is not CompleteValue)
+                if (!isType)
                 {
-                    reason = "'clones' takes no value other than 'complete', as in 'clones=complete'";
+                    reason = $"'clones={valueText}' is for a class; a method, a property or an event takes 'clones' alone";
                     return false;
+                }
+
+                // 'clones=none' says of a class that neither its own code nor that of a class above it clones an object.
+                if (valueText is NoneValue)
+                {
+                    marker = SafeListMarker.NeverClones;
+                    continue;
                 }
 
                 marker = SafeListMarker.Clones;
@@ -917,8 +1005,15 @@ internal enum SafeListMarker
     Clones,
 
     /// <summary>
+    /// A class of which neither the own code nor that of a class above it clones an object with MemberwiseClone, written 'clones=none'. It
+    /// answers the warning for a base class of code that was not built with the analyzer, and loses to a 'clones' line.
+    /// </summary>
+    NeverClones,
+
+    /// <summary>
     /// An assembly, named by its simple name after 'A:', whose code makes no copy of the non-copyable values that it gets at, also behind a
-    /// type of checked code or of the framework. It turns off the finding for the assembly and changes nothing else.
+    /// type of checked code or of the framework. It turns off the finding for the assembly, and the warning for a field behind a base class
+    /// of the assembly, and changes nothing else.
     /// </summary>
     Trusted,
 }

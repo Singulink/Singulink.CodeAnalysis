@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Diagnostics;
 using Microsoft.CodeAnalysis.Text;
@@ -6,7 +7,8 @@ namespace Singulink.CodeAnalysis.Analyzers;
 
 /// <content>
 /// The check of the references of a compilation: an assembly that was not built with the analyzer and that references an assembly which
-/// declares a non-copyable type (SCA1025), and the 'trusted' lines of the list files that vouch for one.
+/// declares a non-copyable type (SCA1025), and the 'trusted' lines of the list files that vouch for one, or for an assembly whose class
+/// is the base class of a class of the compilation that holds a non-copyable value.
 /// </content>
 public sealed partial class DoNotCopyValueAnalyzer
 {
@@ -24,12 +26,19 @@ public sealed partial class DoNotCopyValueAnalyzer
     /// see <see cref="FindDeclaringAssemblies"/>. The work is done once, at the end of the compilation.
     /// </remarks>
     private static void AnalyzeUncheckedReferences(
-        CompilationAnalysisContext context, SafeMemberList list, IReadOnlyList<(AdditionalText File, SourceText Text)> listFiles)
+        CompilationAnalysisContext context,
+        SafeMemberList list,
+        IReadOnlyList<(AdditionalText File, SourceText Text)> listFiles,
+        ConcurrentDictionary<IAssemblySymbol, bool> trustedForBase)
     {
         var compilation = context.Compilation;
         var referenced = compilation.SourceModule.ReferencedAssemblySymbols;
         var declaring = FindDeclaringAssemblies(compilation, referenced, list);
         var usesNonCopyableTypes = new HashSet<IAssemblySymbol>(SymbolEqualityComparer.Default);
+
+        // A 'trusted' line also has an effect for an assembly whose class is the base class of a class of the compilation that holds a
+        // non-copyable value: it answers the warning for a base class of which nothing else says whether it clones itself.
+        var hasEffect = new HashSet<IAssemblySymbol>(trustedForBase.Keys, SymbolEqualityComparer.Default);
 
         if (declaring.Count > 0)
         {
@@ -49,6 +58,8 @@ public sealed partial class DoNotCopyValueAnalyzer
             }
         }
 
+        hasEffect.UnionWith(usesNonCopyableTypes);
+
         foreach (var (file, text) in listFiles)
         {
             var entries = new List<SafeListEntry>();
@@ -61,7 +72,7 @@ public sealed partial class DoNotCopyValueAnalyzer
 
                 string name = SafeMemberList.GetAssemblyName(entry);
 
-                if (GetWhyTrustedHasNoEffect(name, compilation, referenced, usesNonCopyableTypes) is { } why)
+                if (GetWhyTrustedHasNoEffect(name, compilation, referenced, hasEffect) is { } why)
                 {
                     var location = Location.Create(file.Path, entry.Line.Span, text.Lines.GetLinePositionSpan(entry.Line.Span));
                     context.ReportDiagnostic(Diagnostic.Create(Rules.SafeListTrustedHasNoEffect, location, name, why));
@@ -71,7 +82,7 @@ public sealed partial class DoNotCopyValueAnalyzer
     }
 
     private static string? GetWhyTrustedHasNoEffect(
-        string name, Compilation compilation, IEnumerable<IAssemblySymbol> referenced, HashSet<IAssemblySymbol> usesNonCopyableTypes)
+        string name, Compilation compilation, IEnumerable<IAssemblySymbol> referenced, HashSet<IAssemblySymbol> hasEffect)
     {
         if (string.Equals(name, compilation.Assembly.Name, StringComparison.OrdinalIgnoreCase))
             return "it is the assembly of the compilation, which is checked code";
@@ -81,12 +92,13 @@ public sealed partial class DoNotCopyValueAnalyzer
         if (named.Count is 0)
             return "the compilation references no assembly of that name";
 
-        if (named.Any(usesNonCopyableTypes.Contains))
+        if (named.Any(hasEffect.Contains))
             return null;
 
         return named.All(AnalyzedAssemblies.IsAnalyzed)
             ? "the assembly was built with the analyzer, so it is checked code"
-            : "the assembly references no assembly that declares a non-copyable type";
+            : "the assembly references no assembly that declares a non-copyable type, and no class of the compilation that holds a " +
+              "non-copyable value derives from a class of the assembly";
     }
 
     // The first assembly that an assembly references which declares a non-copyable type or forwards one, with that type.

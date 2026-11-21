@@ -28,6 +28,9 @@
   <ItemGroup>
     <!-- The safe list for the framework, in the format of the NonCopyableSymbols.txt files that a project can add. -->
     <EmbeddedResource Include="NonCopyableSymbols.txt" LogicalName="Singulink.CodeAnalysis.Analyzers.NonCopyableSymbols.txt" />
+
+    <!-- The assemblies of the shared frameworks that the built-in symbol list was checked against. -->
+    <EmbeddedResource Include="FrameworkAssemblies.txt" LogicalName="Singulink.CodeAnalysis.Analyzers.FrameworkAssemblies.txt" />
   </ItemGroup>
 
   <ItemGroup>

@@ -64,8 +64,13 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
             bool allowsImplicitMoves = AllowsImplicitMoves(context.Options);
 
             context.RegisterCompilationEndAction(moves.Report);
-            context.RegisterCompilationEndAction(context => AnalyzeUncheckedReferences(context, list, listFiles));
-            context.RegisterSymbolAction(context => AnalyzeCloningBases(context, types), SymbolKind.NamedType);
+
+            // The assemblies whose 'trusted' line answers the warning for a base class: filled by the check of the classes, and read at
+            // the end of the compilation by the check of the 'trusted' lines.
+            var trustedForBase = new ConcurrentDictionary<IAssemblySymbol, bool>(SymbolEqualityComparer.Default);
+
+            context.RegisterCompilationEndAction(context => AnalyzeUncheckedReferences(context, list, listFiles, trustedForBase));
+            context.RegisterSymbolAction(context => AnalyzeCloningBases(context, types, trustedForBase), SymbolKind.NamedType);
             context.RegisterSyntaxNodeAction(context => AnalyzeCloningBinding(context, types), SyntaxKind.ClassDeclaration);
 
             context.RegisterOperationBlockAction(context => {
@@ -220,6 +225,8 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
                 Report(Rules.SafeListNamesAccessor, entry.Line, entry.Id, owner);
             else if (entry.Marker is SafeListMarker.Clones && SafeMemberList.GetWhyClonesHasNoEffect(entry, context.Compilation) is { } whyNot)
                 Report(Rules.SafeListClonesHasNoEffect, entry.Line, entry.Id, entry.Id[0] switch { 'T' => "a class that clones itself", 'E' => "an event that clones its object", _ => $"a {SafeMemberList.GetMemberKind(entry.Id)} that clones its object" }, whyNot);
+            else if (entry.Marker is SafeListMarker.NeverClones && SafeMemberList.GetWhyNeverClonesHasNoEffect(entry, context.Compilation, clonesOfFiles) is { } whyNever)
+                Report(Rules.SafeListClonesHasNoEffect, entry.Line, entry.Id, "a class that never clones its objects", whyNever);
             else if (SafeMemberList.ContradictsClones(entry, clonesOfFiles))
                 Report(Rules.SafeListContradictsClones, entry.Line, entry.Id);
             else if (SafeMemberList.FindWideningOfBuiltIn(entry) is { } widening && !IsFileOfAPackage(context.AdditionalFile, context.Options))

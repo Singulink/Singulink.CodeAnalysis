@@ -988,6 +988,49 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
         return found;
     }
 
+    /// <summary>
+    /// Gets the nearest base class of a class of which nothing says whether its own code clones an object with MemberwiseClone: a class
+    /// of an assembly that was not built with the analyzer, that is no part of the framework, and that no 'trusted' line vouches for,
+    /// where no 'clones=none' line names the class or a class between. Null if there is none. A class that a 'clones' line names is not
+    /// looked for here: see <see cref="FindCloningBase"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The code of every other base class is known. A class of the compilation or of an analyzed assembly is checked in its own build,
+    /// where a call of MemberwiseClone gets its warning. Of a class of the framework the built-in list says whether it clones itself:
+    /// see <see cref="FrameworkAssemblies"/>. A 'clones=none' line vouches for its class and for every class above it, so the walk ends
+    /// there. A 'trusted' line vouches for the classes of its assembly, and the walk goes on above them.
+    /// </para>
+    /// </remarks>
+    /// <param name="type">The class.</param>
+    /// <param name="trusted">Takes each assembly that a 'trusted' line vouches for and that has a base class of the class which the walk
+    /// passes: the line answers the question for that class, so it has an effect where the class holds a non-copyable value.</param>
+    public INamedTypeSymbol? FindUnknownBase(INamedTypeSymbol type, ICollection<IAssemblySymbol> trusted)
+    {
+        for (var current = type.BaseType; current is not null; current = current.BaseType)
+        {
+            var definition = current.OriginalDefinition;
+
+            if (list.IsNeverClones(definition))
+                return null;
+
+            var assembly = definition.ContainingAssembly;
+
+            if (assembly is null || AnalyzedAssemblies.IsAnalyzed(assembly) || FrameworkAssemblies.Contains(assembly))
+                continue;
+
+            if (list.IsTrusted(assembly))
+            {
+                trusted.Add(assembly);
+                continue;
+            }
+
+            return current;
+        }
+
+        return null;
+    }
+
     private static IEnumerable<INamedTypeSymbol> GetClasses(INamespaceOrTypeSymbol container)
     {
         foreach (var member in container.GetMembers())

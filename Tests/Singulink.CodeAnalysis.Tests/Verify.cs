@@ -318,6 +318,23 @@ internal static class Verify
         $"of '{type}' copies its {(isParameter ? "parameter" : "field")} '{field}' of non-copyable type '{fieldType}'. Hold the value in an " +
         $"object of a class that '{type}' refers to, which the clone shares, or suppress this warning where no object of '{type}' is ever cloned.");
 
+    // The ID of the lines that the message advises is 'T:' and the name of the base class, for a class that is not generic.
+    public static DiagnosticResult FieldBehindUnknownBase(
+        int location, string type, string unknownBase, string assembly, string fieldType, string field, string? id = null) => Diagnostic(
+        DiagnosticIds.CloningBase,
+        location,
+        $"'{type}' derives from '{unknownBase}' of assembly '{assembly}', which was not built with the analyzer, and no symbol list line says " +
+        $"whether its code clones an object field by field with MemberwiseClone. A clone would copy the field '{field}' of type '{fieldType}' " +
+        $"of '{type}', which holds a non-copyable value. Add '{id ?? "T:" + unknownBase};clones' to a NonCopyableSymbols.txt file if " +
+        $"'{unknownBase}' clones itself, '{id ?? "T:" + unknownBase};clones=none' if neither it nor a class above it does, or " +
+        $"'A:{assembly};trusted' if no code of the assembly copies a non-copyable value. Or hold the value in an object of a class that " +
+        $"'{type}' refers to, which a clone shares.");
+
+    public static DiagnosticResult SafeListNeverClonesHasNoEffect(int line, int startColumn, int endColumn, string id, string because) =>
+        new DiagnosticResult(DiagnosticIds.SafeListLine, DiagnosticSeverity.Warning)
+            .WithSpan(ListFileName, line, startColumn, line, endColumn)
+            .WithMessage($"This line of the symbol list file marks '{id}' as a class that never clones its objects. It has no effect, because {because}.");
+
     public static DiagnosticResult SafeListClonesHasNoEffect(int line, int startColumn, int endColumn, string id, string because) =>
         new DiagnosticResult(DiagnosticIds.SafeListLine, DiagnosticSeverity.Warning)
             .WithSpan(ListFileName, line, startColumn, line, endColumn)

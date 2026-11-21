@@ -223,7 +223,8 @@ public class CloningBaseTests
 
     // A 'clones' line of a project's symbol list file makes a class of a referenced library count, and a class of the compilation
     // itself: the line is about the classes that derive from it, not about the class's own fields. A library's shipped file counts the
-    // same.
+    // same. With no line, the class of the library, which was not built with the analyzer, is one of which nothing is known, and the field
+    // gets the warning for that: see UnknownBaseTests.
     [TestMethod]
     [DataRow(null, false)]
     [DataRow("NonCopyableSymbols.txt", true)]
@@ -268,6 +269,10 @@ public class CloningBaseTests
                 Verify.MemberwiseCloneThroughListedBase(0, "Pinned", "Docs.Document", Handle, "_pinned"),
                 Verify.MemberwiseCloneThroughListedBase(1, "OwnDerived", "Own", Handle, "_pinned"),
             ]);
+        }
+        else
+        {
+            test.ExpectedDiagnostics.Add(Verify.FieldBehindUnknownBase(0, "Pinned", "Docs.Document", "MyLibrary", Handle, "_pinned"));
         }
 
         await test.RunAsync();

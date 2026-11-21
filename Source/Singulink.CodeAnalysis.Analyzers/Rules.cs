@@ -151,7 +151,18 @@ internal static class Rules
         "class gets it where it is bound, as a base class or in an object creation. Where the binding is in the type of a value, as in a " +
         "'Tagged<Guard>' that a call returns, or in the base list of a class of another assembly, the value gets the warning wherever it is " +
         "used as a type that hands it to the cloning code: the receiver of a member of the cloning class or of a class above it, a " +
-        "conversion to one of those or to an interface, and a call of a member that clones.";
+        "conversion to one of those or to an interface, and a call of a member that clones. A base class of an assembly that was not built " +
+        "with the analyzer, and that is no part of the framework, may clone itself too, and nothing tells the analyzer: a class of the " +
+        "compilation that derives from one gets the warning on each field that holds a non-copyable value until a symbol list line says " +
+        "what the base class does. 'clones' says that it clones itself, 'clones=none' that neither it nor a class above it does, and a " +
+        "'trusted' line for its assembly that no code of the assembly copies a non-copyable value.";
+
+    private const string FieldBehindUnknownBaseMessage =
+        "'{0}' derives from '{1}' of assembly '{2}', which was not built with the analyzer, and no symbol list line says whether its code " +
+        "clones an object field by field with MemberwiseClone. A clone would copy the {3} of type '{4}' of '{0}', which holds a non-copyable " +
+        "value. Add '{5};clones' to a NonCopyableSymbols.txt file if '{1}' clones itself, '{5};clones=none' if neither it nor a class above " +
+        "it does, or 'A:{2};trusted' if no code of the assembly copies a non-copyable value. Or hold the value in an object of a class that " +
+        "'{0}' refers to, which a clone shares.";
 
     private const string MemberwiseCloneOfTypeParameterThroughListedBaseMessage =
         "'{0}' derives from '{1}', whose own code clones an object field by field with MemberwiseClone, so a clone of an object of '{0}' " +
@@ -950,6 +961,12 @@ internal static class Rules
         MemberwiseCloneOfTypeParameterThroughListedBaseMessage,
         CloningBaseDescription);
 
+    public static readonly DiagnosticDescriptor FieldBehindUnknownBase = Create(
+        DiagnosticIds.CloningBase,
+        CloningBaseTitle,
+        FieldBehindUnknownBaseMessage,
+        CloningBaseDescription);
+
     public static readonly DiagnosticDescriptor CloningBinding = Create(
         DiagnosticIds.CloningBase,
         CloningBaseTitle,
@@ -1655,6 +1672,7 @@ internal static class Rules
         MemberwiseCloneOfOpenClass,
         MemberwiseCloneThroughListedBase,
         MemberwiseCloneOfTypeParameterThroughListedBase,
+        FieldBehindUnknownBase,
         CloningBinding,
         CloningUseConversion,
         CloningUseMember,
