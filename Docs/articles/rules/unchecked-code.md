@@ -140,7 +140,7 @@ Lease first = ThirdParty.Leases.Create()[0];   // SCA1030 until a symbol list fi
 
 **For each route, the unchecked code has to use the non-copyable type in its own code,** so its assembly has to reference the assembly that declares the type. That reference gets a warning, once for each unchecked assembly that the project references ([SCA1025](../diagnostics/sca1025.md)). It covers every route for a type that a project or a library declares, whether a `[NonCopyable]` mark makes it non-copyable or a `noncopyable` line for a type of checked code does.
 
-**Some values need no such reference:** the built-in non-copyable types, which the framework declares, a struct of unchecked code that only a `noncopyable` line makes non-copyable, and a value that is bound to a marked type parameter. For those, the unchecked code needs a way to the value. So the reference that gets the warning is one to an assembly of checked code whose members let other code get at such a value: see [Values That Checked Code Lets Out](../diagnostics/sca1025.md#values-that-checked-code-lets-out).
+**Some values need no such reference:** a built-in non-copyable type (the framework declares them), a struct of unchecked code that only a `noncopyable` line makes non-copyable, and a value that is bound to a marked type parameter. For those, the unchecked code still needs a way to the value. The reference that gets the warning is then one to an assembly of checked code whose members let other code get at such a value: see [Values That Checked Code Lets Out](../diagnostics/sca1025.md#values-that-checked-code-lets-out).
 
 Build the assembly with the analyzer, or vouch for it with a line of a [symbol list file](symbol-list-format.md):
 
@@ -154,6 +154,6 @@ The line turns off the warning for that assembly and nothing else: its members s
 
 One thing remains: what is handed over or vouched for. A value passed by value is the callee's from then on, and so is what a `borrows` or a `new` entry or a `trusted` line vouches for.
 
-How these weigh against the rest: [What Is Not Covered](not-covered.md).
+How this weighs against the rest: [What Is Not Covered](not-covered.md).
 
 </div>
