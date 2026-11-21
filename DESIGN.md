@@ -327,13 +327,27 @@ marked type parameter is copied by generic code that names no type at all. Since
   unchecked assembly that references an assembly of checked code whose members let other code get at such a value gets SCA1025 too,
   with a text that names the member.
 - **A member lets a value out in three ways.** It is a field that carries one. It returns a reference to one, or a container or
-  another object that carries one. Or other code can implement it, as a member of an interface, a virtual member or a delegate, and
-  it is given a reference or a container. A base class or an interface that carries a value counts for its type. What a member of
-  checked code returns or takes by value does not count: that is a new value, or a move.
+  another object that carries one. Or it hands one to code that the unchecked assembly wrote: other code can implement the member,
+  as a member of an interface, a virtual member or a delegate, or the member calls other code back, through an event or a
+  parameter that is a delegate, a function pointer or an interface, and that code is given a reference or a container. A base
+  class or an interface that carries a value counts for its type. What a member of checked code returns or takes by value does not
+  count: that is a new value, or a move.
+- **A delegate and a function pointer are judged by their method,** and not by what their type mentions: `Action<SpinLock>` takes
+  the value by value, which is a move, so a field or a parameter of that type lets nothing out, and `Action<List<SpinLock>>` does.
+- **A protected member counts only in a class that can be derived from,** and a type that an assembly forwards counts through the
+  assembly that it moved to, with that assembly named in the message.
+- **The message names the member and no type.** The type of a member is what carries the value, such as `List<GCHandle>`, and not
+  the non-copyable type itself, so naming it as that was wrong (QA round 13).
 - **A framework generic that is bound to the value needs no entry here.** `StrongBox<SpinLock>` or `SpinLock[]` reaches unchecked
   code only where checked code hands it over, and that use gets its own warning (SCA1020, SCA1023 or SCA1024).
 - **Only the code of checked assemblies is read for this,** and only where an unchecked assembly references one: the values of
   unchecked code are that code's own business, as its types are.
+- **A project reference gives the compiler a reference assembly,** which has no method bodies and names only the assemblies that
+  its reachable members use. An unchecked project of the same solution that uses checked code only inside its methods has no
+  reference to it there, and gets no SCA1025, from the check of the declaring assemblies or from this one. The analyzer cannot
+  read the implementation assembly, and making every project compile against implementation assemblies
+  (`CompileUsingReferenceAssemblies`) would slow every incremental build, so this is documented and left: see SCA1025, "Project
+  References". A package whose `lib` assembly is referenced is not affected (QA round 13).
 - **Internal members are not imported from a referenced assembly,** so what they let out cannot be seen. An unchecked assembly that
   checked code names in an `InternalsVisibleTo` attribute can use them, and gets the warning whatever that code holds. This also
   covers an internal `[NonCopyable]` struct, which the check of the declaring assemblies cannot see either.

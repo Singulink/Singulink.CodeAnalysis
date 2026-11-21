@@ -64,7 +64,7 @@ public sealed partial class DoNotCopyValueAnalyzer
         // what is bound to a marked type parameter of a generic class: an assembly needs no reference of its own to copy either. What it
         // needs is a way to the value, and the ways that no call shows start at a member of checked code that lets other code get at one.
         // So an assembly that references an assembly of checked code with such a member is reported as well.
-        var exposing = new Dictionary<IAssemblySymbol, (ISymbol Member, ITypeSymbol Type)?>(SymbolEqualityComparer.Default);
+        var exposing = new Dictionary<IAssemblySymbol, ISymbol?>(SymbolEqualityComparer.Default);
 
         foreach (var assembly in referenced)
         {
@@ -97,16 +97,16 @@ public sealed partial class DoNotCopyValueAnalyzer
                 if (!exposing.TryGetValue(reference, out var exposed))
                     exposing[reference] = exposed = FindExposedValue(reference, types);
 
-                if (exposed is not { } found)
+                if (exposed is null)
                     continue;
 
                 usesNonCopyableTypes.Add(assembly);
 
+                // The member can be of an assembly that the reference forwards a type to, so its own assembly is the one that is named.
                 if (!list.IsTrusted(assembly))
                 {
-                    object?[] arguments = [assembly.Name, reference.Name, Display(found.Member), found.Type];
-                    WithoutNullableAnnotations(arguments);
-                    context.ReportDiagnostic(Diagnostic.Create(Rules.UncheckedAssemblyOfExposedValue, Location.None, arguments));
+                    context.ReportDiagnostic(Diagnostic.Create(
+                        Rules.UncheckedAssemblyOfExposedValue, Location.None, assembly.Name, exposed.ContainingAssembly.Name, Display(exposed)));
                 }
 
                 break;
@@ -152,34 +152,49 @@ public sealed partial class DoNotCopyValueAnalyzer
 
         return named.All(AnalyzedAssemblies.IsAnalyzed)
             ? "the assembly was built with the analyzer, so it is checked code"
-            : "the assembly references no assembly that declares a non-copyable type or that lets a non-copyable value out, and the " +
-              "line answers no warning for a field behind a class of the assembly";
+            : "the assembly references no assembly that declares a non-copyable type, lets a non-copyable value out or names it as a " +
+              "friend, and the line answers no warning for a field behind a class of the assembly";
     }
 
     /// <summary>
     /// Gets a member of an assembly of checked code that lets code of another assembly get at a non-copyable value which checked code
-    /// holds, with the type that carries the value: the first one by its display, so that every build names the same. Null if the
-    /// assembly has none.
+    /// holds: the first one by its display, so that every build names the same. Null if the assembly has none. An assembly that
+    /// forwards a type to another assembly of checked code is judged by that assembly as well, as an assembly that code was built
+    /// against before the type moved.
     /// </summary>
     /// <remarks>
     /// <para>
     /// Other code gets at a value that no call hands to it in three ways. It reads a field. It calls a member that returns a reference
     /// to the value, or a container or another object that carries it: a value that a member of checked code returns by value is a new
-    /// one. Or it is the code behind a member that checked code calls: an implementation of an interface member, an override, or the
-    /// method of a delegate, which is given a reference or a container. A value that is passed by value is the callee's from then on.
+    /// one. Or it is the code that checked code calls back: an implementation of an interface member, an override, a handler of an
+    /// event, or the method of a delegate or a function pointer that it passed in, which is given a reference or a container. A value
+    /// that is passed by value is the callee's from then on.
     /// </para>
     /// <para>
-    /// A member counts where every assembly can reach it: public or protected, in a type that is so in all its containing types. An
-    /// internal member is not imported where its assembly is referenced, so it is not seen here: see <see cref="IsFriend"/>. A type
-    /// counts through its base class and its interfaces as well, as 'class Locks : List&lt;SpinLock&gt;' does. What a type carries is
-    /// what the classifier says: a non-copyable type, a type parameter that is marked, and a type that mentions either.
+    /// A member counts where every assembly can reach it: public, or protected in a class that can be derived from, in a type that is
+    /// so in all its containing types. An internal member is not imported where its assembly is referenced, so it is not seen here: see
+    /// <see cref="IsFriend"/>. A type counts through its base class and its interfaces as well, as 'class Locks : List&lt;SpinLock&gt;'
+    /// does. What a type carries is what the classifier says: a non-copyable type, a type parameter that is marked, and a type that
+    /// mentions either. A delegate and a function pointer are judged by what their method is given and returns.
     /// </para>
     /// </remarks>
-    private static (ISymbol Member, ITypeSymbol Type)? FindExposedValue(IAssemblySymbol assembly, NonCopyableTypes types)
+    private static ISymbol? FindExposedValue(IAssemblySymbol assembly, NonCopyableTypes types)
     {
-        (ISymbol Member, ITypeSymbol Type, string Display)? best = null;
+        (ISymbol Member, string Display)? best = null;
         Visit(assembly.GlobalNamespace);
-        return best is { } found ? (found.Member, found.Type) : null;
+
+        foreach (var forwarded in assembly.GetForwardedTypes())
+        {
+            if (!SymbolEqualityComparer.Default.Equals(forwarded.ContainingAssembly, assembly) &&
+                AnalyzedAssemblies.IsOfAnalyzedAssembly(forwarded) &&
+                forwarded.ContainingAssembly is { } target)
+            {
+                Visit(target.GlobalNamespace);
+                break;
+            }
+        }
+
+        return best?.Member;
 
         void Visit(INamespaceOrTypeSymbol container)
         {
@@ -195,17 +210,14 @@ public sealed partial class DoNotCopyValueAnalyzer
         void VisitType(INamedTypeSymbol type)
         {
             if (type.BaseType is { } baseType && types.Carries(baseType))
-                Add(type, baseType);
+                Add(type);
 
-            foreach (var implemented in type.Interfaces)
-            {
-                if (types.Carries(implemented))
-                    Add(type, implemented);
-            }
+            if (type.Interfaces.Any(types.Carries))
+                Add(type);
 
             // The method of a delegate is the code of whoever made the delegate.
-            if (type.DelegateInvokeMethod is { } invoke)
-                AddGiven(type, invoke);
+            if (type.DelegateInvokeMethod is { } invoke && IsGiven(invoke))
+                Add(type);
 
             foreach (var member in type.GetMembers())
             {
@@ -222,58 +234,121 @@ public sealed partial class DoNotCopyValueAnalyzer
 
                 switch (member)
                 {
-                    case IFieldSymbol { IsConst: false } field when types.Carries(field.Type):
-                        Add(field, field.Type);
+                    // A field is read where it is, so the value itself counts too.
+                    case IFieldSymbol { IsConst: false } field when types.IsNonCopyableType(field.Type) || LetsOut(field.Type, byReference: false, 0):
+                        Add(field);
+                        break;
+
+                    // The handler of an event is the code of whoever subscribed.
+                    case IEventSymbol @event when LetsOut(@event.Type, byReference: false, 0):
+                        Add(@event);
                         break;
 
                     case IPropertySymbol property:
-                        if (HandsOut(property.Type, property.ReturnsByRef || property.ReturnsByRefReadonly))
-                            Add(property, property.Type);
+                        if (LetsOut(property.Type, property.ReturnsByRef || property.ReturnsByRefReadonly, 0) ||
+                            ((property.GetMethod ?? property.SetMethod) is { } accessor && IsGivenOrCalledBack(accessor, property.Parameters)))
+                        {
+                            Add(property);
+                        }
 
                         break;
 
-                    case IMethodSymbol { MethodKind: MethodKind.Ordinary or MethodKind.UserDefinedOperator or MethodKind.Conversion } method:
-                        if (HandsOut(method.ReturnType, method.ReturnsByRef || method.ReturnsByRefReadonly))
-                            Add(method, method.ReturnType);
-
-                        if (CanBeImplementedElsewhere(method))
-                            AddGiven(method, method);
+                    case IMethodSymbol { MethodKind: MethodKind.Ordinary or MethodKind.UserDefinedOperator or MethodKind.Conversion or MethodKind.Constructor } method:
+                        if ((method.MethodKind is not MethodKind.Constructor && LetsOut(method.ReturnType, method.ReturnsByRef || method.ReturnsByRefReadonly, 0)) ||
+                            IsGivenOrCalledBack(method, method.Parameters))
+                        {
+                            Add(method);
+                        }
 
                         break;
                 }
             }
         }
 
-        // What a member returns: a reference to a value, or by value something that carries one and is not itself the value.
-        bool HandsOut(ITypeSymbol type, bool byReference) => types.Carries(type) && (byReference || !types.IsNonCopyableType(type));
+        // What other code gets at through something of a type that it reads, is returned or is given: a reference to a value, or by
+        // value something that carries one and is not itself the value. A delegate and a function pointer carry nothing themselves:
+        // they are judged by what the code behind them is given and returns.
+        bool LetsOut(ITypeSymbol type, bool byReference, int depth)
+        {
+            if (depth > 8)
+                return false;
 
-        // What the code behind a member is given: a reference to a value, or a container. A value by value is a move.
-        void AddGiven(ISymbol member, IMethodSymbol method)
+            switch (type)
+            {
+                case IPointerTypeSymbol pointer:
+                    return types.Carries(pointer.PointedAtType) || LetsOut(pointer.PointedAtType, byReference: true, depth + 1);
+
+                case IFunctionPointerTypeSymbol functionPointer:
+                    return IsGivenAt(functionPointer.Signature, depth + 1);
+
+                case INamedTypeSymbol { DelegateInvokeMethod: { } invoke }:
+                    return IsGivenAt(invoke, depth + 1);
+
+                case IArrayTypeSymbol { ElementType: IPointerTypeSymbol or IFunctionPointerTypeSymbol or INamedTypeSymbol { TypeKind: TypeKind.Delegate } } array:
+                    return LetsOut(array.ElementType, byReference: false, depth + 1);
+
+                default:
+                    return types.Carries(type) && (byReference || !types.IsNonCopyableType(type));
+            }
+        }
+
+        // What the code behind a method is given, and what it returns to its caller: a reference to a value, or a container. A value by
+        // value is a move.
+        bool IsGiven(IMethodSymbol method) => IsGivenAt(method, 0);
+
+        bool IsGivenAt(IMethodSymbol method, int depth)
         {
             foreach (var parameter in method.Parameters)
             {
-                if (HandsOut(parameter.Type, parameter.RefKind is not RefKind.None))
-                {
-                    Add(member, parameter.Type);
-                    return;
-                }
+                if (LetsOut(parameter.Type, parameter.RefKind is not RefKind.None, depth))
+                    return true;
             }
+
+            return !method.ReturnsVoid && LetsOut(method.ReturnType, method.ReturnsByRef || method.ReturnsByRefReadonly, depth);
         }
 
-        void Add(ISymbol member, ITypeSymbol type)
+        // The parameters of a member that other code can implement are what its code is given. Of a member that other code can only
+        // call, a parameter counts where it is code that the member calls back: a delegate, a function pointer, or an object behind an
+        // interface, which is given what its type carries.
+        bool IsGivenOrCalledBack(IMethodSymbol method, System.Collections.Immutable.ImmutableArray<IParameterSymbol> parameters)
+        {
+            bool implementable = CanBeImplementedElsewhere(method);
+
+            foreach (var parameter in parameters)
+            {
+                if (implementable)
+                {
+                    if (LetsOut(parameter.Type, parameter.RefKind is not RefKind.None, 0))
+                        return true;
+                }
+                else if (parameter.Type is IFunctionPointerTypeSymbol or INamedTypeSymbol { TypeKind: TypeKind.Delegate or TypeKind.Interface } &&
+                    LetsOut(parameter.Type, byReference: false, 0))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        void Add(ISymbol member)
         {
             string display = member.ToDisplayString();
 
             if (best is null || string.CompareOrdinal(display, best.Value.Display) < 0)
-                best = (member, type, display);
+                best = (member, display);
         }
 
         static bool CanBeImplementedElsewhere(IMethodSymbol method) =>
             method.ContainingType is { TypeKind: TypeKind.Interface } ||
             ((method.IsVirtual || method.IsAbstract || method.IsOverride) && !method.IsSealed && method.ContainingType is { IsSealed: false });
 
-        static bool IsReachable(ISymbol symbol) =>
-            symbol.DeclaredAccessibility is Accessibility.Public or Accessibility.Protected or Accessibility.ProtectedOrInternal;
+        // A protected member can be reached only through a class that derives from its class.
+        static bool IsReachable(ISymbol symbol) => symbol.DeclaredAccessibility switch {
+            Accessibility.Public => true,
+            Accessibility.Protected or Accessibility.ProtectedOrInternal => symbol.ContainingType is { IsSealed: false, IsStatic: false },
+            _ => false,
+        };
     }
 
     // Whether an assembly names another one in an InternalsVisibleTo attribute, by its simple name in any case: the attribute's argument is

@@ -246,7 +246,7 @@ public class UncheckedAssemblyTests
                 1,
                 16,
                 "Clean",
-                "the assembly references no assembly that declares a non-copyable type or that lets a non-copyable value out, and the line answers no warning for a field behind a class of the assembly"),
+                "the assembly references no assembly that declares a non-copyable type, lets a non-copyable value out or names it as a friend, and the line answers no warning for a field behind a class of the assembly"),
             Verify.SafeListTrustedHasNoEffect(4, 1, 22, "TestProject", "it is the assembly of the compilation, which is checked code"),
         ]);
 

@@ -365,8 +365,8 @@ internal static class Rules
         "with the line 'A:{0};trusted' in a NonCopyableSymbols.txt file.";
 
     private const string UncheckedAssemblyOfExposedValueMessage =
-        "Assembly '{0}' was not built with the analyzer, and it references '{1}', where '{2}' lets other code get at a value of non-copyable " +
-        "type '{3}': its code can copy such a value where it implements an interface, makes a delegate or reads an object of a type of " +
+        "Assembly '{0}' was not built with the analyzer, and it references '{1}', where '{2}' lets other code get at a non-copyable " +
+        "value: its code can copy such a value where it implements an interface, makes a delegate or reads an object of a type of " +
         "checked code, which no call shows. Build '{0}' with the analyzer, or, if its code makes no copy of the non-copyable values that it " +
         "gets at, vouch for it with the line 'A:{0};trusted' in a NonCopyableSymbols.txt file.";
 

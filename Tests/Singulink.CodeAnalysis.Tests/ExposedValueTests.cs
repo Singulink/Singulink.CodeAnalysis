@@ -14,8 +14,6 @@ namespace Singulink.CodeAnalysis.Tests;
 [PrefixTestClass]
 public class ExposedValueTests
 {
-    private const string SpinLock = "System.Threading.SpinLock";
-
     // A library that was not built with the analyzer and that references the library of checked code: it names a type of it, since the
     // compiler leaves out a reference that nothing uses. What it does with the library is not read.
     private const string Plugin = """
@@ -67,30 +65,43 @@ public class ExposedValueTests
     // that is given a reference or a container, and a base class or an interface that carries the value. An assembly that was not built
     // with the analyzer and that references the library is reported, with the member.
     [TestMethod]
-    [DataRow("public class Job { public SpinLock Lock; }", "Job.Lock", SpinLock)]
-    [DataRow("public class Job { public static GCHandle Shared; }", "Job.Shared", "System.Runtime.InteropServices.GCHandle")]
-    [DataRow("public class Job { protected SpinLock Lock; }", "Job.Lock", SpinLock)]
-    [DataRow("public class Job { public (SpinLock Lock, int Count) Pair; }", "Job.Pair", "(System.Threading.SpinLock Lock, int Count)")]
-    [DataRow("public class Job { public SpinLock[] Locks = []; }", "Job.Locks", "System.Threading.SpinLock[]")]
-    [DataRow("public class Job { private SpinLock _lock; public ref SpinLock Lock => ref _lock; }", "Job.Lock", SpinLock)]
-    [DataRow("public class Job { private SpinLock _lock; public ref SpinLock GetLock() => ref _lock; }", "Job.GetLock()", SpinLock)]
-    [DataRow("public class Job { public List<GCHandle> Handles { get; } = new(); }", "Job.Handles", "System.Collections.Generic.List<System.Runtime.InteropServices.GCHandle>")]
-    [DataRow("public class Job { public List<SpinLock> GetLocks() => new(); }", "Job.GetLocks()", "System.Collections.Generic.List<System.Threading.SpinLock>")]
-    [DataRow("public interface IWorker { void Run(ref SpinLock gate); }", "IWorker.Run(ref SpinLock)", SpinLock)]
-    [DataRow("public interface IWorker { void Run(in SpinLock gate); }", "IWorker.Run(in SpinLock)", SpinLock)]
-    [DataRow("public interface IWorker { void Fill(List<SpinLock> gates); }", "IWorker.Fill(List<SpinLock>)", "System.Collections.Generic.List<System.Threading.SpinLock>")]
-    [DataRow("public abstract class Worker { public abstract void Run(ref SpinLock gate); }", "Worker.Run(ref SpinLock)", SpinLock)]
-    [DataRow("public class Worker { protected virtual void Run(ref SpinLock gate) { } }", "Worker.Run(ref SpinLock)", SpinLock)]
-    [DataRow("public delegate void Gate(ref SpinLock gate);", "Gate", SpinLock)]
-    [DataRow("public class Locks : List<SpinLock> { }", "Locks", "System.Collections.Generic.List<System.Threading.SpinLock>")]
-    [DataRow("public class Locks : IEnumerable<SpinLock> { public IEnumerator<SpinLock> GetEnumerator() => throw null!; System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => throw null!; }", "Locks", "System.Collections.Generic.IEnumerable<System.Threading.SpinLock>")]
-    [DataRow("public class Outer { public class Job { public SpinLock Lock; } }", "Outer.Job.Lock", SpinLock)]
-    [DataRow("public class Box<[NonCopyable] T> { public T Value = default!; }", "Box<T>.Value", "T")]
-    [DataRow("public interface IUser { void Use<[NonCopyable] T>(ref T value); }", "IUser.Use<T>(ref T)", "T")]
-    public async Task UncheckedAssembly_ThatReferencesAnAssemblyThatLetsAValueOutIsReported(string jobs, string member, string type)
+    [DataRow("public class Job { public SpinLock Lock; }", "Job.Lock")]
+    [DataRow("public class Job { public static GCHandle Shared; }", "Job.Shared")]
+    [DataRow("public class Job { protected SpinLock Lock; }", "Job.Lock")]
+    [DataRow("public class Job { public (SpinLock Lock, int Count) Pair; }", "Job.Pair")]
+    [DataRow("public class Job { public SpinLock[] Locks = []; }", "Job.Locks")]
+    [DataRow("public class Job { private SpinLock _lock; public ref SpinLock Lock => ref _lock; }", "Job.Lock")]
+    [DataRow("public class Job { private SpinLock _lock; public ref SpinLock GetLock() => ref _lock; }", "Job.GetLock()")]
+    [DataRow("public class Job { public List<GCHandle> Handles { get; } = new(); }", "Job.Handles")]
+    [DataRow("public class Job { public List<SpinLock> GetLocks() => new(); }", "Job.GetLocks()")]
+    [DataRow("public interface IWorker { void Run(ref SpinLock gate); }", "IWorker.Run(ref SpinLock)")]
+    [DataRow("public interface IWorker { void Run(in SpinLock gate); }", "IWorker.Run(in SpinLock)")]
+    [DataRow("public interface IWorker { void Fill(List<SpinLock> gates); }", "IWorker.Fill(List<SpinLock>)")]
+    [DataRow("public abstract class Worker { public abstract void Run(ref SpinLock gate); }", "Worker.Run(ref SpinLock)")]
+    [DataRow("public class Worker { protected virtual void Run(ref SpinLock gate) { } }", "Worker.Run(ref SpinLock)")]
+    [DataRow("public delegate void Gate(ref SpinLock gate);", "Gate")]
+    [DataRow("public class Locks : List<SpinLock> { }", "Locks")]
+    [DataRow("public class Locks : IEnumerable<SpinLock> { public IEnumerator<SpinLock> GetEnumerator() => throw null!; System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => throw null!; }", "Locks")]
+    [DataRow("public class Outer { public class Job { public SpinLock Lock; } }", "Outer.Job.Lock")]
+    [DataRow("public class Job { public event System.Action<List<SpinLock>>? Changed; }", "Job.Changed")]
+    [DataRow("public interface IJob { event System.EventHandler<List<SpinLock>> Changed; }", "IJob.Changed")]
+    [DataRow("public interface IMap { int this[in SpinLock key] { get; } }", "IMap.this[in SpinLock]")]
+    [DataRow("public abstract class Map { public abstract int this[List<SpinLock> keys] { get; } }", "Map.this[List<SpinLock>]")]
+    [DataRow("public class Job { public void Each(System.Action<List<SpinLock>> callback) { } }", "Job.Each(Action<List<SpinLock>>)")]
+    [DataRow("public class Job { public void Each(System.Func<List<SpinLock>, int> callback) { } }", "Job.Each(Func<List<SpinLock>, int>)")]
+    [DataRow("public class Job { public void Fill(System.Buffers.SpanAction<SpinLock, int> callback) { } }", "Job.Fill(SpanAction<SpinLock, int>)")]
+    [DataRow("public class Job { public Job(System.Action<SpinLock[]> callback) { } }", "Job.Job(Action<SpinLock[]>)")]
+    [DataRow("public class Job { public void Sort(IComparer<List<SpinLock>> comparer) { } }", "Job.Sort(IComparer<List<SpinLock>>)")]
+    [DataRow("public delegate void Gate(List<GCHandle> handles);", "Gate")]
+    [DataRow("public unsafe class Job { public GCHandle* Handle; }", "Job.Handle")]
+    [DataRow("public unsafe class Job { public delegate*<ref SpinLock, void> Callback; }", "Job.Callback")]
+    [DataRow("public unsafe class Job { public void Each(delegate*<List<SpinLock>, void> callback) { } }", "Job.Each(delegate*<List<SpinLock>, void>)")]
+    [DataRow("public class Box<[NonCopyable] T> { public T Value = default!; }", "Box<T>.Value")]
+    [DataRow("public interface IUser { void Use<[NonCopyable] T>(ref T value); }", "IUser.Use<T>(ref T)")]
+    public async Task UncheckedAssembly_ThatReferencesAnAssemblyThatLetsAValueOutIsReported(string jobs, string member)
     {
         var test = await CreateTestAsync(jobs);
-        test.ExpectedDiagnostics.Add(Verify.UncheckedAssemblyOfExposedValue("Plugin", "Jobs", member, type));
+        test.ExpectedDiagnostics.Add(Verify.UncheckedAssemblyOfExposedValue("Plugin", "Jobs", member));
         await test.RunAsync();
     }
 
@@ -106,6 +117,11 @@ public class ExposedValueTests
     [DataRow("class Job { internal SpinLock Lock; } public class Open { internal SpinLock Lock; private SpinLock _own; }")]
     [DataRow("public class Job { public int Count; public string Name = \"\"; public List<int> Numbers { get; } = new(); }")]
     [DataRow("public class Box<T> { public T Value = default!; }")]
+    [DataRow("public class Job { public System.Action<SpinLock>? Take; public System.Func<SpinLock>? Make; public System.Action<GCHandle>? Free; }")]
+    [DataRow("public delegate void Take(SpinLock byValue); public delegate SpinLock Make();")]
+    [DataRow("public class Job { public void Each(System.Action<SpinLock> callback) { } public event System.Action<GCHandle>? Freed; }")]
+    [DataRow("#pragma warning disable CS0628\npublic sealed class Job { protected SpinLock Lock; protected class Inner { public SpinLock Lock; } }")]
+    [DataRow("public static class Jobs { public static void Enter(ref SpinLock gate, ref bool taken) => gate.Enter(ref taken); }")]
     public async Task UncheckedAssembly_ThatReferencesAnAssemblyThatLetsNoValueOutIsNotReported(string jobs)
     {
         var test = await CreateTestAsync(jobs);
@@ -160,9 +176,28 @@ public class ExposedValueTests
                 1,
                 17,
                 "Plugin",
-                "the assembly references no assembly that declares a non-copyable type or that lets a non-copyable value out, and the line answers no warning for a field behind a class of the assembly"));
+                "the assembly references no assembly that declares a non-copyable type, lets a non-copyable value out or names it as a friend, and the line answers no warning for a field behind a class of the assembly"));
         }
 
+        await test.RunAsync();
+    }
+
+    // An assembly that was built against a library before a type of it moved references the old assembly, which now forwards the type.
+    // It is judged by the assembly that the type moved to, and the message names that one.
+    [TestMethod]
+    public async Task UncheckedAssembly_ThatReferencesAnAssemblyThatForwardsToOneThatLetsAValueOutIsReported()
+    {
+        var before = await CompileAsync("public class Anchor { }", analyzed: true, "Jobs");
+        var plugin = await CompileAsync(Plugin, analyzed: false, "Plugin", before);
+        var moved = await CompileAsync(Usings + "public class Anchor { } public class Job { public SpinLock Lock; }", analyzed: true, "Moved");
+        var forwarder = await CompileAsync("[assembly: System.Runtime.CompilerServices.TypeForwardedTo(typeof(Anchor))]", analyzed: true, "Jobs", moved);
+
+        var test = new Verify.Test { TestCode = "class C { }" };
+        test.TestState.AdditionalReferences.Add(forwarder);
+        test.TestState.AdditionalReferences.Add(moved);
+        test.TestState.AdditionalReferences.Add(plugin);
+
+        test.ExpectedDiagnostics.Add(Verify.UncheckedAssemblyOfExposedValue("Plugin", "Moved", "Job.Lock"));
         await test.RunAsync();
     }
 
@@ -171,7 +206,7 @@ public class ExposedValueTests
     public async Task Message_NamesTheFirstMemberByItsDisplay()
     {
         var test = await CreateTestAsync("public class Zed { public SpinLock Lock; } public class Able { public GCHandle Handle; public SpinLock Lock; }");
-        test.ExpectedDiagnostics.Add(Verify.UncheckedAssemblyOfExposedValue("Plugin", "Jobs", "Able.Handle", "System.Runtime.InteropServices.GCHandle"));
+        test.ExpectedDiagnostics.Add(Verify.UncheckedAssemblyOfExposedValue("Plugin", "Jobs", "Able.Handle"));
         await test.RunAsync();
     }
 }
