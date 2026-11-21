@@ -647,10 +647,13 @@ public class OwnershipListTests
                 yield return 1;
             }
 
-            // A lambda and a local function are judged the same way.
+            // A lambda and a local function are judged the same way, where the delegate that the lambda is made as does not keep what it
+            // is given. A delegate whose parameter is of a type parameter, as that of Func<T, TResult> is, keeps it: see ContainerOwnershipTests.
+            delegate Task Release(List<Guard> guards);
+
             static void Functions(SemaphoreSlim gate)
             {
-                Func<List<Guard>, Task> lambda = async guards =>
+                Release lambda = async guards =>
                 {
                     await gate.WaitAsync();
                     {|#10:guards|}.Clear();

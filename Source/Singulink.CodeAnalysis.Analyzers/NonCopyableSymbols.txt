@@ -1,7 +1,7 @@
 # The built-in framework symbol list of the non-copyable analyzer.
-# Format: one documentation-comment ID per line, with an optional marker (";new", ";borrows", ";drains", ";owned", ";view", ";noncopyable", ";copyable" or ";erasable") and optional ";for=" type parameter names.
+# Format: one documentation-comment ID per line, with an optional marker (";new", ";borrows", ";drains", ";owned", ";view", ";noncopyable", ";copyable", ";erasable", ";clones" or ";clones=complete") and optional ";for=" type parameter names.
 # A symbol list file of a project can also vouch for an assembly, with a line of the form "A:Assembly.Name;trusted".
-# Runtime source read: dotnet/runtime d757c03be2c3.
+# Runtime source read: dotnet/runtime d757c03be2c3. What in that source backs each entry is in NonCopyableSymbols.evidence.md beside this file.
 # A line ending in "# net9+", "# net10+" or "# net11+" names a member that exists from that version of .NET on. It does not resolve in a project that targets an earlier one.
 #
 #
@@ -398,8 +398,8 @@ M:System.Array.GetLongLength(System.Int32)
 M:System.Array.GetLowerBound(System.Int32)
 M:System.Array.GetUpperBound(System.Int32)
 M:System.Array.Empty``1
-M:System.Array.Clear(System.Array)
-M:System.Array.Clear(System.Array,System.Int32,System.Int32)
+M:System.Array.Clear(System.Array);borrows
+M:System.Array.Clear(System.Array,System.Int32,System.Int32);borrows
 M:System.Array.Reverse``1(``0[]);borrows
 M:System.Array.Reverse``1(``0[],System.Int32,System.Int32);borrows
 
@@ -454,16 +454,16 @@ M:System.Runtime.CompilerServices.Unsafe.Subtract``1(``0@,System.UIntPtr)
 M:System.Runtime.CompilerServices.Unsafe.Subtract``1(System.Void*,System.Int32)
 M:System.Runtime.CompilerServices.Unsafe.SubtractByteOffset``1(``0@,System.IntPtr)
 M:System.Runtime.CompilerServices.Unsafe.SubtractByteOffset``1(``0@,System.UIntPtr)
-M:System.Runtime.CompilerServices.Unsafe.AreSame``1(``0@,``0@)
-M:System.Runtime.CompilerServices.Unsafe.IsAddressGreaterThan``1(``0@,``0@)
-M:System.Runtime.CompilerServices.Unsafe.IsAddressLessThan``1(``0@,``0@)
-M:System.Runtime.CompilerServices.Unsafe.IsAddressGreaterThanOrEqualTo``1(``0@,``0@)
-M:System.Runtime.CompilerServices.Unsafe.IsAddressLessThanOrEqualTo``1(``0@,``0@)
-M:System.Runtime.CompilerServices.Unsafe.ByteOffset``1(``0@,``0@)
+M:System.Runtime.CompilerServices.Unsafe.AreSame``1(``0@,``0@);borrows
+M:System.Runtime.CompilerServices.Unsafe.IsAddressGreaterThan``1(``0@,``0@);borrows
+M:System.Runtime.CompilerServices.Unsafe.IsAddressLessThan``1(``0@,``0@);borrows
+M:System.Runtime.CompilerServices.Unsafe.IsAddressGreaterThanOrEqualTo``1(``0@,``0@);borrows
+M:System.Runtime.CompilerServices.Unsafe.IsAddressLessThanOrEqualTo``1(``0@,``0@);borrows
+M:System.Runtime.CompilerServices.Unsafe.ByteOffset``1(``0@,``0@);borrows
 M:System.Runtime.CompilerServices.Unsafe.AsRef``1(System.Void*)
 M:System.Runtime.CompilerServices.Unsafe.AsRef``1(``0@)
 M:System.Runtime.CompilerServices.Unsafe.NullRef``1
-M:System.Runtime.CompilerServices.Unsafe.IsNullRef``1(``0@)
+M:System.Runtime.CompilerServices.Unsafe.IsNullRef``1(``0@);borrows
 # Unbox returns a reference into the box: the value is used in place.
 M:System.Runtime.CompilerServices.Unsafe.Unbox``1(System.Object)
 
@@ -994,32 +994,32 @@ M:System.ValueTuple.Create``8(``0,``1,``2,``3,``4,``5,``6,``7)
 
 # System.Object
 M:System.Object.GetType
-M:System.Object.ReferenceEquals(System.Object,System.Object)
+M:System.Object.ReferenceEquals(System.Object,System.Object);borrows
 
 # Argument and state checks
-M:System.ArgumentNullException.ThrowIfNull(System.Object,System.String)
-M:System.ObjectDisposedException.ThrowIf(System.Boolean,System.Object)
+M:System.ArgumentNullException.ThrowIfNull(System.Object,System.String);borrows
+M:System.ObjectDisposedException.ThrowIf(System.Boolean,System.Object);borrows
 
 # GC and identity
-M:System.GC.KeepAlive(System.Object)
-M:System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(System.Object)
+M:System.GC.KeepAlive(System.Object);borrows
+M:System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(System.Object);borrows
 
 # System.Threading.Monitor (and the lock statement on a container)
-M:System.Threading.Monitor.Enter(System.Object)
-M:System.Threading.Monitor.Enter(System.Object,System.Boolean@)
-M:System.Threading.Monitor.TryEnter(System.Object)
-M:System.Threading.Monitor.TryEnter(System.Object,System.Boolean@)
-M:System.Threading.Monitor.TryEnter(System.Object,System.Int32)
-M:System.Threading.Monitor.TryEnter(System.Object,System.Int32,System.Boolean@)
-M:System.Threading.Monitor.TryEnter(System.Object,System.TimeSpan)
-M:System.Threading.Monitor.TryEnter(System.Object,System.TimeSpan,System.Boolean@)
-M:System.Threading.Monitor.Exit(System.Object)
-M:System.Threading.Monitor.IsEntered(System.Object)
-M:System.Threading.Monitor.Wait(System.Object)
-M:System.Threading.Monitor.Wait(System.Object,System.Int32)
-M:System.Threading.Monitor.Wait(System.Object,System.TimeSpan)
-M:System.Threading.Monitor.Pulse(System.Object)
-M:System.Threading.Monitor.PulseAll(System.Object)
+M:System.Threading.Monitor.Enter(System.Object);borrows
+M:System.Threading.Monitor.Enter(System.Object,System.Boolean@);borrows
+M:System.Threading.Monitor.TryEnter(System.Object);borrows
+M:System.Threading.Monitor.TryEnter(System.Object,System.Boolean@);borrows
+M:System.Threading.Monitor.TryEnter(System.Object,System.Int32);borrows
+M:System.Threading.Monitor.TryEnter(System.Object,System.Int32,System.Boolean@);borrows
+M:System.Threading.Monitor.TryEnter(System.Object,System.TimeSpan);borrows
+M:System.Threading.Monitor.TryEnter(System.Object,System.TimeSpan,System.Boolean@);borrows
+M:System.Threading.Monitor.Exit(System.Object);borrows
+M:System.Threading.Monitor.IsEntered(System.Object);borrows
+M:System.Threading.Monitor.Wait(System.Object);borrows
+M:System.Threading.Monitor.Wait(System.Object,System.Int32);borrows
+M:System.Threading.Monitor.Wait(System.Object,System.TimeSpan);borrows
+M:System.Threading.Monitor.Pulse(System.Object);borrows
+M:System.Threading.Monitor.PulseAll(System.Object);borrows
 
 # System.Threading.Tasks.Task (members used on a Task<T>)
 P:System.Threading.Tasks.Task.IsCompleted
@@ -1060,15 +1060,110 @@ M:System.Threading.Tasks.Task.WhenAny``1(System.Threading.Tasks.Task{``0}[])
 M:System.Threading.Tasks.Task.WhenAny``1(System.Threading.Tasks.Task{``0},System.Threading.Tasks.Task{``0})
 M:System.Threading.Tasks.Task.WhenAny``1(System.Collections.Generic.IEnumerable{System.Threading.Tasks.Task{``0}})
 M:System.Threading.Tasks.Task.WhenAny``1(System.ReadOnlySpan{System.Threading.Tasks.Task{``0}})  # net9+
-M:System.Threading.Tasks.Task.WaitAll(System.Threading.Tasks.Task[])
+M:System.Threading.Tasks.Task.WaitAll(System.Threading.Tasks.Task[]);borrows
 M:System.Threading.Tasks.Task.WaitAll(System.ReadOnlySpan{System.Threading.Tasks.Task})  # net9+
 M:System.Threading.Tasks.Task.WaitAll(System.Threading.Tasks.Task[],System.TimeSpan)
 M:System.Threading.Tasks.Task.WaitAll(System.Threading.Tasks.Task[],System.Int32)
 M:System.Threading.Tasks.Task.WaitAll(System.Threading.Tasks.Task[],System.Threading.CancellationToken)
 M:System.Threading.Tasks.Task.WaitAll(System.Threading.Tasks.Task[],System.Int32,System.Threading.CancellationToken)
-M:System.Threading.Tasks.Task.WaitAll(System.Collections.Generic.IEnumerable{System.Threading.Tasks.Task},System.Threading.CancellationToken)  # net9+
-M:System.Threading.Tasks.Task.WaitAny(System.Threading.Tasks.Task[])
+M:System.Threading.Tasks.Task.WaitAll(System.Collections.Generic.IEnumerable{System.Threading.Tasks.Task},System.Threading.CancellationToken);borrows  # net9+
+M:System.Threading.Tasks.Task.WaitAny(System.Threading.Tasks.Task[]);borrows
 M:System.Threading.Tasks.Task.WaitAny(System.Threading.Tasks.Task[],System.TimeSpan)
 M:System.Threading.Tasks.Task.WaitAny(System.Threading.Tasks.Task[],System.Threading.CancellationToken)
 M:System.Threading.Tasks.Task.WaitAny(System.Threading.Tasks.Task[],System.Int32)
 M:System.Threading.Tasks.Task.WaitAny(System.Threading.Tasks.Task[],System.Int32,System.Threading.CancellationToken)
+
+# ============================================================================
+# Classes that clone themselves: their own code clones an object with MemberwiseClone
+# ============================================================================
+#
+# "clones" says that the class's own code clones an object of it field by field, so an object of any class that derives from it can
+# be copied, a non-copyable value in one of its fields with it. A class of a project that derives from one of these, at any depth,
+# gets a warning on each field that holds a non-copyable value (SCA1009), a GCHandle or another built-in non-copyable type included.
+# One line covers the class that makes the call and every class that derives from it, so the framework classes that inherit the call
+# (every Encoding, every Calendar, every XmlSchema type) need no line of their own for that. A type parameter of a class that derives from one,
+# bound to a non-copyable type, gets the warning where it is bound.
+#
+# A "clones" line for a member, a method, a property or an event, says that the member clones its object, or the object that it is
+# given, field by field, or hands it to code that can, directly or through other members; for an event, where a handler is added or
+# removed. A warning then never advises a symbol list line
+# that says the member makes no copy, and such a line of a symbol list file is left out. "clones=complete" on the line of a class
+# says that its "clones" lines name every member of it that clones its object or hands it on: a member that no line names is taken
+# to do neither, and a use of it on an object whose class binds a non-copyable type gets no warning unless its signature shows that
+# it can hand the object on (see the lines with no marker below). A class that no "clones=complete" line names has every member that
+# no line names counted as one that can clone. "clones=complete" counts wherever a line says it: a plain "clones" line for the same
+# class, here or in a symbol list file, takes nothing away.
+#
+# The members of the Xml classes were not analyzed, so XmlSchemaObject and XmlQualifiedName are not marked "clones=complete", and
+# every member of them and of the XmlSchema classes counts as one that can clone. A symbol list file can mark them where its author
+# vouches for their members.
+#
+# FrameworkScanTests reads the IL of every assembly of Microsoft.NETCore.App, Microsoft.AspNetCore.App and
+# Microsoft.WindowsDesktop.App, of .NET 10 and .NET 11. It finds every call of MemberwiseClone on "this" or on the argument of a
+# static member of the class, and fails for a class that another assembly can derive from and that has no line here, neither of its
+# own nor of a base class. It follows the calls from the members of every class whose chain reaches one of these to the members that
+# clone, and fails for a public or protected member that clones its object or one that it is given and has no line. And it follows
+# where the object of each member can reach other code, and fails for a member that has neither a line nor an entry in the evidence
+# that says why it hands nothing on. What clones in each class is in NonCopyableSymbols.evidence.md, section 14; what reaches other
+# code, and the judgements that the scan makes there, in section 16.
+T:System.Text.Encoding;clones=complete
+T:System.Globalization.CultureInfo;clones=complete
+T:System.Globalization.Calendar;clones=complete
+T:System.Xml.Schema.XmlSchemaObject;clones
+T:System.Xml.XmlQualifiedName;clones
+T:System.Windows.Ink.Stroke;clones=complete
+T:System.Windows.Ink.DrawingAttributes;clones=complete
+T:System.Drawing.Printing.PageSettings;clones=complete
+T:System.Drawing.Printing.PrinterSettings;clones=complete
+T:System.Drawing.Printing.Margins;clones=complete
+T:System.Windows.Forms.GiveFeedbackEventArgs;clones=complete
+#
+# The public classes of the framework that derive from a class above whose line says "clones=complete", in whichever assembly a
+# reference pack puts them: their own members are covered by the same scan, so their lines say "clones=complete" as well.
+# FrameworkScanTests and SafeListTests fail where these lines differ from what the scan and the reference packs find.
+T:System.Globalization.ChineseLunisolarCalendar;clones=complete
+T:System.Globalization.EastAsianLunisolarCalendar;clones=complete
+T:System.Globalization.GregorianCalendar;clones=complete
+T:System.Globalization.HebrewCalendar;clones=complete
+T:System.Globalization.HijriCalendar;clones=complete
+T:System.Globalization.JapaneseCalendar;clones=complete
+T:System.Globalization.JapaneseLunisolarCalendar;clones=complete
+T:System.Globalization.JulianCalendar;clones=complete
+T:System.Globalization.KoreanCalendar;clones=complete
+T:System.Globalization.KoreanLunisolarCalendar;clones=complete
+T:System.Globalization.PersianCalendar;clones=complete
+T:System.Globalization.TaiwanCalendar;clones=complete
+T:System.Globalization.TaiwanLunisolarCalendar;clones=complete
+T:System.Globalization.ThaiBuddhistCalendar;clones=complete
+T:System.Globalization.UmAlQuraCalendar;clones=complete
+T:System.Text.ASCIIEncoding;clones=complete
+T:System.Text.UTF7Encoding;clones=complete
+T:System.Text.UTF8Encoding;clones=complete
+T:System.Text.UnicodeEncoding;clones=complete
+M:System.Text.Encoding.Clone;clones
+M:System.Globalization.CultureInfo.Clone;clones
+M:System.Globalization.CultureInfo.ReadOnly(System.Globalization.CultureInfo);clones
+M:System.Globalization.Calendar.Clone;clones
+M:System.Globalization.Calendar.ReadOnly(System.Globalization.Calendar);clones
+M:System.Windows.Ink.Stroke.Clone;clones
+M:System.Windows.Ink.DrawingAttributes.Clone;clones
+M:System.Drawing.Printing.PageSettings.Clone;clones
+M:System.Drawing.Printing.PrinterSettings.Clone;clones
+M:System.Drawing.Printing.Margins.Clone;clones
+M:System.Windows.Ink.Stroke.Draw(System.Windows.Media.DrawingContext,System.Windows.Ink.DrawingAttributes);clones
+M:System.Windows.Ink.Stroke.DrawCore(System.Windows.Media.DrawingContext,System.Windows.Ink.DrawingAttributes);clones
+M:System.Windows.Ink.Stroke.GetClipResult(System.Collections.Generic.IEnumerable{System.Windows.Point});clones
+M:System.Windows.Ink.Stroke.GetClipResult(System.Windows.Rect);clones
+M:System.Windows.Ink.Stroke.GetEraseResult(System.Collections.Generic.IEnumerable{System.Windows.Point});clones
+M:System.Windows.Ink.Stroke.GetEraseResult(System.Collections.Generic.IEnumerable{System.Windows.Point},System.Windows.Ink.StylusShape);clones
+M:System.Windows.Ink.Stroke.GetEraseResult(System.Windows.Rect);clones
+P:System.Drawing.Printing.PrinterSettings.DefaultPageSettings;clones
+#
+# A member of such a class, with a line and no marker, whose result the object converts to: it never hands back the object itself, so a
+# call of it on an object with a binding gets no warning. FrameworkScanTests checks that no path of its IL returns the object. The line
+# is for the member itself, not for an override of it, which is judged by its own line and its own signature.
+P:System.Globalization.CultureInfo.Parent
+M:System.Globalization.CultureInfo.GetFormat(System.Type)
+M:System.Globalization.CultureInfo.GetConsoleFallbackUICulture
+M:System.Windows.Ink.Stroke.GetPropertyData(System.Guid)
+M:System.Windows.Ink.DrawingAttributes.GetPropertyData(System.Guid)

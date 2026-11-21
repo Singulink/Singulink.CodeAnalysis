@@ -25,11 +25,12 @@
     <!--
       The marker of an assembly that was built with the analyzer, which the targets file of the package adds to every project that it
       runs in. This repository references the analyzer as a project, where that file does not run, so the attributes assembly adds the
-      marker itself: the marks of NonCopyable.Move and of the two checks are trusted only from an assembly that has it.
+      marker itself: the marks of NonCopyable.Move and of the two checks are trusted only from an assembly that has it. Its value is the
+      version of the analyzers, which is this package's own version: the two are built and published together.
     -->
     <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
       <_Parameter1>Singulink.CodeAnalysis.Analyzed</_Parameter1>
-      <_Parameter2>1</_Parameter2>
+      <_Parameter2>$(Version)</_Parameter2>
     </AssemblyAttribute>
   </ItemGroup>
 

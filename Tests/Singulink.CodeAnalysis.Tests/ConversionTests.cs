@@ -221,7 +221,7 @@ public class ConversionTests
         Verify.ReadFromStoredContainer(1, "'Stores.Take<T>(Store<T>)'", "Guard"),
         Verify.SafeListLine(3, 1, 24, "the marker 'erasable' is for a generic class or interface"),
         Verify.SafeListLine(4, 1, 17, "the marker 'erasable' is for a generic class or interface"),
-        Verify.SafeListLine(5, 1, 38, "the marker 'erasable' is for a type; a member takes 'new', 'borrows', 'drains', 'owned' or no marker"));
+        Verify.SafeListLine(5, 1, 38, "the marker 'erasable' is for a type; a member takes 'new', 'borrows', 'drains', 'owned', 'clones' or no marker"));
 
     [TestMethod]
     public Task ConversionWithNoCastWritten() => Verify.AnalyzerAsync(

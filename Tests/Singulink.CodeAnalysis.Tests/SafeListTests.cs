@@ -143,7 +143,7 @@ public class SafeListTests
 
         test.ExpectedDiagnostics.Add(Verify.ReadFromStoredContainer(0, "'Bag<T>.Peek()'", "Guard"));
         test.ExpectedDiagnostics.Add(Verify.ReadFromStoredContainer(1, "'Stack<T>.Pop()'", "Guard"));
-        test.ExpectedDiagnostics.Add(Verify.UnlistedMember(2, "Map<TKey, TValue>.Add(TKey, TValue)", "Guard", "TKey", "M:Map`2.Add(`0,`1)"));
+        test.ExpectedDiagnostics.Add(Verify.MemberListedForOtherTypeParameter(2, "Map<TKey, TValue>.Add(TKey, TValue)", "Guard", "TKey", "TValue"));
 
         return test.RunAsync();
     }
@@ -208,7 +208,7 @@ public class SafeListTests
 
         test.ExpectedDiagnostics.Add(new DiagnosticResult(DiagnosticIds.SafeListLine, DiagnosticSeverity.Warning)
             .WithSpan(SecondLibraryFile, 2, 1, 2, 24)
-            .WithMessage("This line of the symbol list file cannot be parsed: unknown marker 'unknown'; the markers are 'new', 'borrows', 'drains', 'owned', 'view', 'noncopyable', 'copyable' and 'erasable', and 'trusted' for an assembly"));
+            .WithMessage("This line of the symbol list file cannot be parsed: unknown marker 'unknown'; the markers are 'new', 'borrows', 'drains', 'owned', 'view', 'noncopyable', 'copyable', 'erasable' and 'clones', and 'trusted' for an assembly"));
 
         return test.RunAsync();
     }
@@ -313,11 +313,11 @@ public class SafeListTests
         Verify.SafeListLine(5, 1, 11, "expected a documentation comment ID that starts with 'M:', 'P:', 'E:' or 'T:', or the name of an assembly after 'A:'"),
         Verify.SafeListLine(6, 1, 15, "expected a documentation comment ID that starts with 'M:', 'P:', 'E:' or 'T:', or the name of an assembly after 'A:'"),
         Verify.SafeListLine(7, 1, 3, "expected a documentation comment ID that starts with 'M:', 'P:', 'E:' or 'T:', or the name of an assembly after 'A:'"),
-        Verify.SafeListLine(8, 1, 8, "a type needs the marker 'view', 'noncopyable', 'copyable' or 'erasable'; there is no entry for every member of a type"),
-        Verify.SafeListLine(9, 1, 19, "the marker 'new' is for a member; a type takes 'view', 'noncopyable', 'copyable' or 'erasable'"),
-        Verify.SafeListLine(10, 1, 18, "the marker 'view' is for a type; a member takes 'new', 'borrows', 'drains', 'owned' or no marker"),
-        Verify.SafeListLine(11, 1, 25, "the marker 'noncopyable' is for a type; a member takes 'new', 'borrows', 'drains', 'owned' or no marker"),
-        Verify.SafeListLine(12, 1, 18, "unknown marker 'safe'; the markers are 'new', 'borrows', 'drains', 'owned', 'view', 'noncopyable', 'copyable' and 'erasable', and 'trusted' for an assembly"),
+        Verify.SafeListLine(8, 1, 8, "a type needs the marker 'view', 'noncopyable', 'copyable', 'erasable' or 'clones'; there is no entry for every member of a type"),
+        Verify.SafeListLine(9, 1, 19, "the marker 'new' is for a member; a type takes 'view', 'noncopyable', 'copyable', 'erasable' or 'clones'"),
+        Verify.SafeListLine(10, 1, 18, "the marker 'view' is for a type; a member takes 'new', 'borrows', 'drains', 'owned', 'clones' or no marker"),
+        Verify.SafeListLine(11, 1, 25, "the marker 'noncopyable' is for a type; a member takes 'new', 'borrows', 'drains', 'owned', 'clones' or no marker"),
+        Verify.SafeListLine(12, 1, 18, "unknown marker 'safe'; the markers are 'new', 'borrows', 'drains', 'owned', 'view', 'noncopyable', 'copyable', 'erasable' and 'clones', and 'trusted' for an assembly"),
         Verify.SafeListLine(13, 1, 21, "an entry has one marker, which 'for=' can follow"),
         Verify.SafeListLine(14, 1, 14, "a documentation comment ID has no white space"),
         Verify.SafeListLine(16, 1, 27, "'for=' is for a member"),
@@ -370,11 +370,9 @@ public class SafeListTests
         M:Map`2.Add(`0,`1);for=TValue
         M:Map`2.Convert``1(``0);for= TOther
         """,
-        Verify.UnlistedMember(
-            0, "Dictionary<TKey, TValue>.Add(TKey, TValue)", "Guard", "TKey", "M:System.Collections.Generic.Dictionary`2.Add(`0,`1)"),
-        Verify.UnlistedMember(
-            1, "Dictionary<TKey, TValue>.Add(TKey, TValue)", "Guard", "TKey", "M:System.Collections.Generic.Dictionary`2.Add(`0,`1)"),
-        Verify.OpaqueTypeArgument(2, "Map<TKey, TValue>.Add(TKey, TValue)", "System.Collections.Generic.List<Guard>", "TKey", "M:Map`2.Add(`0,`1)"));
+        Verify.MemberListedForOtherTypeParameter(0, "Dictionary<TKey, TValue>.Add(TKey, TValue)", "Guard", "TKey", "TValue"),
+        Verify.MemberListedForOtherTypeParameter(1, "Dictionary<TKey, TValue>.Add(TKey, TValue)", "Guard", "TKey", "TValue"),
+        Verify.OpaqueTypeArgumentListedForOther(2, "Map<TKey, TValue>.Add(TKey, TValue)", "System.Collections.Generic.List<Guard>", "TKey", "TValue"));
 
     [TestMethod]
     public Task ForTypeParameters_NameThatTheMemberDoesNotHaveIsReported() => Verify.AnalyzerAsync(
@@ -412,8 +410,18 @@ public class SafeListTests
         string list = ReadBuiltInList();
 
         // As a user file the built-in list reports every line that cannot be parsed, every 'for=' name that its member does not have and every
-        // 'erasable' that is not on a generic class or interface.
-        await Verify.AnalyzerAsync("class C { }", list);
+        // 'erasable' that is not on a generic class or interface. Its 'clones' lines name classes of the desktop pack as well.
+        var asUserFile = new Verify.Test {
+            TestCode = "class C { }",
+            ReferenceAssemblies = Verify.Test.NetReferenceAssemblies.AddPackages([new PackageIdentity("Microsoft.WindowsDesktop.App.Ref", "10.0.0")]),
+        };
+
+        asUserFile.TestState.AdditionalFiles.Add((Verify.ListFileName, list));
+
+        // The core pack has a WindowsBase of its own with none of WPF's types, which the desktop pack's would otherwise give way to.
+        asUserFile.TestState.AdditionalReferences.Add((await ResolvePackAsync("Microsoft.WindowsDesktop.App.Ref", "10.0.0")).Single(r => Path.GetFileName(r.Display) is "WindowsBase.dll"));
+        asUserFile.CompilerDiagnostics = CompilerDiagnostics.None;
+        await asUserFile.RunAsync();
 
         // The framework of .NET 10 with ASP.NET Core, whose HybridCache has entries, and that of .NET 11 for a line marked "# net11+".
         var compilation = await CreateFrameworkCompilationAsync("10.0.0");
@@ -433,26 +441,163 @@ public class SafeListTests
 
             var symbols = DocumentationCommentId.GetSymbolsForDeclarationId(id, entry.EndsWith("# net11+", StringComparison.Ordinal) ? compilation11 : compilation);
 
-            if (symbols is not [{ DeclaredAccessibility: Accessibility.Public }])
+            // A protected member is one that a class of another assembly that derives from the class can call.
+            if (symbols is not [{ DeclaredAccessibility: Accessibility.Public or Accessibility.Protected or Accessibility.ProtectedOrInternal }])
                 unresolved.Add(id);
         }
 
-        Assert.AreEqual(824, count);
+        Assert.AreEqual(877, count);
         Assert.IsEmpty(unresolved, "Entries that do not name one public symbol of .NET 10: " + string.Join(", ", unresolved));
+    }
+
+    // A member that the list names for other type parameters than the one that a non-copyable type or a container is bound to gets a
+    // warning that says so, and no advice to add a line: a line of a file can claim less of a member than the built-in list, not more. A
+    // line that would name a member of the built-in list for more type parameters than it does has no effect, gets a warning, and leaves
+    // the warnings of the uses as they were; one that repeats the built-in line gets none. (QA9 round 6, 3)
+    [TestMethod]
+    [DataRow("")]
+    [DataRow("M:System.Collections.Generic.Dictionary`2.#ctor")]
+    [DataRow("M:System.Collections.Generic.Dictionary`2.#ctor;for=TKey")]
+    [DataRow("M:System.Collections.Generic.Dictionary`2.#ctor;for=TValue")]
+    public async Task MemberListedForOtherTypeParameter_SaysSoAndALineCannotWidenIt(string line)
+    {
+        var test = new Verify.Test {
+            TestCode = """
+                using System.Collections.Generic;
+
+                class C
+                {
+                    void Uses()
+                    {
+                        _ = {|#0:new Dictionary<Guard, string>()|};
+                        _ = {|#1:new Dictionary<List<Guard>, int>()|};
+                        _ = new Dictionary<int, Guard>();
+                    }
+                }
+                """ + System.Environment.NewLine + Sources.Guard,
+        };
+
+        if (line.Length > 0)
+            test.TestState.AdditionalFiles.Add((Verify.ListFileName, line));
+
+        test.ExpectedDiagnostics.Add(Verify.MemberListedForOtherTypeParameter(0, "Dictionary<TKey, TValue>.Dictionary()", "Guard", "TKey", "TValue"));
+        test.ExpectedDiagnostics.Add(Verify.OpaqueTypeArgumentListedForOther(1, "Dictionary<TKey, TValue>.Dictionary()", "System.Collections.Generic.List<Guard>", "TKey", "TValue"));
+
+        if (line.EndsWith("#ctor", StringComparison.Ordinal))
+            test.ExpectedDiagnostics.Add(Verify.SafeListWidensBuiltIn(1, line.Length + 1, "M:System.Collections.Generic.Dictionary`2.#ctor", "every type parameter", "TValue"));
+        else if (line.EndsWith("TKey", StringComparison.Ordinal))
+            test.ExpectedDiagnostics.Add(Verify.SafeListWidensBuiltIn(1, line.Length + 1, "M:System.Collections.Generic.Dictionary`2.#ctor", "'TKey'", "TValue"));
+
+        await test.RunAsync();
+    }
+
+    // The warning for a line that would widen a built-in line belongs in the build whose author can change the file: a file under the
+    // NuGet package root came in a package, and the library's own build reads it from its folder, so a project that uses the library
+    // gets none for it. The line is left out all the same. A build with no package root counts every file as its own. (QA9 round 7, 2)
+    [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task WideningLine_GetsItsWarningOnlyInTheBuildThatOwnsTheFile(bool inPackage)
+    {
+        const string Line = "M:System.Collections.Generic.Dictionary`2.#ctor";
+        string path = inPackage ? "/packages/lib/1.0.0/build/NonCopyableSymbols.Lib.txt" : Verify.ListFileName;
+        var test = new Verify.Test {
+            TestCode = """
+                using System.Collections.Generic;
+
+                class C
+                {
+                    void Uses() => _ = {|#0:new Dictionary<Guard, string>()|};
+                }
+                """ + System.Environment.NewLine + Sources.Guard,
+        };
+
+        test.TestState.AnalyzerConfigFiles.Add(("/.globalconfig", "is_global = true" + "\n" + "build_property.NuGetPackageRoot = /packages/" + "\n"));
+        test.TestState.AdditionalFiles.Add((path, Line));
+        test.ExpectedDiagnostics.Add(Verify.MemberListedForOtherTypeParameter(0, "Dictionary<TKey, TValue>.Dictionary()", "Guard", "TKey", "TValue"));
+
+        if (!inPackage)
+            test.ExpectedDiagnostics.Add(Verify.SafeListWidensBuiltIn(1, Line.Length + 1, Line, "every type parameter", "TValue"));
+
+        await test.RunAsync();
+    }
+
+    // The lines that say 'clones=complete' for a class that derives from a class that clones itself name, on the reference packs that a
+    // build uses, exactly the public classes that can be derived from and whose base chain reaches a class whose line says
+    // 'clones=complete', wherever the pack puts them: UTF8Encoding is in another assembly than Encoding there. FrameworkScanTests
+    // checks the same lines against the IL that it scans.
+    [TestMethod]
+    [DataRow("10.0.0")]
+    [DataRow("11.0.0")]
+    public async Task CompleteLinesOfDerivedClasses_AreTheClassesOfTheReferencePacksThatDeriveFromACompleteClass(string version)
+    {
+        var compilation = await CreateFrameworkCompilationAsync(version);
+        var entries = ReadBuiltInList().Split('\n').Select(l => l.Split('#')[0].Trim()).Where(l => l.Length > 0).ToList();
+        var cloning = entries.Where(e => e.StartsWith("T:", StringComparison.Ordinal) && e.Contains(";clones", StringComparison.Ordinal)).Select(e => e[2..e.IndexOf(';', StringComparison.Ordinal)]).ToHashSet(StringComparer.Ordinal);
+        var complete = entries.Where(e => e.StartsWith("T:", StringComparison.Ordinal) && e.EndsWith(";clones=complete", StringComparison.Ordinal)).Select(e => "T:" + e[2..^16]).ToHashSet(StringComparer.Ordinal);
+
+        // The classes that clone themselves whose line says 'clones=complete': no class above them has a 'clones' line.
+        var roots = complete
+            .Select(c => compilation.GetTypeByMetadataName(c[2..]))
+            .OfType<INamedTypeSymbol>()
+            .Where(t => !BaseChain(t).Any(b => cloning.Contains(b.GetDocumentationCommentId()![2..])))
+            .ToHashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+
+        Assert.IsNotEmpty(roots);
+        var expected = new SortedSet<string>(StringComparer.Ordinal);
+
+        foreach (var type in AllTypes(compilation.GlobalNamespace))
+        {
+            if (type is not { TypeKind: TypeKind.Class, IsSealed: false, DeclaredAccessibility: Accessibility.Public } || roots.Contains(type))
+                continue;
+
+            if (BaseChain(type).Any(roots.Contains))
+                expected.Add(type.GetDocumentationCommentId()!);
+        }
+
+        var shipped = complete.Except(roots.Select(r => r.GetDocumentationCommentId()!)).ToHashSet(StringComparer.Ordinal);
+
+        Assert.IsTrue(expected.SetEquals(shipped), $"The reference packs of {version} have these classes: {string.Join(", ", expected)}");
+
+        static IEnumerable<INamedTypeSymbol> BaseChain(INamedTypeSymbol type)
+        {
+            for (var current = type.BaseType; current is not null; current = current.BaseType)
+                yield return current;
+        }
+
+        static IEnumerable<INamedTypeSymbol> AllTypes(INamespaceSymbol ns)
+        {
+            foreach (var type in ns.GetTypeMembers())
+                yield return type;
+
+            foreach (var child in ns.GetNamespaceMembers())
+            {
+                foreach (var type in AllTypes(child))
+                    yield return type;
+            }
+        }
     }
 
     private static async Task<CSharpCompilation> CreateFrameworkCompilationAsync(string version)
     {
-        string target = "net" + version[..version.IndexOf('.', StringComparison.Ordinal)] + ".0";
-        var references = new List<MetadataReference>();
+        var references = new Dictionary<string, MetadataReference>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (string pack in new[] { "Microsoft.NETCore.App.Ref", "Microsoft.AspNetCore.App.Ref" })
+        // The classes that clone themselves include some of WPF, Windows Forms and System.Drawing, which are in the desktop pack. Its
+        // WindowsBase has WPF's types, where the one of the core pack has none, so a later pack's assembly takes the place of an earlier one.
+        foreach (string pack in new[] { "Microsoft.NETCore.App.Ref", "Microsoft.AspNetCore.App.Ref", "Microsoft.WindowsDesktop.App.Ref" })
         {
-            var assemblies = new ReferenceAssemblies(target, new PackageIdentity(pack, version), Path.Combine("ref", target));
-            references.AddRange(await assemblies.ResolveAsync(LanguageNames.CSharp, CancellationToken.None));
+            foreach (var reference in await ResolvePackAsync(pack, version))
+                references[Path.GetFileName(reference.Display)!] = reference;
         }
 
-        return CSharpCompilation.Create("Test", references: references);
+        return CSharpCompilation.Create("Test", references: references.Values);
+    }
+
+    private static async Task<System.Collections.Immutable.ImmutableArray<MetadataReference>> ResolvePackAsync(string pack, string version)
+    {
+        string target = "net" + version[..version.IndexOf('.', StringComparison.Ordinal)] + ".0";
+        var assemblies = new ReferenceAssemblies(target, new PackageIdentity(pack, version), Path.Combine("ref", target));
+        return await assemblies.ResolveAsync(LanguageNames.CSharp, CancellationToken.None);
     }
 
     [TestMethod]
@@ -479,7 +624,7 @@ public class SafeListTests
         var descriptors = new DoNotCopyValueAnalyzer().SupportedDiagnostics;
 
         string[] ids = [
-            "SCA1001", "SCA1002", "SCA1003", "SCA1004", "SCA1005", "SCA1006", "SCA1007", "SCA1008", "SCA1010", "SCA1011", "SCA1012", "SCA1013", "SCA1014", "SCA1015", "SCA1020", "SCA1021",
+            "SCA1001", "SCA1002", "SCA1003", "SCA1004", "SCA1005", "SCA1006", "SCA1007", "SCA1008", "SCA1009", "SCA1010", "SCA1011", "SCA1012", "SCA1013", "SCA1014", "SCA1015", "SCA1020", "SCA1021",
             "SCA1022", "SCA1023", "SCA1024", "SCA1025", "SCA1030", "SCA1031", "SCA1032", "SCA1033", "SCA1040", "SCA1041", "SCA1042", "SCA1043", "SCA1044", "SCA1045",
             "SCA1046", "SCA1047", "SCA1048",
         ];
@@ -620,7 +765,7 @@ public class SafeListTests
         Verify.CopyOfStoredValue(0, "'Native.Keep(Guard)' receives", "Guard"),
         Verify.CopyOfStoredValue(1, "'List<Guard>.Add(Guard)' receives", "Guard"),
         Verify.CopyOfStoredValue(2, "'GCHandle.ToIntPtr(GCHandle)' receives", "System.Runtime.InteropServices.GCHandle"),
-        Verify.SafeListLine(5, 1, 16, "the marker 'borrows' is for a member; a type takes 'view', 'noncopyable', 'copyable' or 'erasable'"),
+        Verify.SafeListLine(5, 1, 16, "the marker 'borrows' is for a member; a type takes 'view', 'noncopyable', 'copyable', 'erasable' or 'clones'"),
         Verify.SafeListLine(6, 1, 54, "an entry has one marker, which 'for=' can follow"));
 
     private static string ReadBuiltInList()
@@ -748,7 +893,7 @@ public class SafeListTests
         M:BagExtensions.TouchWith``2(Bag{``0},``1@);for=U
         M:BagExtensions.get_Size``1(Bag{``0});for=T
         """,
-        Verify.UnlistedMember(0, "BagExtensions.extension<T>(Bag<T>).TouchWith<U>(ref U)", "Guard", "T", "M:BagExtensions.TouchWith``2(Bag{``0},``1@)"),
+        Verify.MemberListedForOtherTypeParameter(0, "BagExtensions.extension<T>(Bag<T>).TouchWith<U>(ref U)", "Guard", "T", "U"),
         Verify.UnlistedMember(1, "BagExtensions.extension<T>(Bag<T>).Unlisted()", "Guard", "T", "M:BagExtensions.Unlisted``1(Bag{``0})"),
         Verify.PassesParameterToUncheckedCode(2, "C.M(Bag<Guard>, Bag<int>)", "bag", "Bag<Guard>", "BagExtensions.extension<Guard>(Bag<Guard>).Touch()", "M:BagExtensions.Touch``1(Bag{``0})"));
 
@@ -1173,7 +1318,7 @@ public class SafeListTests
         Verify.SafeListLine(4, 1, 24, DrainsIsForASequence),
         Verify.SafeListLine(5, 1, 25, DrainsIsForASequence),
         Verify.SafeListLine(6, 1, 24, DrainsIsForASequence),
-        Verify.SafeListLine(9, 1, 16, "the marker 'drains' is for a member; a type takes 'view', 'noncopyable', 'copyable' or 'erasable'"),
+        Verify.SafeListLine(9, 1, 16, "the marker 'drains' is for a member; a type takes 'view', 'noncopyable', 'copyable', 'erasable' or 'clones'"),
         Verify.SafeListLine(10, 1, 44, DrainsIsForASequence));
 
     private const string DrainsIsForASequence = "the marker 'drains' is for a method that returns a sequence, an IEnumerable<T> or an IAsyncEnumerable<T>";
@@ -1547,7 +1692,7 @@ public class SafeListTests
 
         {{Sources.Guard}}
         """,
-        Verify.UnlistedMember(0, "TaskFactory<TResult>.ContinueWhenAll<TAntecedentResult>(Task<TAntecedentResult>[], Func<Task<TAntecedentResult>[], TResult>)", "Guard", "TAntecedentResult", "M:System.Threading.Tasks.TaskFactory`1.ContinueWhenAll``1(System.Threading.Tasks.Task{``0}[],System.Func{System.Threading.Tasks.Task{``0}[],`0})"));
+        Verify.MemberListedForOtherTypeParameter(0, "TaskFactory<TResult>.ContinueWhenAll<TAntecedentResult>(Task<TAntecedentResult>[], Func<Task<TAntecedentResult>[], TResult>)", "Guard", "TAntecedentResult", "TResult"));
 
     // What a list does in place: remove a range and reverse.
     [TestMethod]
@@ -1721,7 +1866,7 @@ public class SafeListTests
             "nothing makes the type non-copyable by itself, neither the built-in list nor an attribute; a struct that holds a non-copyable value stays non-copyable through it"),
         Verify.SafeListCopyableHasNoEffect(3, 1, 21, "T:Not.There", "the compilation has no type of that ID"),
         Verify.SafeListLine(4, 1, 25, "the marker 'copyable' is for a struct"),
-        Verify.SafeListLine(5, 1, 20, "the marker 'copyable' is for a type; a member takes 'new', 'borrows', 'drains', 'owned' or no marker"));
+        Verify.SafeListLine(5, 1, 20, "the marker 'copyable' is for a type; a member takes 'new', 'borrows', 'drains', 'owned', 'clones' or no marker"));
 
     // Where one file says 'copyable' and another 'noncopyable' of the same type, 'noncopyable' applies. The built-in list is no such file:
     // overriding it is what the marker is for.

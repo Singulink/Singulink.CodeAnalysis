@@ -33,7 +33,23 @@
   <ItemGroup>
     <None Include="$(TargetPath)" Pack="true" PackagePath="analyzers\dotnet\cs" Visible="false" />
     <None Include="build\Singulink.CodeAnalysis.Analyzers.props" Pack="true" PackagePath="build;buildTransitive" />
-    <None Include="build\Singulink.CodeAnalysis.Analyzers.targets" Pack="true" PackagePath="build;buildTransitive" />
+    <None Include="$(IntermediateOutputPath)build\Singulink.CodeAnalysis.Analyzers.targets" Pack="true" PackagePath="build;buildTransitive" Visible="false" />
     <None Include="..\..\THIRD-PARTY-NOTICES.md" Link="THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="\" />
   </ItemGroup>
+
+  <!--
+    The targets file of the package records the version of the analyzers in the marker of every assembly built with them. The version is
+    the package's own, fixed here when the package is built and packed, so it depends neither on where the package is restored to nor on
+    a property of the project that uses it. The file under build is written with the version in place of its placeholder, and that copy
+    is the one that is packed.
+  -->
+  <Target Name="_WriteVersionedTargetsFile" BeforeTargets="BeforeBuild;_GetPackageFiles">
+    <PropertyGroup>
+      <_VersionedTargetsFile>$(IntermediateOutputPath)build\Singulink.CodeAnalysis.Analyzers.targets</_VersionedTargetsFile>
+      <_VersionedTargetsText>$([MSBuild]::Escape($([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)\build\Singulink.CodeAnalysis.Analyzers.targets').Replace('&lt;_Parameter2&gt;0.0.0-unpacked&lt;/_Parameter2&gt;', '&lt;_Parameter2&gt;$(PackageVersion)&lt;/_Parameter2&gt;'))))</_VersionedTargetsText>
+    </PropertyGroup>
+
+    <Error Condition="!$(_VersionedTargetsText.Contains('&lt;_Parameter2&gt;$(PackageVersion)&lt;/_Parameter2&gt;'))" Text="The version of the marker was not written into the targets file of the package." />
+    <WriteLinesToFile File="$(_VersionedTargetsFile)" Lines="$(_VersionedTargetsText)" Overwrite="true" WriteOnlyWhenDifferent="true" />
+  </Target>
 </Project>

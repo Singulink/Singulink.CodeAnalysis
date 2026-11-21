@@ -38,6 +38,7 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
     private readonly ConcurrentDictionary<ITypeSymbol, CopyKind> _kinds = new(SymbolEqualityComparer.Default);
     private readonly ConcurrentDictionary<ISymbol, MemberUse> _uses = new(SymbolEqualityComparer.Default);
     private readonly ConcurrentDictionary<INamedTypeSymbol, bool> _erasableThroughMarks = new(SymbolEqualityComparer.Default);
+    private readonly ConcurrentDictionary<INamedTypeSymbol, CloningBinding?> _unjudgedCloningBindings = new(SymbolEqualityComparer.Default);
     private readonly ConcurrentDictionary<INamedTypeSymbol, bool> _inheritsListedContainer = new(SymbolEqualityComparer.Default);
     private readonly ConcurrentDictionary<INamedTypeSymbol, bool> _hasListedMembers = new(SymbolEqualityComparer.Default);
 
@@ -48,6 +49,12 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
     /// Gets a value indicating whether a list names a member by its documentation comment ID.
     /// </summary>
     public bool IsListed(string memberId) => list.GetMember(memberId) is not null;
+
+    /// <summary>
+    /// Gets a value indicating whether the list marks a member, by its ID, 'borrows': it uses what it is given during the call, and
+    /// keeps nothing of it.
+    /// </summary>
+    public bool IsBorrowing(string memberId) => list.GetMember(memberId)?.Marker is SafeListMarker.Borrows;
 
     /// <summary>
     /// Gets a value indicating whether a class is the attribute of the analyzer with the given name. The attributes are recognised by
@@ -286,7 +293,20 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
     /// Gets a value indicating whether a parameter adds <c>[Kept]</c> to the parameter that it stands in for, which is not taken to
     /// keep what it is given. A caller through that takes a container that it passes to be still its own.
     /// </summary>
-    public static bool AddsKept(IParameterSymbol parameter, IParameterSymbol standsInFor) => IsMarkedKept(parameter) && !KeepsWhatItIsGiven(standsInFor);
+    public bool AddsKept(IParameterSymbol parameter, IParameterSymbol standsInFor) => IsMarkedKept(parameter) && !IsTakenToKeepAtEveryCall(standsInFor);
+
+    /// <summary>
+    /// Gets a value indicating whether every call through a parameter, of a delegate or of a member that a method overrides or implements,
+    /// takes what it passes to be kept, so that a method or a lambda behind the parameter may keep it with no caller misled.
+    /// </summary>
+    /// <remarks>
+    /// A parameter keeps by <see cref="KeepsWhatItIsGiven"/>, and by a declared type that is a type parameter, marked or not, as
+    /// <see cref="JudgeReceiving"/> says of a call. The exceptions are those that a call makes: a member that the list marks 'borrows',
+    /// and a [MovedFrom] parameter of a pure move.
+    /// </remarks>
+    public bool IsTakenToKeepAtEveryCall(IParameterSymbol parameter) =>
+        KeepsWhatItIsGiven(parameter) ||
+        (parameter.OriginalDefinition.Type is ITypeParameterSymbol && !IsMovedFrom(parameter) && !IsBorrowing(parameter.ContainingSymbol));
 
     /// <summary>
     /// Gets a value indicating whether a parameter is <c>[MovedFrom]</c> where the parameter that it stands in for is not, or the other
@@ -599,6 +619,10 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
         if (type.TypeKind is not (TypeKind.Class or TypeKind.Interface))
             return false;
 
+        // Behind a class that clones itself, the clone copies what is bound, whatever the marks say and whatever a list line claims.
+        if (FindUnjudgedCloningBinding(type) is not null)
+            return false;
+
         if (list.IsErasable(type.OriginalDefinition))
             return true;
 
@@ -874,6 +898,95 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
 
     // Every class that the compilation declares, nested ones included, made once.
     private INamedTypeSymbol[] GetClasses() => _classes ??= [.. GetClasses(compilationAssembly.GlobalNamespace)];
+
+    /// <summary>
+    /// Gets every class that the compilation declares, nested ones included.
+    /// </summary>
+    public IReadOnlyList<INamedTypeSymbol> GetClassesOfCompilation() => GetClasses();
+
+    /// <summary>
+    /// Gets a value indicating whether the symbol list marks a member 'clones': it clones its object, or the object that it is given,
+    /// field by field with MemberwiseClone, so it copies every non-copyable value that the object holds and no entry can say otherwise.
+    /// </summary>
+    public bool IsCloningMember(ISymbol member) => list.IsCloningMember(GetListDefinition(member));
+
+    /// <summary>
+    /// Gets where a constructed class binds a non-copyable type to a type parameter of a class whose objects a class that the symbol list
+    /// marks 'clones' clones, the class or one of its base classes: the class that is bound, the non-copyable type, and the cloning class.
+    /// Null if there is none.
+    /// </summary>
+    /// <remarks>
+    /// A class of another assembly is judged by its type arguments alone: what it does with a type parameter cannot be seen, and a
+    /// reference assembly may leave its private fields out. A class of the compilation is judged by its fields: a field whose declared
+    /// type mentions a type parameter and that is non-copyable as the class is constructed. The base classes are judged as they are
+    /// constructed through the class, up to the cloning class, which is judged as well: its own fields are copied by its own clone.
+    /// </remarks>
+    public CloningBinding? FindCloningBinding(INamedTypeSymbol constructed)
+    {
+        // The topmost class that clones itself: a binding anywhere up to it is copied by its clone.
+        var cloning = FindCloningBase(constructed) ?? (list.IsClones(constructed.OriginalDefinition) ? constructed : null);
+
+        if (cloning is null)
+            return null;
+
+        for (var current = constructed; current is not null; current = current.BaseType)
+        {
+            if (!SymbolEqualityComparer.Default.Equals(current, current.OriginalDefinition))
+            {
+                if (!SymbolEqualityComparer.Default.Equals(current.ContainingAssembly, compilationAssembly))
+                {
+                    foreach (var argument in GetAllTypeArguments(current))
+                    {
+                        if (IsNonCopyableType(argument))
+                            return new CloningBinding(current, argument, cloning.OriginalDefinition);
+                    }
+                }
+                else
+                {
+                    foreach (var field in current.GetMembers().OfType<IFieldSymbol>())
+                    {
+                        if (field is { IsStatic: false, RefKind: RefKind.None } && MentionsTypeParameter(field.OriginalDefinition.Type) && IsNonCopyableType(field.Type))
+                            return new CloningBinding(current, field.Type, cloning.OriginalDefinition);
+                    }
+                }
+            }
+
+            if (SymbolEqualityComparer.Default.Equals(cloning, current))
+                break;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Gets a binding that the declaration of a class, or of a class above it up to the class that clones itself, writes with a closed
+    /// non-copyable type in its base list, as 'Both&lt;T&gt; : Tagged&lt;GCHandle&gt;' does: one that does not come from the type
+    /// arguments of the class. Null if there is none. A clone copies it whatever the class is constructed with.
+    /// </summary>
+    public CloningBinding? FindClosedCloningBinding(INamedTypeSymbol type) =>
+        FindCloningBinding(type.OriginalDefinition) is { } binding && !MentionsTypeParameter(binding.Type) ? binding : null;
+
+    /// <summary>
+    /// Gets the topmost base class of a class, as it is constructed there, that the symbol list marks 'clones': its own code clones an
+    /// object of it with MemberwiseClone, an object of the class included. Null if there is none.
+    /// </summary>
+    /// <remarks>
+    /// A class below it can have a 'clones' line too, such as one that says 'clones=complete' for the members of a class between, or one
+    /// that clones again in code of its own. The topmost one is the class that clones itself for every check: the chain up to it is where
+    /// a binding is copied, and a line below it speaks only for the members of its own class.
+    /// </remarks>
+    public INamedTypeSymbol? FindCloningBase(INamedTypeSymbol type)
+    {
+        INamedTypeSymbol? found = null;
+
+        for (var current = type.BaseType; current is not null; current = current.BaseType)
+        {
+            if (list.IsClones(current.OriginalDefinition))
+                found = current;
+        }
+
+        return found;
+    }
 
     private static IEnumerable<INamedTypeSymbol> GetClasses(INamespaceOrTypeSymbol container)
     {
@@ -1894,7 +2007,352 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
     }
 
     private bool HidesDirectly(ITypeSymbol source, ITypeSymbol target) =>
-        IsContainer(source) && LosesNonCopyableType(source, target) && ExposesNonCopyableType(source, visited: null);
+        (IsContainer(source) && LosesNonCopyableType(source, target) && ExposesNonCopyableType(source, visited: null)) ||
+        IsCloningUse(source, target);
+
+    /// <summary>
+    /// Gets a value indicating whether a conversion hands an object with a binding that no declaration of the compilation judged to code
+    /// that can clone it (see <see cref="FindUnjudgedCloningBinding"/>): to a type that no longer mentions the non-copyable type, or to an
+    /// interface, which can be converted on from there to one that clones, such as ICloneable, with nothing left that shows the binding.
+    /// </summary>
+    public bool IsCloningUse([NotNullWhen(true)] ITypeSymbol? source, [NotNullWhen(true)] ITypeSymbol? target) =>
+        source is INamedTypeSymbol { TypeKind: TypeKind.Class } named && target is not null &&
+        !SymbolEqualityComparer.Default.Equals(source, target) &&
+        (target.TypeKind is TypeKind.Interface || target.SpecialType is SpecialType.System_Object || target.TypeKind is TypeKind.Dynamic || LosesNonCopyableType(source, target)) &&
+        FindUnjudgedCloningBinding(named) is not null;
+
+    /// <summary>
+    /// Gets a value indicating whether the symbol list marks a class 'clones': its own code clones its objects.
+    /// </summary>
+    public bool IsClonesClass(INamedTypeSymbol type) => list.IsClones(type.OriginalDefinition);
+
+    /// <summary>
+    /// Gets a value indicating whether the members that clone an object of a class that clones itself, or hand it on, are known for the
+    /// members of a class in its chain, so that a member that no line names is taken to do neither. For a member of the class that clones
+    /// itself or of a class above it, the line of the class that clones itself says 'clones=complete'. For a member of a class between
+    /// it and the object's own class, a line for that class says 'clones=complete', or the line of the class that clones itself says it
+    /// and covers the class: it is of the same assembly, or of one that was built with the analyzer, whose members that clone have their
+    /// lines by the warning of SCA1008 there. A plain 'clones' line for the class between changes neither.
+    /// </summary>
+    public bool AreCloningMembersKnown(INamedTypeSymbol declaring, INamedTypeSymbol cloning) =>
+        IsAtOrAbove(declaring, cloning) ? list.IsComplete(cloning.OriginalDefinition)
+        : list.IsComplete(declaring.OriginalDefinition) || (IsCoveredByLinesOf(declaring, cloning) && list.IsComplete(cloning.OriginalDefinition));
+
+    /// <summary>
+    /// Gets a value indicating whether the line of the class that clones itself is what says whether the members of a class in its chain
+    /// are known: the class is that class or one above it, or a class between of the same assembly or of one that was built with the
+    /// analyzer. Otherwise a line for the class itself says it.
+    /// </summary>
+    public bool IsJudgedByLineOf(INamedTypeSymbol declaring, INamedTypeSymbol cloning) =>
+        IsAtOrAbove(declaring, cloning) || IsCoveredByLinesOf(declaring, cloning);
+
+    private static bool IsAtOrAbove(INamedTypeSymbol declaring, INamedTypeSymbol cloning)
+    {
+        var declaringDefinition = declaring.OriginalDefinition;
+
+        for (var current = cloning.OriginalDefinition; current is not null; current = current.BaseType?.OriginalDefinition)
+        {
+            if (SymbolEqualityComparer.Default.Equals(current, declaringDefinition))
+                return true;
+        }
+
+        return false;
+    }
+
+    // A class between the class that clones itself and the object's own class, whose members the lines of the class that clones itself
+    // cover: one of the same assembly, as the lines for an assembly cover the classes of that assembly, or one of an assembly that was
+    // built with the analyzers, which named its members that clone there.
+    private static bool IsCoveredByLinesOf(INamedTypeSymbol declaring, INamedTypeSymbol cloning) =>
+        SymbolEqualityComparer.Default.Equals(declaring.ContainingAssembly, cloning.ContainingAssembly) || AnalyzedAssemblies.IsAnalyzed(declaring.ContainingAssembly);
+
+    /// <summary>
+    /// Gets the type as which a member can hand the object that it is called on to other code, as far as its signature shows, where that
+    /// hides the object's binding. Null where it has none. One walk over the types of the signature decides it, by polarity: what comes
+    /// out of the member (a result, a 'ref' or 'out' parameter, a property, an indexer or a field that can be read) starts at "out", what
+    /// goes in (a parameter, a 'ref' parameter as well, a property, an indexer or a field that can be set, the handler of an event) starts
+    /// at "in". The parts of a type keep its polarity, and a delegate turns it round for its parameters. The member can hand its object on
+    /// where a type that the object converts to by a hiding conversion stands at "out": so an 'Action&lt;Doc&gt;' parameter can, and an
+    /// 'Action&lt;Action&lt;Doc&gt;&gt;' parameter, which only lets the caller give the member a sink, cannot.
+    /// </summary>
+    public static ITypeSymbol? FindHandBackType(INamedTypeSymbol receiver, ISymbol member)
+    {
+        var outputs = new List<ITypeSymbol>();
+        var inputs = new List<ITypeSymbol>();
+
+        switch (member)
+        {
+            case IMethodSymbol method:
+                if (!method.ReturnsVoid)
+                    outputs.Add(method.ReturnType);
+
+                AddParameters(method.Parameters);
+                break;
+
+            case IPropertySymbol property:
+                if (property.GetMethod is not null || property.ReturnsByRef)
+                    outputs.Add(property.Type);
+
+                if (property.SetMethod is not null || property.ReturnsByRef)
+                    inputs.Add(property.Type);
+
+                AddParameters(property.Parameters);
+                break;
+
+            case IFieldSymbol field:
+                outputs.Add(field.Type);
+
+                if (!field.IsReadOnly && !field.IsConst)
+                    inputs.Add(field.Type);
+
+                break;
+
+            case IEventSymbol @event:
+                inputs.Add(@event.Type);
+                break;
+        }
+
+        return outputs.FirstOrDefault(output => Flows(output, comesOut: true, 0)) ?? inputs.FirstOrDefault(input => Flows(input, comesOut: false, 0));
+
+        void AddParameters(ImmutableArray<IParameterSymbol> parameters)
+        {
+            foreach (var parameter in parameters)
+            {
+                inputs.Add(parameter.Type);
+
+                if (parameter.RefKind is RefKind.Ref or RefKind.Out)
+                    outputs.Add(parameter.Type);
+            }
+        }
+
+        // Whether a hiding type stands in the type at "out": where a value of it comes out of the member to other code. A type argument is
+        // walked by what its type can do with it: one of an 'out' type parameter keeps the polarity, one of an 'in' type parameter turns it
+        // round, and one of a type parameter with no variance, of a class, a struct or an invariant interface, goes both ways, since the
+        // type can take a value in and hand one out. The type arguments of the types that contain a type count as well. An element of an
+        // array and what a pointer points at go both ways, since both can be written. A tuple and Nullable<T> are passed by value, so their
+        // elements keep the polarity. A constraint of a type parameter keeps it. A delegate or a function pointer keeps the polarity for its
+        // result and turns it round for its parameters, and its 'ref' and 'out' parameters go both ways.
+        bool Flows(ITypeSymbol type, bool comesOut, int depth)
+        {
+            if (depth > 16)
+                return false;
+
+            if (comesOut && IsHiding(type))
+                return true;
+
+            switch (type)
+            {
+                case IArrayTypeSymbol array:
+                    return Flows(array.ElementType, comesOut: true, depth + 1) || Flows(array.ElementType, comesOut: false, depth + 1);
+
+                case IPointerTypeSymbol pointer:
+                    return Flows(pointer.PointedAtType, comesOut: true, depth + 1) || Flows(pointer.PointedAtType, comesOut: false, depth + 1);
+
+                case IFunctionPointerTypeSymbol functionPointer:
+                    return FlowsThroughSignature(functionPointer.Signature, comesOut, depth);
+
+                case INamedTypeSymbol { TypeKind: TypeKind.Delegate, DelegateInvokeMethod: { } invoke }:
+                    return FlowsThroughSignature(invoke, comesOut, depth);
+
+                case INamedTypeSymbol named:
+                    for (var current = named; current is not null; current = current.ContainingType)
+                    {
+                        bool byValue = current.IsTupleType || current.OriginalDefinition.SpecialType is SpecialType.System_Nullable_T;
+                        var parameters = current.OriginalDefinition.TypeParameters;
+
+                        for (int i = 0; i < current.TypeArguments.Length; i++)
+                        {
+                            var variance = byValue || i >= parameters.Length ? VarianceKind.Out : parameters[i].Variance;
+                            var argument = current.TypeArguments[i];
+
+                            bool flows = variance switch {
+                                VarianceKind.Out => Flows(argument, comesOut, depth + 1),
+                                VarianceKind.In => Flows(argument, !comesOut, depth + 1),
+                                _ => Flows(argument, comesOut: true, depth + 1) || Flows(argument, comesOut: false, depth + 1),
+                            };
+
+                            if (flows)
+                                return true;
+                        }
+                    }
+
+                    return false;
+
+                case ITypeParameterSymbol typeParameter:
+                    return typeParameter.ConstraintTypes.Any(constraint => Flows(constraint, comesOut, depth + 1));
+
+                default:
+                    return false;
+            }
+        }
+
+        bool FlowsThroughSignature(IMethodSymbol signature, bool comesOut, int depth)
+        {
+            if (!signature.ReturnsVoid && Flows(signature.ReturnType, comesOut, depth + 1))
+                return true;
+
+            foreach (var parameter in signature.Parameters)
+            {
+                if (Flows(parameter.Type, !comesOut, depth + 1))
+                    return true;
+
+                if (parameter.RefKind is RefKind.Ref or RefKind.Out && Flows(parameter.Type, comesOut, depth + 1))
+                    return true;
+            }
+
+            return false;
+        }
+
+        bool IsHiding(ITypeSymbol output) => output switch {
+            ITypeParameterSymbol typeParameter => !typeParameter.HasValueTypeConstraint && !typeParameter.HasUnmanagedTypeConstraint,
+            { SpecialType: SpecialType.System_Object } or { TypeKind: TypeKind.Dynamic } => true,
+            INamedTypeSymbol { TypeKind: TypeKind.Interface } @interface => receiver.AllInterfaces.Contains(@interface, SymbolEqualityComparer.Default),
+            INamedTypeSymbol { TypeKind: TypeKind.Class } @class => !SymbolEqualityComparer.Default.Equals(@class, receiver) && IsBaseOf(@class, receiver),
+            _ => false,
+        };
+
+        static bool IsBaseOf(INamedTypeSymbol @class, INamedTypeSymbol type)
+        {
+            for (var current = type.BaseType; current is not null; current = current.BaseType)
+            {
+                if (SymbolEqualityComparer.Default.Equals(current, @class))
+                    return true;
+            }
+
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Gets the member that a call of a virtual member runs for an object of a type, as far as the type says: the override in the type or
+    /// the nearest of its base classes, or the member itself.
+    /// </summary>
+    public static ISymbol FindImplementationIn(INamedTypeSymbol type, ISymbol member)
+    {
+        if (member is not (IMethodSymbol { IsVirtual: true } or IMethodSymbol { IsOverride: true } or IMethodSymbol { IsAbstract: true } or
+            IPropertySymbol { IsVirtual: true } or IPropertySymbol { IsOverride: true } or IPropertySymbol { IsAbstract: true }))
+        {
+            return member;
+        }
+
+        var original = member.OriginalDefinition;
+
+        for (var current = type; current is not null; current = current.BaseType)
+        {
+            foreach (var candidate in current.GetMembers(member.Name))
+            {
+                for (ISymbol? overridden = candidate; overridden is not null; overridden = overridden switch { IMethodSymbol m => m.OverriddenMethod, IPropertySymbol p => p.OverriddenProperty, _ => null })
+                {
+                    if (SymbolEqualityComparer.Default.Equals(overridden.OriginalDefinition, original))
+                        return candidate;
+                }
+            }
+        }
+
+        return member;
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether the declaration of a class binds a non-copyable type to a type parameter of a class whose objects a
+    /// class that clones itself clones, in its base list: the place where the class gets the warning for it (SCA1009).
+    /// </summary>
+    public bool BindsInItsBaseList(INamedTypeSymbol declaration) =>
+        declaration.BaseType is { } baseType &&
+        !SymbolEqualityComparer.Default.Equals(baseType, baseType.OriginalDefinition) &&
+        FindCloningBinding(baseType) is not null;
+
+    /// <summary>
+    /// Gets a value indicating whether a class has a binding to a class that clones itself which a declaration of the compilation judged:
+    /// its base list, or that of one of its base classes, got the warning for it. Its objects get none where they are used.
+    /// </summary>
+    public bool HasJudgedCloningBinding(ITypeSymbol? type) =>
+        type is INamedTypeSymbol { TypeKind: TypeKind.Class } named && FindCloningBinding(named) is not null && FindUnjudgedCloningBinding(named) is null;
+
+    /// <summary>
+    /// Gets a binding that <see cref="FindUnjudgedCloningBinding"/> finds in a type or in what it holds: its type arguments, those of the
+    /// types that contain it, and the element type of an array. A conversion that hides a container of such objects hands them on too.
+    /// </summary>
+    public CloningBinding? FindCloningBindingWithin(ITypeSymbol? type, int depth = 0)
+    {
+        RuntimeHelpers.EnsureSufficientExecutionStack();
+
+        const int MaxDepth = 8;
+
+        if (type is null || depth > MaxDepth || !Carries(type))
+            return null;
+
+        switch (type)
+        {
+            case IArrayTypeSymbol array:
+                return FindCloningBindingWithin(array.ElementType, depth + 1);
+
+            case INamedTypeSymbol named:
+                if (FindUnjudgedCloningBinding(named) is { } binding)
+                    return binding;
+
+                foreach (var argument in GetAllTypeArguments(named))
+                {
+                    if (FindCloningBindingWithin(argument, depth + 1) is { } within)
+                        return within;
+                }
+
+                return null;
+
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>
+    /// Gets the binding of a non-copyable type to a type parameter of a class whose objects a class that clones itself clones, where no
+    /// declaration of the compilation judged it: the class is constructed with it, as in 'Tagged&lt;Guard&gt;', or it is in the base list
+    /// of a class of another assembly. Null for a class of the compilation that binds it in a base list of its own or of one of its base
+    /// classes, which get the warning there (SCA1005), and for a class with no such binding.
+    /// </summary>
+    /// <remarks>
+    /// An object of such a class is cloned only by code that the analyzer does not see: a member of the cloning class or of a class above
+    /// it that it is the receiver or an argument of, or code that it reaches as one of those classes or as an interface. Each of those is
+    /// a use of the object as a type that hides the binding, which the hiding checks see wherever it is written, and which they report
+    /// for such an object.
+    /// </remarks>
+    public CloningBinding? FindUnjudgedCloningBinding(INamedTypeSymbol type)
+    {
+        RuntimeHelpers.EnsureSufficientExecutionStack();
+
+        if (type.TypeKind is not TypeKind.Class)
+            return null;
+
+        if (_unjudgedCloningBindings.TryGetValue(type, out var known))
+            return known;
+
+        CloningBinding? found = null;
+
+        if (FindCloningBinding(type) is { } binding)
+        {
+            if (SymbolEqualityComparer.Default.Equals(binding.Bound, type))
+            {
+                found = binding;
+            }
+            else
+            {
+                // The class whose base list names the bound class: in the compilation, it got the warning on that base list where its
+                // declaration binds a non-copyable type there. A class that passes an unmarked type parameter on, as 'DU<T> : Tagged<T>',
+                // binds nothing that its declaration shows, and got no such warning: its objects are judged where they are used.
+                for (var current = type; current?.BaseType is { } baseType; current = baseType)
+                {
+                    if (SymbolEqualityComparer.Default.Equals(baseType, binding.Bound))
+                    {
+                        if (!SymbolEqualityComparer.Default.Equals(current.ContainingAssembly, compilationAssembly) || !BindsInItsBaseList(current.OriginalDefinition))
+                            found = binding;
+
+                        break;
+                    }
+                }
+            }
+        }
+
+        _unjudgedCloningBindings[type] = found;
+        return found;
+    }
 
     private (ITypeSymbol Container, ITypeSymbol HidingType)? FindHiddenByVariance(ITypeSymbol source, ITypeSymbol target, int depth)
     {
@@ -2322,11 +2780,14 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
         if (requiresCopyableConstructor is { } constructorUse)
             return constructorUse;
 
+        // A member that the list names for other type parameters is not unlisted: the message says what the line covers.
+        string? listedFor = entry?.TypeParameterNames is { } names ? string.Join("', '", names) : null;
+
         if (unlistedNonCopyable is { } nonCopyable)
-            return new MemberUse(MemberUseKind.UnlistedNonCopyable, definition, nonCopyable.Parameter, nonCopyable.Argument);
+            return new MemberUse(MemberUseKind.UnlistedNonCopyable, definition, nonCopyable.Parameter, nonCopyable.Argument, ListedFor: listedFor);
 
         if (unlistedContainer is { } container)
-            return new MemberUse(MemberUseKind.UnlistedContainer, definition, container.Parameter, container.Argument);
+            return new MemberUse(MemberUseKind.UnlistedContainer, definition, container.Parameter, container.Argument, ListedFor: listedFor);
 
         if (hidingConstraint is { } hidden)
             return new MemberUse(MemberUseKind.ContainerHiddenByConstraint, definition, hidden.Parameter, hidden.Argument, hidden.Constraint);
@@ -2651,6 +3112,12 @@ internal enum ErasureObstacleKind
 /// What stands in the way of a type being erasable: the base type or interface, its type parameter and what is bound to that. For variance
 /// the type is the one with the variant type parameter, and the interface is the one that has it among its type arguments, or is it.
 /// </summary>
+/// <summary>
+/// A binding of a non-copyable type to a type parameter of a class whose objects a class that the symbol list marks 'clones' clones: the
+/// constructed class that binds it, the non-copyable type, and the cloning class.
+/// </summary>
+internal sealed record CloningBinding(INamedTypeSymbol Bound, ITypeSymbol Type, INamedTypeSymbol Cloning);
+
 internal readonly record struct ErasureObstacle(
     ErasureObstacleKind Kind,
     INamedTypeSymbol Type,
@@ -2673,6 +3140,8 @@ internal readonly record struct ErasureObstacle(
 /// <see cref="MemberUseKind.DefaultMemberOfConstraint"/>.</param>
 /// <param name="Drains">Whether the member is on the safe list with the marker <c>drains</c>: for every rule but that of what its
 /// sequence hands out it is a listed member like any other.</param>
+/// <param name="ListedFor">For a member that is unlisted for its type parameter, the type parameters that the list names it for with
+/// <c>for=</c>, where it names it at all: a line of a file then cannot name it for the type parameter. Null otherwise.</param>
 internal readonly record struct MemberUse(
     MemberUseKind Kind,
     ISymbol? Definition = null,
@@ -2680,7 +3149,8 @@ internal readonly record struct MemberUse(
     ITypeSymbol? TypeArgument = null,
     ITypeSymbol? Constraint = null,
     ISymbol? Member = null,
-    bool Drains = false);
+    bool Drains = false,
+    string? ListedFor = null);
 
 /// <summary>
 /// What keeps the mark [NotNullRef] on a parameter from counting.

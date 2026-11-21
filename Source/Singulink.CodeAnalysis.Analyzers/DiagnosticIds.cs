@@ -47,6 +47,13 @@ public static class DiagnosticIds
     public const string MemberwiseCloneOfOpenClass = "SCA1008";
 
     /// <summary>
+    /// A non-copyable value is held or bound in a class whose base class clones itself, by a 'clones' line of the symbol list: a field
+    /// of a class of the compilation, a binding to a type parameter at a base list or an object creation, or a use of an object with such
+    /// a binding as a type that hands it to the code that clones it.
+    /// </summary>
+    public const string CloningBase = "SCA1009";
+
+    /// <summary>
     /// A copyable struct or a record has a field of a non-copyable type.
     /// </summary>
     public const string FieldOfCopyableType = "SCA1010";

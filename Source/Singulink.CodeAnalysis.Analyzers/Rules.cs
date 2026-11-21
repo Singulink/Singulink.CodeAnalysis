@@ -16,6 +16,7 @@ internal static class Rules
     private const string CopyByAssignmentTitle = "Do not copy a non-copyable value by assignment";
     private const string CopyByReturnTitle = "Do not copy a non-copyable value by returning it";
     private const string MemberwiseCloneTitle = "Do not call MemberwiseClone on what holds a non-copyable value";
+    private const string CloningBaseTitle = "Do not hold or bind a non-copyable value in a class whose base class clones itself";
     private const string FieldOfCopyableTypeTitle = "Do not declare a field of a non-copyable type in a copyable struct or a record";
     private const string UnsupportedUseTitle = "Do not use a non-copyable value where it may be copied";
     private const string UntypedCollectionTitle = "Do not use a container of non-copyable values as an untyped collection";
@@ -140,7 +141,105 @@ internal static class Rules
 
     private const string MemberwiseCloneCallDescription =
         "MemberwiseClone makes a shallow copy of an object or a boxed struct, field by field, so it copies every non-copyable value that is " +
-        "stored in a field. A field that holds a reference to a container does not count: the clone shares the container.";
+        "stored in a field. A field that holds a reference to a container does not count: the clone shares the container. A class whose " +
+        "base class clones itself in code that the analyzer cannot read gets SCA1009 instead.";
+
+    private const string CloningBaseDescription =
+        "A class that the symbol list marks 'clones' clones its objects field by field with MemberwiseClone in code that the analyzer " +
+        "cannot read, and the clone copies every field of a class that derives from it. So a class of the compilation that derives from " +
+        "one gets the warning on each field that holds a non-copyable value, and a non-copyable type bound to a type parameter of such a " +
+        "class gets it where it is bound, as a base class or in an object creation. Where the binding is in the type of a value, as in a " +
+        "'Tagged<Guard>' that a call returns, or in the base list of a class of another assembly, the value gets the warning wherever it is " +
+        "used as a type that hands it to the cloning code: the receiver of a member of the cloning class or of a class above it, a " +
+        "conversion to one of those or to an interface, and a call of a member that clones.";
+
+    private const string MemberwiseCloneOfTypeParameterThroughListedBaseMessage =
+        "'{0}' derives from '{1}', whose own code clones an object field by field with MemberwiseClone, so a clone of an object of '{0}' " +
+        "copies its {2} of type '{3}' with the non-copyable value that a project binds to its type parameter. Suppress this warning only " +
+        "where the code of '{0}' never clones its objects: a project that binds a non-copyable type gets a warning of its own where it hands " +
+        "such an object to the code of '{1}'. Or hold the value in an object of a class that '{0}' refers to, which the clone shares.";
+
+    private const string CloningBindingMessage =
+        "Non-copyable type '{0}' is bound to a type parameter of '{1}', whose objects the own code of '{2}' clones field by field with " +
+        "MemberwiseClone, so a clone copies the '{0}' that it holds. Bind a class that refers to the value instead, which a clone shares, or " +
+        "suppress this warning where no object of '{1}' is ever cloned.";
+
+    private const string CloningUseConversionMessage =
+        "'{0}' is converted to '{1}', which hands the object, or what holds it, to code that can clone it: the own code of '{2}' clones its " +
+        "objects field by field with MemberwiseClone, and a clone copies the non-copyable '{3}' that is bound to a type parameter of '{4}'. " +
+        "Keep the value as '{0}', bind a class that refers to the value instead, which a clone shares, or suppress this warning where the " +
+        "object is never cloned.";
+
+    private const string CloningUseMemberMessage =
+        "'{0}' uses '{1}' as '{2}', which hands the object to code that can clone it: the own code of '{3}' clones its objects field by " +
+        "field with MemberwiseClone, and a clone copies the non-copyable '{4}' that is bound to a type parameter of '{5}'. Bind a class that " +
+        "refers to the value instead, which a clone shares, add '{6}' to a NonCopyableSymbols.txt file if the member does not clone the " +
+        "object, or suppress this warning where the object is never cloned.";
+
+    private const string CloningUseOfCloningMemberMessage =
+        "'{0}' clones its object field by field with MemberwiseClone, or hands it to code that can, so a clone of '{1}' can copy the " +
+        "non-copyable '{2}' that is bound to a type parameter of '{3}', and no line of a symbol list file can vouch for the member. Bind a " +
+        "class that refers to the value instead, which a clone shares, or avoid the use.";
+
+    private const string CloningUseHandsBackMessage =
+        "'{0}' can hand the object of '{1}' to other code as '{2}', which no longer shows its binding: the own code of '{3}' clones its " +
+        "objects field by field with MemberwiseClone, and a clone copies the non-copyable '{4}' that is bound to a type parameter of '{5}'. " +
+        "Bind a class that refers to the value instead, which a clone shares, or add '{6}' to a NonCopyableSymbols.txt file if the member " +
+        "never hands the object itself to other code.";
+
+    private const string CloningUseOfUnknownMemberMessage =
+        "'{0}' is a member of '{2}', and no line says 'clones=complete' for '{3}', so the member can clone the object of '{1}': the own " +
+        "code of '{3}' clones its objects field by field with MemberwiseClone, and a clone copies the non-copyable '{4}' that is bound to a " +
+        "type parameter of '{5}'. Bind a class that refers to the value instead, which a clone shares, add '{6}' to a NonCopyableSymbols.txt " +
+        "file if the member neither clones the object nor hands it on, or add '{7};clones=complete' to one once the 'clones' lines of '{3}' " +
+        "name every member that clones the object or hands it on.";
+
+    private const string CloningUseOfMemberOfUncoveredClassMessage =
+        "'{0}' is a member of '{2}', a class of another assembly than '{3}' that was not built with the analyzers and that no line that " +
+        "says 'clones=complete' covers, so the member can clone the object of '{1}': the own code of '{3}' clones its objects field by " +
+        "field with MemberwiseClone, and a clone copies the non-copyable '{4}' that is bound to a type parameter of '{5}'. Bind a class that " +
+        "refers to the value instead, which a clone shares, add '{6}' to a NonCopyableSymbols.txt file if the member neither clones the " +
+        "object nor hands it on, or add '{7};clones=complete' to one once the 'clones' lines of '{2}' name every member that clones the " +
+        "object or hands it on.";
+
+    private const string MemberClonesWithoutLineMessage =
+        "'{0}' clones its object through '{1}', and an object of '{2}' can hold a non-copyable value that another project derives or " +
+        "binds, where nothing shows the clone. Add '{3};clones' to the symbol list file that ships with the library, so that a call of " +
+        "'{0}' on such an object gets a warning where it is made{4}.";
+
+    private const string CloningUseTypeArgumentMessage =
+        "'{0}' binds '{1}' to type parameter '{2}', which is not marked [NonCopyable], so the generic can use the object as a type that " +
+        "hands it to code that can clone it: the own code of '{3}' clones its objects field by field with MemberwiseClone, and a clone " +
+        "copies the non-copyable '{4}' that is bound to a type parameter of '{5}'. Bind a class that refers to the value instead, which a " +
+        "clone shares, or suppress this warning where the object is never cloned.";
+
+    private const string CloningUseConstraintMessage =
+        "'{0}' binds '{1}' to type parameter '{2}', whose constraint '{3}' lets the generic use the object as a type that hands it to code " +
+        "that can clone it: the own code of '{4}' clones its objects field by field with MemberwiseClone, and a clone copies the " +
+        "non-copyable '{5}' that is bound to a type parameter of '{6}'. Bind a class that refers to the value instead, which a clone shares, " +
+        "or suppress this warning where the object is never cloned.";
+
+    private const string UnlistedMemberThatClonesMessage =
+        "'{0}' may copy non-copyable type '{1}': type parameter '{2}' is not marked [NonCopyable], and the member clones its object field by " +
+        "field with MemberwiseClone, so no line of a symbol list file can vouch for it. Avoid the use.";
+
+    private const string OpaqueMemberThatClonesMessage =
+        "'{2}' uses container '{0}' as '{1}', which hides its non-copyable elements from the analyzer, and '{2}' clones its object field by " +
+        "field with MemberwiseClone, so no line of a symbol list file can vouch for it. Avoid the use, or hold the values in an object of a " +
+        "class that '{0}' refers to.";
+
+    private const string SafeListNamesAccessorMessage =
+        "This line of the symbol list file names '{0}', an accessor of '{1}'. It has no effect, because the analyzer looks up every use " +
+        "of an accessor under its property or event: write the line for '{1}' instead.";
+
+    private const string SafeListContradictsClonesMessage =
+        "This line of the symbol list file says that '{0}' makes no copy, and a 'clones' line says that it clones its object field by field " +
+        "with MemberwiseClone. The line is left out: remove it.";
+
+    private const string MemberwiseCloneThroughListedBaseMessage =
+        "'{0}' derives from '{1}', whose own code clones an object field by field with MemberwiseClone, so a clone of an object of '{0}' " +
+        "copies its {2} of non-copyable type '{3}'. Hold the value in an object of a class that '{0}' refers to, which the clone shares, " +
+        "or suppress this warning where no object of '{0}' is ever cloned.";
 
     private const string GetObjectValueDescription =
         "RuntimeHelpers.GetObjectValue returns a clone of a boxed struct, field by field, so it copies every non-copyable value that the " +
@@ -150,7 +249,9 @@ internal static class Rules
     private const string MemberwiseCloneOfOpenClassMessage =
         "MemberwiseClone of '{0}' clones an object of whatever class derives from it, and '{0}' can be derived from in another assembly, " +
         "where a derived class can hold a non-copyable value that the clone copies. Seal the class, copy its fields in a constructor " +
-        "instead, or suppress this warning as a rule that no derived class may hold a non-copyable value.";
+        "instead, or suppress this warning as a rule that no derived class may hold a non-copyable value. To keep the class open and " +
+        "cloneable in a library, add '{1};clones' to the symbol list file that ships with the library, so that a class that derives from " +
+        "it in another project gets a warning for a non-copyable value, and then suppress this warning.";
 
     private const string MemberwiseCloneOfOpenClassDescription =
         "MemberwiseClone clones the object that it is called on, whatever its class, so a call on a class with no field of a non-copyable " +
@@ -224,6 +325,11 @@ internal static class Rules
         "'{0}' may copy non-copyable type '{1}': type parameter '{2}' is not marked [NonCopyable] and the member is not on the symbol list. Mark the " +
         "type parameter, add '{3}' to a NonCopyableSymbols.txt file if the member makes no copy, or avoid the use.";
 
+    private const string MemberListedForOtherTypeParameterMessage =
+        "'{0}' may copy non-copyable type '{1}': type parameter '{2}' is not marked [NonCopyable] in a build with the analyzer, and the " +
+        "symbol list names the member for '{3}' only, which says nothing of what it does with a value of '{2}'. Bind a copyable type to " +
+        "'{2}', or avoid the use.";
+
     private const string UnlistedMemberOfUncheckedCodeMessage =
         "'{0}' may copy non-copyable type '{1}': type parameter '{2}' is marked [NonCopyable], but the mark does not count in an assembly " +
         "that was not built with the analyzer, and the member is not on the symbol list. Add '{3}' to a NonCopyableSymbols.txt file if the " +
@@ -270,7 +376,7 @@ internal static class Rules
 
     private const string UntypedCollectionConversionMessage =
         "Container {0} is converted to untyped collection '{1}', which hands out copies of its elements. Keep the element type visible, for " +
-        "example with a generic interface, or pass the container only to a member on the symbol list.";
+        "example with a generic interface, or pass the container only to a member that the symbol list marks 'borrows'.";
 
     private const string UntypedCollectionVarianceMessage =
         "The conversion of '{2}' to '{3}' turns container '{0}' into untyped collection '{1}' for the code behind the reference, which hands " +
@@ -286,7 +392,7 @@ internal static class Rules
 
     private const string OpaqueConversionMessage =
         "Container {0} is converted to '{1}', which hides its non-copyable elements from the analyzer. Keep the element type visible, or pass " +
-        "the container only to a member on the symbol list.";
+        "the container only to a member that the symbol list marks 'borrows'.";
 
     private const string OpaqueLambdaResultMessage =
         "The result of this lambda, a container of type {0}, is converted to '{1}', which hides its non-copyable elements from the " +
@@ -341,6 +447,14 @@ internal static class Rules
     private const string OpaqueTypeArgumentMessage =
         "Container '{1}' is bound to type parameter '{2}' of '{0}', which is not marked [NonCopyable], and the member is not on the symbol list. " +
         "Mark the type parameter, add '{3}' to a NonCopyableSymbols.txt file if the member makes no copy, or avoid the use.";
+
+    private const string OpaqueTypeArgumentListedForOtherMessage =
+        "Container '{1}' is bound to type parameter '{2}' of '{0}', which is not marked [NonCopyable], and the symbol list names the member " +
+        "for '{3}' only, which says nothing of what it does with a value of '{2}'. Keep the container out of '{2}', or avoid the use.";
+
+    private const string SafeListWidensBuiltInMessage =
+        "This line of the symbol list file names '{0}' for {1}, where the built-in framework symbol list names it for '{2}' only. It has no " +
+        "effect, because a line of a file can claim less of a member than the built-in list, not more.";
 
     private const string OpaqueTypeDescription =
         "Code that receives a container as object, as a base class or interface that does not name the non-copyable type, or through a type " +
@@ -679,11 +793,15 @@ internal static class Rules
     private const string SafeListCopyableHasNoEffectMessage =
         "This line of the symbol list file marks '{0}' as copyable. It has no effect, because {1}.";
 
+    private const string SafeListClonesHasNoEffectMessage =
+        "This line of the symbol list file marks '{0}' as {1}. It has no effect, because {2}.";
+
     private const string SafeListLineDescription =
         "A line of a NonCopyableSymbols.txt file is a documentation comment ID that starts with 'M:', 'P:', 'E:' or 'T:', optionally followed " +
         "by ';' and a marker: 'new' or 'borrows' for a member, 'drains' for a member that returns a sequence, 'owned' for an instance property " +
         "of a class whose type is Task<TResult>, 'view', " +
-        "'noncopyable' or 'copyable' for a struct, 'erasable' for a generic class or interface. A type " +
+        "'noncopyable' or 'copyable' for a struct, 'erasable' for a generic class or interface, 'clones' for a class whose own code clones " +
+        "its objects with MemberwiseClone. A type " +
         "needs a marker. A member can end with ';for=' and the names of the type parameters that the entry vouches for. A line 'A:<name>;trusted' " +
         "vouches for the assembly of that simple name, which then gets no warning as unchecked code that uses a non-copyable type. A line that starts with " +
         "'#' is a comment, and so is the rest of a line after white space and '#'.";
@@ -820,6 +938,72 @@ internal static class Rules
         "MemberwiseClone copies a value of non-copyable type '{0}'",
         MemberwiseCloneCallDescription);
 
+    public static readonly DiagnosticDescriptor MemberwiseCloneThroughListedBase = Create(
+        DiagnosticIds.CloningBase,
+        CloningBaseTitle,
+        MemberwiseCloneThroughListedBaseMessage,
+        CloningBaseDescription);
+
+    public static readonly DiagnosticDescriptor MemberwiseCloneOfTypeParameterThroughListedBase = Create(
+        DiagnosticIds.CloningBase,
+        CloningBaseTitle,
+        MemberwiseCloneOfTypeParameterThroughListedBaseMessage,
+        CloningBaseDescription);
+
+    public static readonly DiagnosticDescriptor CloningBinding = Create(
+        DiagnosticIds.CloningBase,
+        CloningBaseTitle,
+        CloningBindingMessage,
+        CloningBaseDescription);
+
+    public static readonly DiagnosticDescriptor CloningUseConversion = Create(
+        DiagnosticIds.CloningBase,
+        CloningBaseTitle,
+        CloningUseConversionMessage,
+        CloningBaseDescription);
+
+    public static readonly DiagnosticDescriptor CloningUseMember = Create(
+        DiagnosticIds.CloningBase,
+        CloningBaseTitle,
+        CloningUseMemberMessage,
+        CloningBaseDescription);
+
+    public static readonly DiagnosticDescriptor CloningUseOfCloningMember = Create(
+        DiagnosticIds.CloningBase,
+        CloningBaseTitle,
+        CloningUseOfCloningMemberMessage,
+        CloningBaseDescription);
+
+    public static readonly DiagnosticDescriptor CloningUseHandsBack = Create(
+        DiagnosticIds.CloningBase,
+        CloningBaseTitle,
+        CloningUseHandsBackMessage,
+        CloningBaseDescription);
+
+    public static readonly DiagnosticDescriptor CloningUseOfMemberOfUncoveredClass = Create(
+        DiagnosticIds.CloningBase,
+        CloningBaseTitle,
+        CloningUseOfMemberOfUncoveredClassMessage,
+        CloningBaseDescription);
+
+    public static readonly DiagnosticDescriptor CloningUseOfUnknownMember = Create(
+        DiagnosticIds.CloningBase,
+        CloningBaseTitle,
+        CloningUseOfUnknownMemberMessage,
+        CloningBaseDescription);
+
+    public static readonly DiagnosticDescriptor CloningUseTypeArgument = Create(
+        DiagnosticIds.CloningBase,
+        CloningBaseTitle,
+        CloningUseTypeArgumentMessage,
+        CloningBaseDescription);
+
+    public static readonly DiagnosticDescriptor CloningUseConstraint = Create(
+        DiagnosticIds.CloningBase,
+        CloningBaseTitle,
+        CloningUseConstraintMessage,
+        CloningBaseDescription);
+
     public static readonly DiagnosticDescriptor MemberwiseCloneOfDerivedClass = Create(
         DiagnosticIds.MemberwiseCloneCall,
         MemberwiseCloneTitle,
@@ -830,6 +1014,12 @@ internal static class Rules
         DiagnosticIds.MemberwiseCloneOfOpenClass,
         "Do not call MemberwiseClone on a class that another assembly can derive from",
         MemberwiseCloneOfOpenClassMessage,
+        MemberwiseCloneOfOpenClassDescription);
+
+    public static readonly DiagnosticDescriptor MemberClonesWithoutLine = Create(
+        DiagnosticIds.MemberwiseCloneOfOpenClass,
+        "Do not call MemberwiseClone on a class that another assembly can derive from",
+        MemberClonesWithoutLineMessage,
         MemberwiseCloneOfOpenClassDescription);
 
     public static readonly DiagnosticDescriptor GetObjectValueCall = Create(
@@ -898,6 +1088,12 @@ internal static class Rules
         AsyncOrIteratorMemberMessage,
         AsyncOrIteratorMemberDescription);
 
+    public static readonly DiagnosticDescriptor MemberListedForOtherTypeParameter = Create(
+        DiagnosticIds.UnlistedMember,
+        "Do not use a member of an unmarked generic with a non-copyable type",
+        MemberListedForOtherTypeParameterMessage,
+        UnlistedMemberDescription);
+
     public static readonly DiagnosticDescriptor UnlistedMember = Create(
         DiagnosticIds.UnlistedMember,
         "Do not use a member of an unmarked generic with a non-copyable type",
@@ -908,6 +1104,12 @@ internal static class Rules
         DiagnosticIds.UnlistedMember,
         "Do not use a member of an unmarked generic with a non-copyable type",
         UnlistedMemberOfUncheckedCodeMessage,
+        UnlistedMemberDescription);
+
+    public static readonly DiagnosticDescriptor UnlistedMemberThatClones = Create(
+        DiagnosticIds.UnlistedMember,
+        "Do not use a member of an unmarked generic with a non-copyable type",
+        UnlistedMemberThatClonesMessage,
         UnlistedMemberDescription);
 
     public static readonly DiagnosticDescriptor UncheckedMember = Create(
@@ -983,6 +1185,12 @@ internal static class Rules
         OpaqueMemberMessage,
         OpaqueTypeDescription);
 
+    public static readonly DiagnosticDescriptor OpaqueMemberThatClones = Create(
+        DiagnosticIds.OpaqueType,
+        OpaqueTypeTitle,
+        OpaqueMemberThatClonesMessage,
+        OpaqueTypeDescription);
+
     public static readonly DiagnosticDescriptor OpaqueReturn = Create(
         DiagnosticIds.OpaqueType,
         OpaqueTypeTitle,
@@ -1017,6 +1225,12 @@ internal static class Rules
         DiagnosticIds.OpaqueType,
         OpaqueTypeTitle,
         OpaqueLambdaBoxingMessage,
+        OpaqueTypeDescription);
+
+    public static readonly DiagnosticDescriptor OpaqueTypeArgumentListedForOther = Create(
+        DiagnosticIds.OpaqueType,
+        OpaqueTypeTitle,
+        OpaqueTypeArgumentListedForOtherMessage,
         OpaqueTypeDescription);
 
     public static readonly DiagnosticDescriptor OpaqueTypeArgument = Create(
@@ -1306,6 +1520,30 @@ internal static class Rules
         SafeListCopyableHasNoEffectMessage,
         SafeListLineDescription);
 
+    public static readonly DiagnosticDescriptor SafeListWidensBuiltIn = Create(
+        DiagnosticIds.SafeListLine,
+        "Fix the line of the symbol list file",
+        SafeListWidensBuiltInMessage,
+        SafeListLineDescription);
+
+    public static readonly DiagnosticDescriptor SafeListContradictsClones = Create(
+        DiagnosticIds.SafeListLine,
+        "Fix the line of the symbol list file",
+        SafeListContradictsClonesMessage,
+        SafeListLineDescription);
+
+    public static readonly DiagnosticDescriptor SafeListNamesAccessor = Create(
+        DiagnosticIds.SafeListLine,
+        "Fix the line of the symbol list file",
+        SafeListNamesAccessorMessage,
+        SafeListLineDescription);
+
+    public static readonly DiagnosticDescriptor SafeListClonesHasNoEffect = Create(
+        DiagnosticIds.SafeListLine,
+        "Fix the line of the symbol list file",
+        SafeListClonesHasNoEffectMessage,
+        SafeListLineDescription);
+
     // Whether the line has an effect is known only once the references of the whole compilation have been looked at.
     public static readonly DiagnosticDescriptor SafeListTrustedHasNoEffect = Create(
         DiagnosticIds.SafeListLine,
@@ -1415,6 +1653,18 @@ internal static class Rules
         MemberwiseCloneCallOnValue,
         MemberwiseCloneOfDerivedClass,
         MemberwiseCloneOfOpenClass,
+        MemberwiseCloneThroughListedBase,
+        MemberwiseCloneOfTypeParameterThroughListedBase,
+        CloningBinding,
+        CloningUseConversion,
+        CloningUseMember,
+        CloningUseOfCloningMember,
+        CloningUseConstraint,
+        CloningUseTypeArgument,
+        CloningUseHandsBack,
+        CloningUseOfUnknownMember,
+        CloningUseOfMemberOfUncoveredClass,
+        MemberClonesWithoutLine,
         GetObjectValueCall,
         FieldOfCopyableType,
         FieldOfRecord,
@@ -1427,7 +1677,9 @@ internal static class Rules
         DefaultInterfaceMemberBound,
         AsyncOrIteratorMember,
         UnlistedMember,
+        MemberListedForOtherTypeParameter,
         UnlistedMemberOfUncheckedCode,
+        UnlistedMemberThatClones,
         UncheckedMember,
         UncheckedAssembly,
         RequiresCopyableMember,
@@ -1440,6 +1692,7 @@ internal static class Rules
         OpaqueConversion,
         OpaqueVariance,
         OpaqueMember,
+        OpaqueMemberThatClones,
         OpaqueReturn,
         OpaqueMethodGroup,
         OpaqueTypeParameterConversion,
@@ -1447,6 +1700,7 @@ internal static class Rules
         OpaqueBoxing,
         OpaqueLambdaBoxing,
         OpaqueTypeArgument,
+        OpaqueTypeArgumentListedForOther,
         ReadFromStoredContainer,
         CreatedFromStoredContainer,
         OpaqueLambdaResult,
@@ -1493,6 +1747,10 @@ internal static class Rules
         SafeListLine,
         SafeListNonCopyableNamesNothing,
         SafeListCopyableHasNoEffect,
+        SafeListClonesHasNoEffect,
+        SafeListNamesAccessor,
+        SafeListContradictsClones,
+        SafeListWidensBuiltIn,
         SafeListTrustedHasNoEffect,
         NonCopyableAwaiter,
         ConditionalMarker,

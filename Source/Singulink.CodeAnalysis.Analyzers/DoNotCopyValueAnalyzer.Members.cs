@@ -351,15 +351,29 @@ public sealed partial class DoNotCopyValueAnalyzer
 
             switch (use.Kind)
             {
+                case MemberUseKind.UnlistedNonCopyable when use.ListedFor is not null && !types.IsCloningMember(use.Definition!):
+                    Report(Rules.MemberListedForOtherTypeParameter, syntax, Display(use.Definition!), use.TypeArgument, use.TypeParameter!.Name, use.ListedFor);
+                    break;
+
                 case MemberUseKind.UnlistedNonCopyable:
                     // A type parameter that is marked in an assembly that was not built with the analyzer cannot be marked any better.
                     Report(
-                        NonCopyableTypes.HasUncountedNonCopyableMark(use.TypeParameter!) ? Rules.UnlistedMemberOfUncheckedCode : Rules.UnlistedMember,
+                        types.IsCloningMember(use.Definition!) ? Rules.UnlistedMemberThatClones
+                            : NonCopyableTypes.HasUncountedNonCopyableMark(use.TypeParameter!) ? Rules.UnlistedMemberOfUncheckedCode
+                            : Rules.UnlistedMember,
                         syntax,
                         Display(use.Definition!),
                         use.TypeArgument,
                         use.TypeParameter!.Name,
                         GetListId(use.Definition!));
+                    break;
+
+                case MemberUseKind.UnlistedContainer when types.FindCloningBindingWithin(use.TypeArgument) is { } binding:
+                    Report(Rules.CloningUseTypeArgument, syntax, Display(use.Definition!), use.TypeArgument, use.TypeParameter!.Name, binding.Cloning, binding.Type, binding.Bound);
+                    break;
+
+                case MemberUseKind.UnlistedContainer when use.ListedFor is not null:
+                    Report(Rules.OpaqueTypeArgumentListedForOther, syntax, Display(use.Definition!), use.TypeArgument, use.TypeParameter!.Name, use.ListedFor);
                     break;
 
                 case MemberUseKind.UnlistedContainer:
@@ -380,6 +394,10 @@ public sealed partial class DoNotCopyValueAnalyzer
                         Display(use.Definition!),
                         use.Constraint);
 
+                    break;
+
+                case MemberUseKind.ContainerHiddenByConstraint when types.FindCloningBindingWithin(use.TypeArgument) is { } binding:
+                    Report(Rules.CloningUseConstraint, syntax, Display(use.Definition!), use.TypeArgument, use.TypeParameter!.Name, use.Constraint, binding.Cloning, binding.Type, binding.Bound);
                     break;
 
                 case MemberUseKind.ContainerHiddenByConstraint:
@@ -410,7 +428,7 @@ public sealed partial class DoNotCopyValueAnalyzer
         /// Reports a member that is used on a container through a type that no longer mentions the non-copyable type, such as a member that an array
         /// inherits from <see cref="Array"/>, unless the member is on the safe list. The receiver is used as the type that declares the member.
         /// </summary>
-        private void CheckReceiverType(SyntaxNode syntax, ITypeSymbol? receiverType, ISymbol? member)
+        private void CheckReceiverType(SyntaxNode syntax, ITypeSymbol? receiverType, ISymbol? member, bool subscribes = true)
         {
             if (receiverType is null || member is null || member.IsStatic || member.ContainingType is not { } declaringType)
                 return;
@@ -419,12 +437,177 @@ public sealed partial class DoNotCopyValueAnalyzer
             if (member is IMethodSymbol { IsExtensionMethod: true } || declaringType.IsExtension)
                 return;
 
-            if (!types.HidesNonCopyableType(receiverType, declaringType) || types.IsListed(member))
+            // The object itself, with a binding to a class that clones itself that no declaration judged.
+            if (receiverType is INamedTypeSymbol { TypeKind: TypeKind.Class } receiverClass && types.FindUnjudgedCloningBinding(receiverClass) is { } binding)
+            {
+                // An event hands the object to its handlers only where one is subscribed. One whose line says that it clones does so where
+                // a handler is added and where one is removed.
+                if (member is not IEventSymbol || subscribes || types.IsCloningMember(NonCopyableTypes.GetListDefinition(member)) ||
+                    types.IsCloningMember(NonCopyableTypes.GetListDefinition(NonCopyableTypes.FindImplementationIn(receiverClass, member))))
+                {
+                    CheckMemberOfClonedObject(syntax, receiverClass, member, binding);
+                }
+
+                return;
+            }
+
+            if (!types.HidesNonCopyableType(receiverType, declaringType))
+                return;
+
+            // A container of objects whose binding to a class that clones itself no declaration judged, used as a type that hides them.
+            if (types.FindCloningBindingWithin(receiverType) is not null)
+            {
+                if (!types.IsListed(member))
+                    TryReportCloningUse(syntax, receiverType, declaringType, member);
+
+                return;
+            }
+
+            if (types.IsListed(member))
                 return;
 
             var definition = NonCopyableTypes.GetListDefinition(member);
-            var rule = NonCopyableTypes.IsUntypedCollection(declaringType) ? Rules.UntypedCollectionMember : Rules.OpaqueMember;
+
+            // An object whose binding was judged where its class is declared has the warning for the clone there.
+            if (types.IsCloningMember(definition) && types.HasJudgedCloningBinding(receiverType))
+                return;
+
+            // A member that clones its object copies what the container holds, whatever a symbol list file could say of it.
+            var rule = NonCopyableTypes.IsUntypedCollection(declaringType) ? Rules.UntypedCollectionMember
+                : types.IsCloningMember(definition) ? Rules.OpaqueMemberThatClones
+                : Rules.OpaqueMember;
             Report(rule, syntax, receiverType, declaringType, Display(definition), GetListId(definition));
+        }
+
+        /// <summary>
+        /// Reports a member that is used on an object whose binding to a class that clones itself no declaration judged, where the member
+        /// can clone the object or hand it to code that can (SCA1009): it does, by a 'clones' line; its members that clone are not known,
+        /// since it is inherited from a class that does not show the binding and whose members no line names; or its signature shows that
+        /// it can hand the object to other code as a type that hides the binding, and no line of its own says that it does not. A call that
+        /// binds to an override is judged by the override, and a line for the member that it overrides does not vouch for it: a member of
+        /// the class that shows the binding, or of a class between it and the class that clones itself, is judged by its own line and its
+        /// own signature.
+        /// </summary>
+        private void CheckMemberOfClonedObject(SyntaxNode syntax, INamedTypeSymbol receiver, ISymbol member, CloningBinding binding)
+        {
+            var implementation = NonCopyableTypes.FindImplementationIn(receiver, member);
+            var definition = NonCopyableTypes.GetListDefinition(implementation);
+
+            // The messages name a binding that a declaration writes with a closed type first: the clone copies it whatever the class is
+            // constructed with.
+            binding = types.FindClosedCloningBinding(receiver) ?? binding;
+
+            if (types.IsCloningMember(definition) || types.IsCloningMember(NonCopyableTypes.GetListDefinition(member)))
+            {
+                Report(Rules.CloningUseOfCloningMember, syntax, Display(definition), receiver, binding.Type, binding.Bound);
+                return;
+            }
+
+            if (implementation.ContainingType is not { } declaring)
+                return;
+
+            // A line for the member itself says that it neither clones the object nor hands it on.
+            if (types.IsListed(implementation))
+                return;
+
+            // Where the members that clone are not known, because no line that says 'clones=complete' covers the member's class, any member
+            // can clone. A member of a class that shows the binding is code of the project, or of an assembly that was built with the
+            // analyzers, whose members that clone have their lines there (SCA1008). One of an assembly that was not built with them, which
+            // writes the binding in its own base list, is judged as a class between: nothing vouches for what its own members do. A generic
+            // class of such an assembly whose binding comes from its own type arguments alone gets SCA1020 for each of its members instead;
+            // where a base list above it also binds a closed non-copyable type, the clone copies that one, and the member is judged for it.
+            bool judgedInItsOwnBuild = !types.HidesNonCopyableType(receiver, declaring) &&
+                (SymbolEqualityComparer.Default.Equals(declaring.ContainingAssembly, context.Compilation.Assembly) ||
+                    AnalyzedAssemblies.IsAnalyzed(declaring.ContainingAssembly) ||
+                    (SymbolEqualityComparer.Default.Equals(types.FindCloningBinding(declaring)?.Bound, declaring) && types.FindClosedCloningBinding(declaring) is null));
+
+            if (!judgedInItsOwnBuild && !types.AreCloningMembersKnown(declaring, binding.Cloning))
+            {
+                // The advice names the line that would cover the member's class: that of the class that clones itself, or the class's own.
+                if (types.IsJudgedByLineOf(declaring, binding.Cloning))
+                    Report(Rules.CloningUseOfUnknownMember, syntax, Display(definition), receiver, declaring, binding.Cloning, binding.Type, binding.Bound, GetListId(definition), GetListId(binding.Cloning));
+                else
+                    Report(Rules.CloningUseOfMemberOfUncoveredClass, syntax, Display(definition), receiver, declaring, binding.Cloning, binding.Type, binding.Bound, GetListId(definition), GetListId(declaring.OriginalDefinition));
+            }
+            else if (NonCopyableTypes.FindHandBackType(receiver, implementation) is { } handBackType)
+            {
+                Report(Rules.CloningUseHandsBack, syntax, Display(definition), receiver, handBackType, binding.Cloning, binding.Type, binding.Bound, GetListId(definition));
+            }
+        }
+
+        /// <summary>
+        /// Reports a member of a class that clones itself, of a class that another project can derive from or bind a type to, which clones
+        /// its own object, with MemberwiseClone, through a member of the class that clones, or through an interface whose member the class
+        /// implements with one, and has no 'clones' line of its own (SCA1008). A project that calls it on an object with a binding cannot
+        /// see the clone, and goes by the lines: this helps the author of a library complete them, and is given only where the compilation
+        /// makes a library, and only for a member that another assembly can name. It is not a proof: a member that hands its object to a
+        /// static helper that clones it, or clones it through a private or internal member of its class, gets no warning.
+        /// </summary>
+        private void CheckCloneOfOwnObject(IOperation operation, IMethodSymbol called, IOperation? instance, ImmutableArray<IArgumentOperation> arguments)
+        {
+            if (context.Compilation.Options.OutputKind is not OutputKind.DynamicallyLinkedLibrary)
+                return;
+
+            // A call on the object through an interface, such as '((ICloneable)this).Clone()', runs the member of the class that implements it.
+            if (called is { IsStatic: false, ContainingType.TypeKind: TypeKind.Interface } && instance is not null && IsOwnObject(instance) &&
+                context.OwningSymbol?.ContainingType?.FindImplementationForInterfaceMember(called) is IMethodSymbol implementing)
+            {
+                called = implementing;
+            }
+
+            if (!IsMemberwiseClone(called) && !types.IsCloningMember(NonCopyableTypes.GetListDefinition(called)))
+                return;
+
+            if (!(called.IsStatic ? arguments.Any(a => IsOwnObject(a.Value)) : instance is null || IsOwnObject(instance) || arguments.Any(a => IsOwnObject(a.Value))))
+                return;
+
+            if (context.OwningSymbol is not { ContainingType: { TypeKind: TypeKind.Class } owningClass } owner)
+                return;
+
+            var ownerDefinition = NonCopyableTypes.GetListDefinition(owner);
+
+            // A line can name only a member that another assembly sees: a private or internal one is not imported where the library is
+            // referenced, and its line would have no effect there. A member that clones through such a helper is for the author to list.
+            if (ownerDefinition.DeclaredAccessibility is not (Accessibility.Public or Accessibility.Protected or Accessibility.ProtectedOrInternal) ||
+                types.IsCloningMember(ownerDefinition) ||
+                !(types.IsClonesClass(owningClass) || types.FindCloningBase(owningClass) is not null) ||
+                !(IsGenericOrInGeneric(owningClass) || types.CanBeDerivedFromElsewhere(owningClass)))
+            {
+                return;
+            }
+
+            // The line that says whether the 'clones' lines of the class are complete is the class's own, or that of the class of the
+            // library that clones itself and whose lines cover it. A class whose class that clones itself is of another assembly is
+            // covered by that class's line, which the library does not ship.
+            var cloningOfLibrary = types.IsClonesClass(owningClass) ? owningClass : types.FindCloningBase(owningClass);
+            string completeHint = cloningOfLibrary is not null && SymbolEqualityComparer.Default.Equals(cloningOfLibrary.ContainingAssembly, context.Compilation.Assembly)
+                ? $"; once the 'clones' lines name every member of '{Display(cloningOfLibrary.OriginalDefinition)}' that clones its object or hands it on, " +
+                    $"write its line as '{GetListId(cloningOfLibrary.OriginalDefinition)};clones=complete'"
+                : string.Empty;
+
+            Report(Rules.MemberClonesWithoutLine, operation.Syntax, Display(ownerDefinition), Display(NonCopyableTypes.GetListDefinition(called)), owningClass, GetListId(ownerDefinition), completeHint);
+
+            static bool IsOwnObject(IOperation? value) =>
+                value is not null && SkipConversions(value) is IInstanceReferenceOperation { ReferenceKind: InstanceReferenceKind.ContainingTypeInstance };
+
+            static IOperation SkipConversions(IOperation value)
+            {
+                while (value is IConversionOperation { OperatorMethod: null } or IParenthesizedOperation)
+                    value = value is IConversionOperation conversion ? conversion.Operand : ((IParenthesizedOperation)value).Operand;
+
+                return value;
+            }
+
+            static bool IsGenericOrInGeneric(INamedTypeSymbol type)
+            {
+                for (var current = type; current is not null; current = current.ContainingType)
+                {
+                    if (current.IsGenericType)
+                        return true;
+                }
+
+                return false;
+            }
         }
 
         /// <summary>
@@ -540,8 +723,12 @@ public sealed partial class DoNotCopyValueAnalyzer
         {
             var use = report ? CheckMemberUse(syntax, member) : types.GetUse(member);
 
+            // Every member that is followed here is called by a pattern, with no argument for an extension's receiver.
             if (report)
+            {
                 CheckReceiverType(syntax, receiverType, member);
+                CheckPatternExtensionReceiver(syntax, receiverType, member);
+            }
 
             // What a generic hands out of a container that is bound to a marked type parameter is stored, and so is a container that a
             // member of an assembly that was not built with the analyzer hands out, as for the member written out.
@@ -730,6 +917,7 @@ public sealed partial class DoNotCopyValueAnalyzer
 
             CheckMemberUse(site, getEnumerator);
             CheckReceiverType(site, collectionType, getEnumerator);
+            CheckPatternExtensionReceiver(site, collectionType, getEnumerator);
 
             if (info.MoveNextMethod is { } moveNext)
             {
@@ -977,7 +1165,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                 }
 
                 MarkDeconstructionTargets(variable, handled);
-                CheckDeconstruction(variable, null, deconstruction, elementIsNew, handled);
+                CheckDeconstruction(variable, null, deconstruction, elementIsNew, handled, elementType, variableSyntax.Variable);
             }
         }
 
@@ -1124,7 +1312,7 @@ public sealed partial class DoNotCopyValueAnalyzer
             }
             else if (types.CanBeDerivedFromElsewhere(named))
             {
-                Report(Rules.MemberwiseCloneOfOpenClass, operation.Syntax, named);
+                Report(Rules.MemberwiseCloneOfOpenClass, operation.Syntax, named, named.OriginalDefinition.GetDocumentationCommentId() ?? Display(named));
             }
         }
 
@@ -1141,19 +1329,6 @@ public sealed partial class DoNotCopyValueAnalyzer
             }
 
             return null;
-        }
-
-        // A field as the message names it: "field 'Guard'" by the property that it backs, and "parameter 'g'" for the field that holds a
-        // captured parameter of a primary constructor, which the compiler names '<g>P'.
-        private static string DisplayField(IFieldSymbol field)
-        {
-            if (field.AssociatedSymbol is { } associated)
-                return $"field '{associated.Name}'";
-
-            if (field is { IsImplicitlyDeclared: true, Name: { Length: > 3 } name } && name.StartsWith("<", StringComparison.Ordinal) && name.EndsWith(">P", StringComparison.Ordinal))
-                return $"parameter '{name[1..^2]}'";
-
-            return $"field '{field.Name}'";
         }
 
         // The clone of object, and the one of MarshalByRefObject that Stream and Component inherit, which clones the object as well.

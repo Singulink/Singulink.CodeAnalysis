@@ -33,7 +33,6 @@ Crash1.cs(18,24): SCA1003
 Crash1.cs(25,39): SCA1030
 Crash1.cs(26,32): SCA1023
 Crash1.cs(27,65): SCA1030
-Crash1.cs(27,69): SCA1032
 Crash1.cs(30,47): SCA1030
 Crash1.cs(31,39): SCA1003
 Crash1.cs(32,17): SCA1001

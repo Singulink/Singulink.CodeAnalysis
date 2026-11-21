@@ -14,7 +14,7 @@ namespace Singulink.CodeAnalysis.Tests;
 /// Docs: articles/guides/symbol-list.md and articles/concepts/unchecked-code.md.
 /// </remarks>
 [PrefixTestClass]
-public class FrameworkScanTests
+public partial class FrameworkScanTests
 {
     private static readonly string[] BuiltInTypes = [
         "System.Threading.SpinLock",
@@ -222,9 +222,32 @@ public class FrameworkScanTests
 
             int comment = entry.IndexOf(" #", StringComparison.Ordinal);
             string[] parts = (comment >= 0 ? entry[..comment] : entry).Split(';', StringSplitOptions.TrimEntries);
-            entries[parts[0]] = parts.Length > 1 && !parts[1].StartsWith("for=", StringComparison.Ordinal) ? parts[1] : null;
+
+            // 'clones=complete' is a 'clones' line too: ReadCompleteClasses reads the classes whose line says it.
+            string? marker = parts.Length > 1 && !parts[1].StartsWith("for=", StringComparison.Ordinal) ? parts[1] : null;
+            entries[parts[0]] = marker is "clones=complete" ? "clones" : marker;
         }
 
         return entries;
+    }
+
+    // The classes whose line of the built-in list says 'clones=complete', by their names without 'T:'.
+    private static HashSet<string> ReadCompleteClasses()
+    {
+        using var stream = typeof(Singulink.CodeAnalysis.Analyzers.DoNotCopyValueAnalyzer).Assembly
+            .GetManifestResourceStream("Singulink.CodeAnalysis.Analyzers.NonCopyableSymbols.txt")!;
+
+        using var reader = new StreamReader(stream);
+        var classes = new HashSet<string>(StringComparer.Ordinal);
+
+        while (reader.ReadLine() is { } line)
+        {
+            string entry = line.Split(" #")[0].Trim();
+
+            if (entry.StartsWith("T:", StringComparison.Ordinal) && entry.EndsWith(";clones=complete", StringComparison.Ordinal))
+                classes.Add(entry[2..^";clones=complete".Length]);
+        }
+
+        return classes;
     }
 }

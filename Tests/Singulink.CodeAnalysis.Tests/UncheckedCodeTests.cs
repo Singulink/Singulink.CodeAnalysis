@@ -615,21 +615,114 @@ public class UncheckedCodeTests
         }
         """;
 
-    // The attributes assembly of the package carries the marker, so the marks of NonCopyable.Move and of the two checks are trusted.
+    // The attributes assembly of the package carries the marker, so the marks of NonCopyable.Move and of the two checks are trusted. Its
+    // value is the version of the package, which is that of the analyzers.
     [TestMethod]
     public void AttributesAssembly_CarriesTheMarkerOfABuildWithTheAnalyzer()
     {
-        var marker = typeof(NonCopyableAttribute).Assembly
+        var assembly = typeof(NonCopyableAttribute).Assembly;
+        var marker = assembly
             .GetCustomAttributes(typeof(System.Reflection.AssemblyMetadataAttribute), inherit: false)
             .Cast<System.Reflection.AssemblyMetadataAttribute>()
             .SingleOrDefault(attribute => attribute.Key == "Singulink.CodeAnalysis.Analyzed");
 
         Assert.IsNotNull(marker, "Singulink.CodeAnalysis.dll has no marker of a build with the analyzer.");
-        Assert.AreEqual("1", marker.Value);
+        Assert.AreEqual(GetPackageVersion(assembly), marker.Value);
     }
 
-    // The marker is read by its key, whatever its value, and only from System.Reflection.AssemblyMetadataAttribute.
+    // The targets file of the analyzers package records the package's own version in the marker: the copy in the package has it as a
+    // literal, under build and under buildTransitive, and not the placeholder of the file in the repository.
     [TestMethod]
+    public void AnalyzersPackage_RecordsItsVersionInTheMarker()
+    {
+        var analyzers = typeof(Singulink.CodeAnalysis.Analyzers.DoNotCopyValueAnalyzer).Assembly;
+        string version = GetPackageVersion(analyzers);
+#if DEBUG
+        const string Configuration = "Debug";
+#else
+        const string Configuration = "Release";
+#endif
+        string package = Path.Combine(FindRepository(), "Source", "Singulink.CodeAnalysis.Analyzers", "bin", Configuration, $"Singulink.CodeAnalysis.Analyzers.{version}.nupkg");
+        Assert.IsTrue(File.Exists(package), $"No package {package}: the analyzers project packs on build.");
+
+        using var archive = System.IO.Compression.ZipFile.OpenRead(package);
+
+        foreach (string folder in new[] { "build", "buildTransitive" })
+        {
+            var entry = archive.GetEntry($"{folder}/Singulink.CodeAnalysis.Analyzers.targets");
+            Assert.IsNotNull(entry, $"The package has no {folder}/Singulink.CodeAnalysis.Analyzers.targets.");
+
+            using var reader = new StreamReader(entry.Open());
+            string targets = reader.ReadToEnd();
+
+            StringAssert.Contains(targets, "<_Parameter1>Singulink.CodeAnalysis.Analyzed</_Parameter1>");
+            StringAssert.Contains(targets, $"<_Parameter2>{version}</_Parameter2>");
+            Assert.IsFalse(targets.Contains("0.0.0-unpacked", StringComparison.Ordinal), $"{folder}: the placeholder was packed.");
+        }
+
+        static string FindRepository()
+        {
+            for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+            {
+                if (File.Exists(Path.Combine(directory.FullName, "Singulink.CodeAnalysis.slnx")))
+                    return directory.FullName;
+            }
+
+            throw new DirectoryNotFoundException("No repository above the test assembly.");
+        }
+    }
+
+    // The version of the package that an assembly was built for, from its informational version without the source revision.
+    private static string GetPackageVersion(System.Reflection.Assembly assembly)
+    {
+        string informational = assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), inherit: false)
+            .Cast<System.Reflection.AssemblyInformationalVersionAttribute>()
+            .Single()
+            .InformationalVersion;
+
+        int plus = informational.IndexOf('+', StringComparison.Ordinal);
+        return plus < 0 ? informational : informational[..plus];
+    }
+
+    // The version that an assembly records in its marker: the version where the value is one, and none for the "1" that the marker had
+    // before it recorded one, for any other value, and for an assembly with no marker. Nothing else reads it.
+    [TestMethod]
+    [DataRow("0.7.0", "0.7.0")]
+    [DataRow("0.7.1-local.2", "0.7.1-local.2")]
+    [DataRow("1.0.0+abc123", "1.0.0")]
+    [DataRow("1", null)]
+    [DataRow("0.7", null)]
+    [DataRow("1.2.3.4", null)]
+    [DataRow("0.7.0-", null)]
+    [DataRow("a.b.c", null)]
+    [DataRow("built with the analyzers", null)]
+    [DataRow(null, null)]
+    public async Task Marker_RecordsTheVersionOfTheAnalyzers(string? value, string? expected)
+    {
+        string source = value is null
+            ? "namespace Recorded { public class C { } }"
+            : $$"""[assembly: System.Reflection.AssemblyMetadata("Singulink.CodeAnalysis.Analyzed", "{{value}}")] namespace Recorded { public class C { } }""";
+
+        var reference = await Verify.CompileLibraryAsync(Verify.Test.NetReferenceAssemblies, source, analyzed: false, "Recorded");
+        var references = (await Verify.Test.NetReferenceAssemblies.ResolveAsync(LanguageNames.CSharp, CancellationToken.None)).Add(reference);
+        var compilation = Microsoft.CodeAnalysis.CSharp.CSharpCompilation.Create("User", references: references);
+        var assembly = (IAssemblySymbol)compilation.GetAssemblyOrModuleSymbol(reference)!;
+
+        var helper = typeof(Singulink.CodeAnalysis.Analyzers.DoNotCopyValueAnalyzer).Assembly
+            .GetType("Singulink.CodeAnalysis.Analyzers.AnalyzedAssemblies", throwOnError: true)!
+            .GetMethod("GetRecordedVersion")!;
+
+        object? recorded = helper.Invoke(null, [assembly]);
+        Assert.AreEqual(expected, recorded?.ToString());
+    }
+
+    // The marker is read by its key, whatever its value, and only from System.Reflection.AssemblyMetadataAttribute: the version that it
+    // records, the "1" that it had before, and any other string.
+    [TestMethod]
+    [DataRow("""[assembly: System.Reflection.AssemblyMetadata("Singulink.CodeAnalysis.Analyzed", "0.7.0")]""", true)]
+    [DataRow("""[assembly: System.Reflection.AssemblyMetadata("Singulink.CodeAnalysis.Analyzed", "0.7.1-local.2")]""", true)]
+    [DataRow("""[assembly: System.Reflection.AssemblyMetadata("Singulink.CodeAnalysis.Analyzed", "1")]""", true)]
+    [DataRow("""[assembly: System.Reflection.AssemblyMetadata("Singulink.CodeAnalysis.Analyzed", "any string at all")]""", true)]
     [DataRow("""[assembly: System.Reflection.AssemblyMetadata("Singulink.CodeAnalysis.Analyzed", "2")]""", true)]
     [DataRow("""[assembly: System.Reflection.AssemblyMetadata("Singulink.CodeAnalysis.Analysed", "1")]""", false)]
     [DataRow("""[assembly: Other.AssemblyMetadata("Singulink.CodeAnalysis.Analyzed", "1")]""", false)]

@@ -22,6 +22,8 @@ internal sealed class SafeMemberList
     public const string FileName = "NonCopyableSymbols.txt";
 
     private const string ForKeyword = "for";
+    private const string ClonesKeyword = "clones";
+    private const string CompleteValue = "complete";
     private const string AssemblyPrefix = "A:";
     private const string OwnedIsForATask = "the marker 'owned' is for an instance property of a class whose type is 'Task<TResult>'";
 
@@ -34,6 +36,16 @@ internal sealed class SafeMemberList
     private static readonly Lazy<Dictionary<string, SafeListEntry>> s_builtInEntriesWithoutNonCopyableTypes = new(
         () => ToEntryMap([.. ParseBuiltIn().Where(e => e.Marker is not SafeListMarker.NonCopyable)]));
 
+    // The classes that the built-in list marks 'clones'. They are kept apart from the other entries: the marker only adds warnings, so it
+    // is not merged with the other marker of a line for the same type, and nothing takes it away.
+    private static readonly Lazy<HashSet<string>> s_builtInClones = new(
+        () => new HashSet<string>(ParseBuiltIn().Where(e => e.Marker is SafeListMarker.Clones).Select(e => e.Id), StringComparer.Ordinal));
+
+    // The classes whose line of the built-in list says 'clones=complete': its 'clones' lines name every member of the class that clones
+    // its object or hands it to code that can.
+    private static readonly Lazy<HashSet<string>> s_builtInComplete = new(
+        () => new HashSet<string>(ParseBuiltIn().Where(e => e.IsComplete).Select(e => e.Id), StringComparer.Ordinal));
+
     private readonly Dictionary<string, SafeListEntry> _entries;
 
     // The IDs of the structs that a 'copyable' line of a user file takes out, which no 'noncopyable' line of a user file names.
@@ -43,6 +55,12 @@ internal sealed class SafeMemberList
     private readonly HashSet<string> _userNonCopyable;
     private readonly HashSet<string> _trustedAssemblies;
 
+    // The IDs of the classes that a 'clones' line of the built-in list or of a user file names.
+    private readonly HashSet<string> _clones;
+
+    // The IDs of the classes that a 'clones' line of the built-in list or of a user file names with 'clones=complete'.
+    private readonly HashSet<string> _complete;
+
     // Null for a symbol that has no entry.
     private readonly ConcurrentDictionary<ISymbol, SafeListEntry?> _entriesBySymbol = new(SymbolEqualityComparer.Default);
 
@@ -50,13 +68,48 @@ internal sealed class SafeMemberList
         Dictionary<string, SafeListEntry> entries,
         HashSet<string>? copyable = null,
         HashSet<string>? userNonCopyable = null,
-        HashSet<string>? trustedAssemblies = null)
+        HashSet<string>? trustedAssemblies = null,
+        HashSet<string>? clones = null,
+        HashSet<string>? complete = null)
     {
         _entries = entries;
         _copyable = copyable ?? [];
         _userNonCopyable = userNonCopyable ?? [];
         _trustedAssemblies = trustedAssemblies ?? [];
+        _clones = clones ?? s_builtInClones.Value;
+        _complete = complete ?? s_builtInComplete.Value;
     }
+
+    /// <summary>
+    /// Gets a value indicating whether a 'clones' line names a member, by its original definition: the method, the property or the event
+    /// clones its object, or the object that it is given, field by field with MemberwiseClone, or hands it to code that can.
+    /// </summary>
+    public bool IsCloningMember(ISymbol definition) =>
+        _clones.Count > 0 && definition.GetDocumentationCommentId() is { } id && id[0] is 'M' or 'P' or 'E' && _clones.Contains(id);
+
+    /// <summary>
+    /// Gets a value indicating whether a class has complete member lines, by its original definition: a 'clones' line for it, of the
+    /// built-in list or of any user file, says 'clones=complete'. Its 'clones' lines then name every member of the class that clones its
+    /// object or hands it to code that can, and a member that no line names is taken to do neither.
+    /// </summary>
+    public bool IsComplete(INamedTypeSymbol definition) =>
+        _complete.Count > 0 && definition.GetDocumentationCommentId() is { } id && _complete.Contains(id);
+
+    /// <summary>
+    /// Gets a value indicating whether a line says that a member makes no copy where the built-in list, or a 'clones' line of the given
+    /// files, says that it clones its object: such a line is left out, and gets a warning in its file.
+    /// </summary>
+    public static bool ContradictsClones(SafeListEntry entry, IEnumerable<string>? clonesOfFiles = null) =>
+        entry.Id[0] is 'M' or 'P' or 'E' &&
+        entry.Marker is SafeListMarker.None or SafeListMarker.New or SafeListMarker.Borrows or SafeListMarker.Drains or SafeListMarker.Owned &&
+        (s_builtInClones.Value.Contains(entry.Id) || (clonesOfFiles?.Contains(entry.Id, StringComparer.Ordinal) ?? false));
+
+    /// <summary>
+    /// Gets a value indicating whether a 'clones' line names a class, by its original definition: the class's own code clones an object
+    /// of it with MemberwiseClone, so an object of a class that derives from it can be copied field by field.
+    /// </summary>
+    public bool IsClones(INamedTypeSymbol definition) =>
+        _clones.Count > 0 && definition.TypeKind is TypeKind.Class && definition.GetDocumentationCommentId() is { } id && _clones.Contains(id);
 
     /// <summary>
     /// Gets the IDs that a 'noncopyable' line of a user file names, whether the compilation has the type or not.
@@ -94,6 +147,11 @@ internal sealed class SafeMemberList
         var copyable = new HashSet<string>(StringComparer.Ordinal);
         var userNonCopyable = new HashSet<string>(StringComparer.Ordinal);
         var trustedAssemblies = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var clones = new HashSet<string>(s_builtInClones.Value, StringComparer.Ordinal);
+
+        // A class has complete member lines where any 'clones' line for it says so. A plain 'clones' line says nothing of completeness,
+        // and, as with 'clones' itself, nothing takes it away: a member that the lines miss gets a 'clones' line of its own, in any file.
+        var complete = new HashSet<string>(s_builtInComplete.Value, StringComparer.Ordinal);
 
         foreach (var entry in parsed)
         {
@@ -107,6 +165,20 @@ internal sealed class SafeMemberList
             if (GetErrorInCompilation(entry, compilation) is not null)
                 continue;
 
+            // A line that says that a member makes no copy, where a 'clones' line says that it clones its object, vouches for nothing.
+            if (ContradictsClones(entry, parsed.Where(e => e.Marker is SafeListMarker.Clones).Select(e => e.Id)))
+                continue;
+
+            if (entry.Marker is SafeListMarker.Clones)
+            {
+                clones.Add(entry.Id);
+
+                if (entry.IsComplete)
+                    complete.Add(entry.Id);
+
+                continue;
+            }
+
             if (entry.Marker is SafeListMarker.Copyable)
             {
                 if (GetWhyCopyableHasNoEffect(entry, compilation) is null)
@@ -118,11 +190,15 @@ internal sealed class SafeMemberList
             if (entry.Marker is SafeListMarker.NonCopyable)
                 userNonCopyable.Add(entry.Id);
 
+            // A line that would name a member of the built-in list for more type parameters than that list does is left out.
+            if (FindWideningOfBuiltIn(entry) is not null)
+                continue;
+
             entries[entry.Id] = entries.TryGetValue(entry.Id, out var existing) ? Combine(existing, entry) : entry;
         }
 
         copyable.ExceptWith(userNonCopyable);
-        return new SafeMemberList(entries, copyable, userNonCopyable, trustedAssemblies);
+        return new SafeMemberList(entries, copyable, userNonCopyable, trustedAssemblies, clones, complete);
     }
 
     /// <summary>
@@ -199,6 +275,9 @@ internal sealed class SafeMemberList
         if (entry.Marker is SafeListMarker.Erasable && !symbols.Any(s => CanBeErasable(s)))
             return "the marker 'erasable' is for a generic class or interface";
 
+        if (entry.Marker is SafeListMarker.Clones && entry.Id[0] is 'T' && !symbols.Any(s => s is INamedTypeSymbol { TypeKind: TypeKind.Class }))
+            return "the marker 'clones' is for a class, a method, a property or an event";
+
         if (entry.Marker is SafeListMarker.View or SafeListMarker.NonCopyable or SafeListMarker.Copyable &&
             !symbols.Any(s => s is INamedTypeSymbol { TypeKind: TypeKind.Struct }))
         {
@@ -223,6 +302,72 @@ internal sealed class SafeMemberList
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Gets why a 'clones' line of a user file has no effect in a compilation: it names no type there, which would leave every class that
+    /// derives from the class with no warning, or it names a class that nothing can derive from and no type can be bound to, a static one or
+    /// a sealed one that is not generic. Null if the
+    /// line has an effect, and for a line that does not fit what it names, which <see cref="GetErrorInCompilation"/> reports. A line that
+    /// repeats one of the built-in list, or names a class whose base class is listed, has its effect already and is not reported, as a
+    /// repeated line of any other marker is not.
+    /// </summary>
+    public static string? GetWhyClonesHasNoEffect(SafeListEntry entry, Compilation compilation)
+    {
+        var symbols = DocumentationCommentId.GetSymbolsForDeclarationId(entry.Id, compilation);
+
+        if (entry.Id[0] is 'M' or 'P' or 'E')
+            return symbols.IsEmpty ? $"the compilation has no {GetMemberKind(entry.Id)} of that ID" : null;
+
+        var classes = symbols.OfType<INamedTypeSymbol>().Where(s => s.TypeKind is TypeKind.Class).ToList();
+
+        if (classes.Count is 0)
+            return symbols.IsEmpty ? "the compilation has no type of that ID" : null;
+
+        if (classes.All(c => c.IsStatic))
+            return "the class is static, so no class can derive from it";
+
+        // A sealed generic class can still be bound: a non-copyable type bound to it is cloned with the object.
+        if (classes.All(c => c.IsSealed && !IsGenericOrInGeneric(c)))
+            return "the class is sealed and not generic, so no class can derive from it and no type can be bound to it";
+
+        return null;
+    }
+
+    /// <summary>
+    /// Gets the kind of member that an ID names by its prefix: a method, a property or an event.
+    /// </summary>
+    public static string GetMemberKind(string id) => id[0] switch { 'M' => "method", 'P' => "property", _ => "event" };
+
+    /// <summary>
+    /// Gets the ID of the property or the event whose accessor a member line names, as 'M:Contoso.Document.get_Title' or
+    /// 'M:Contoso.Document.add_Changed(System.EventHandler)'. Null for a line that names anything else, or nothing in the compilation. A line
+    /// for an accessor has no effect, whatever its marker: the analyzer looks up every use of an accessor under its property or its event,
+    /// so the line belongs to that member. The method that the compiler makes for a property of an extension block is no accessor, and its
+    /// ID is the one that the line takes.
+    /// </summary>
+    public static string? GetAccessorOwnerId(SafeListEntry entry, Compilation compilation)
+    {
+        if (entry.Id[0] is not 'M')
+            return null;
+
+        var symbols = DocumentationCommentId.GetSymbolsForDeclarationId(entry.Id, compilation);
+
+        if (symbols.IsEmpty || !symbols.All(s => s is IMethodSymbol { AssociatedSymbol: IPropertySymbol or IEventSymbol }))
+            return null;
+
+        return ((IMethodSymbol)symbols[0]).AssociatedSymbol!.OriginalDefinition.GetDocumentationCommentId();
+    }
+
+    private static bool IsGenericOrInGeneric(INamedTypeSymbol type)
+    {
+        for (var current = type; current is not null; current = current.ContainingType)
+        {
+            if (current.IsGenericType)
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -331,8 +476,12 @@ internal sealed class SafeMemberList
     {
         var result = new Dictionary<string, SafeListEntry>(entries.Count, StringComparer.Ordinal);
 
+        // A 'clones' line is kept apart: see s_builtInClones.
         foreach (var entry in entries)
-            result[entry.Id] = entry;
+        {
+            if (entry.Marker is not SafeListMarker.Clones)
+                result[entry.Id] = entry;
+        }
 
         return result;
     }
@@ -349,6 +498,31 @@ internal sealed class SafeMemberList
             count += type.TypeParameters.Count(p => p.Name == name);
 
         return count;
+    }
+
+    /// <summary>
+    /// Gets, for a member line of a user file that names a member which the built-in list names for some type parameters only, with
+    /// <c>for=</c>, the type parameters that the line would add: all of them for a line with no <c>for=</c>. Combined with the built-in
+    /// line it would change nothing, since a line of a file can only claim less, so it is left out and gets a warning. Null for any other
+    /// line, one that names only type parameters that the built-in line names included.
+    /// </summary>
+    public static (string Added, string BuiltIn)? FindWideningOfBuiltIn(SafeListEntry entry)
+    {
+        if (entry.Id[0] is not ('M' or 'P' or 'E') ||
+            entry.Marker is SafeListMarker.Clones or SafeListMarker.NonCopyable or SafeListMarker.Copyable ||
+            !s_builtInEntries.Value.TryGetValue(entry.Id, out var builtIn) ||
+            builtIn.TypeParameterNames is not { } builtInNames)
+        {
+            return null;
+        }
+
+        string builtInText = string.Join("', '", builtInNames);
+
+        if (entry.TypeParameterNames is not { } names)
+            return ("every type parameter", builtInText);
+
+        var added = names.Except(builtInNames, StringComparer.Ordinal).ToList();
+        return added.Count is 0 ? null : ("'" + string.Join("', '", added) + "'", builtInText);
     }
 
     private static SafeListEntry Combine(SafeListEntry first, SafeListEntry second)
@@ -414,6 +588,7 @@ internal sealed class SafeMemberList
 
         bool isType = id[0] is 'T';
         var marker = SafeListMarker.None;
+        bool isComplete = false;
         string[]? typeParameterNames = null;
 
         for (int i = 1; i < parts.Length; i++)
@@ -452,10 +627,38 @@ internal sealed class SafeMemberList
                 continue;
             }
 
+            // 'complete' is the value of 'clones', not a marker of its own.
+            if (part is CompleteValue)
+            {
+                reason = "'complete' is a value of the marker 'clones', written 'clones=complete'";
+                return false;
+            }
+
             if (marker is not SafeListMarker.None)
             {
                 reason = "an entry has one marker, which 'for=' can follow";
                 return false;
+            }
+
+            // 'clones=complete' says of a class that its 'clones' lines name every member that clones its object or hands it on. White
+            // space is allowed around the '=', as for 'for='.
+            if (part.StartsWith(ClonesKeyword, StringComparison.Ordinal) && part[ClonesKeyword.Length..].TrimStart() is ['=', .. var value])
+            {
+                if (!isType)
+                {
+                    reason = "'clones=complete' is for a class; a method, a property or an event takes 'clones' alone";
+                    return false;
+                }
+
+                if (value.Trim() is not CompleteValue)
+                {
+                    reason = "'clones' takes no value other than 'complete', as in 'clones=complete'";
+                    return false;
+                }
+
+                marker = SafeListMarker.Clones;
+                isComplete = true;
+                continue;
             }
 
             switch (part)
@@ -500,31 +703,35 @@ internal sealed class SafeMemberList
                     marker = SafeListMarker.Erasable;
                     break;
 
+                case "clones":
+                    marker = SafeListMarker.Clones;
+                    break;
+
                 case "trusted":
                     reason = "the marker 'trusted' is for an assembly, named after 'A:'";
                     return false;
 
                 case "new" or "borrows" or "drains":
-                    reason = $"the marker '{part}' is for a member; a type takes 'view', 'noncopyable', 'copyable' or 'erasable'";
+                    reason = $"the marker '{part}' is for a member; a type takes 'view', 'noncopyable', 'copyable', 'erasable' or 'clones'";
                     return false;
 
                 case "view" or "noncopyable" or "copyable" or "erasable":
-                    reason = $"the marker '{part}' is for a type; a member takes 'new', 'borrows', 'drains', 'owned' or no marker";
+                    reason = $"the marker '{part}' is for a type; a member takes 'new', 'borrows', 'drains', 'owned', 'clones' or no marker";
                     return false;
 
                 default:
-                    reason = $"unknown marker '{part}'; the markers are 'new', 'borrows', 'drains', 'owned', 'view', 'noncopyable', 'copyable' and 'erasable', and 'trusted' for an assembly";
+                    reason = $"unknown marker '{part}'; the markers are 'new', 'borrows', 'drains', 'owned', 'view', 'noncopyable', 'copyable', 'erasable' and 'clones', and 'trusted' for an assembly";
                     return false;
             }
         }
 
         if (isType && marker is SafeListMarker.None)
         {
-            reason = "a type needs the marker 'view', 'noncopyable', 'copyable' or 'erasable'; there is no entry for every member of a type";
+            reason = "a type needs the marker 'view', 'noncopyable', 'copyable', 'erasable' or 'clones'; there is no entry for every member of a type";
             return false;
         }
 
-        entry = new SafeListEntry(id, marker, typeParameterNames, line);
+        entry = new SafeListEntry(id, marker, typeParameterNames, line, isComplete);
         reason = string.Empty;
         return true;
     }
@@ -704,6 +911,12 @@ internal enum SafeListMarker
     Erasable,
 
     /// <summary>
+    /// A class whose own code clones an object of it with MemberwiseClone, so that an object of a class that derives from it can be copied
+    /// field by field. It is kept apart from the other entries and only adds warnings.
+    /// </summary>
+    Clones,
+
+    /// <summary>
     /// An assembly, named by its simple name after 'A:', whose code makes no copy of the non-copyable values that it gets at, also behind a
     /// type of checked code or of the framework. It turns off the finding for the assembly and changes nothing else.
     /// </summary>
@@ -714,11 +927,17 @@ internal enum SafeListMarker
 /// An entry of a safe list: the documentation comment ID of a member or a type, its marker, and for a member optionally the type parameters that
 /// the entry vouches for.
 /// </summary>
-internal sealed class SafeListEntry(string id, SafeListMarker marker, string[]? typeParameterNames, TextLine line)
+internal sealed class SafeListEntry(string id, SafeListMarker marker, string[]? typeParameterNames, TextLine line, bool isComplete = false)
 {
     public string Id { get; } = id;
 
     public SafeListMarker Marker { get; } = marker;
+
+    /// <summary>
+    /// Gets a value indicating whether the line of a class says 'clones=complete': its 'clones' lines name every member of the class that
+    /// clones its object or hands it to code that can.
+    /// </summary>
+    public bool IsComplete { get; } = isComplete;
 
     /// <summary>
     /// Gets the names after <c>for=</c>: the type parameters of the member or of a type that contains it that the entry vouches for. Null if the

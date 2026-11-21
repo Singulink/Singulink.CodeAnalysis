@@ -1,4 +1,4 @@
-using Microsoft.CodeAnalysis.Testing;
+﻿using Microsoft.CodeAnalysis.Testing;
 using PrefixClassName.MsTest;
 
 namespace Singulink.CodeAnalysis.Tests;
@@ -1320,6 +1320,392 @@ public class ContainerOwnershipTests
         Verify.KeepingNotOnDelegate(2, "item", "Puts.Put<List<Guard>>(List<Guard>)", "GuardsSink"),
         Verify.KeepingNotOnDelegate(3, "obj", "Action<List<Guard>>.Invoke(List<Guard>)", "GuardsSink"),
         Verify.KeepingNotOnDelegate(4, "item", "Registry<List<Guard>>.Add(List<Guard>)", "GuardsSink"));
+
+    // Why a container that a call passes to a parameter of a type parameter is not the method's own.
+    private static string KeptThroughATypeParameter(int line, string target) =>
+        $"'list' is not the method's own anywhere in the method, because on line {line} it is passed to '{target}', which is taken to keep " +
+        "what a type parameter is given";
+
+    // A call through a parameter whose type is a type parameter, marked or not, takes the container to be kept, so a method that keeps
+    // it may stand behind such a parameter of a delegate: [Kept] adds nothing there that a caller could miss. Behind a parameter of a
+    // container type that is not marked [Kept], a caller takes the container to be its own still.
+    [TestMethod]
+    public Task Kept_AMethodThatKeepsBehindAParameterOfATypeParameterOfADelegateAddsNothing() => Verify.AnalyzerAsync(
+        $$"""
+        using System.Collections.Generic;
+        using Singulink.CodeAnalysis;
+
+        public delegate void PlainSink(List<Guard> list);
+
+        public delegate void KeptSink([Kept] List<Guard> list);
+
+        public delegate void MarkedSink<[NonCopyable] T>(T item);
+
+        public delegate void MarkedRefSink<[NonCopyable] T>(ref T item);
+
+        public delegate void MarkedInSink<[NonCopyable] T>(in T item);
+
+        public sealed class Registry<[NonCopyable] T>
+        {
+            private readonly T[] _items = new T[16];
+            private int _count;
+
+            public void Add(T item) => _items[_count++] = item;
+        }
+
+        class C
+        {
+            static readonly List<List<Guard>> s_all = new();
+            static readonly Registry<List<Guard>> s_registry = new();
+
+            static void Register([Kept] List<Guard> list) => s_all.Add(list);
+
+            static void RegisterByRef([Kept] ref List<Guard> list) => s_all.Add(list);
+
+            static void RegisterByIn([Kept] in List<Guard> list) => s_all.Add(list);
+
+            void Assignments()
+            {
+                PlainSink plain = {|#0:Register|};
+                KeptSink kept = Register;
+                MarkedSink<List<Guard>> fromRegistry = s_registry.Add;
+                MarkedSink<List<Guard>> marked = Register;
+                MarkedRefSink<List<Guard>> byRef = RegisterByRef;
+                MarkedInSink<List<Guard>> byIn = RegisterByIn;
+                MarkedSink<List<Guard>> keptLambda = ([Kept] List<Guard> list) => Register(list);
+                Register(new List<Guard>());
+            }
+
+            // The caller of a delegate whose parameter is a container keeps the container; the caller of one whose parameter is of a
+            // type parameter counts it as kept, in every form.
+            List<Guard> ThroughAPlainSink(PlainSink plain)
+            {
+                var list = new List<Guard>();
+                plain(list);
+                return list;
+            }
+
+            List<Guard> ThroughAMarkedSink(MarkedSink<List<Guard>> marked)
+            {
+                var list = new List<Guard>();
+                marked(list);
+                return {|#1:list|};
+            }
+
+            List<Guard> ThroughAMarkedRefSink(MarkedRefSink<List<Guard>> byRef)
+            {
+                var list = new List<Guard>();
+                byRef(ref list);
+                return {|#2:list|};
+            }
+
+            List<Guard> ThroughAMarkedInSink(MarkedInSink<List<Guard>> byIn)
+            {
+                var list = new List<Guard>();
+                byIn(in list);
+                return {|#3:list|};
+            }
+        }
+
+        {{Sources.Guard}}
+        """,
+        Verify.KeptNotOnDelegate(0, "list", "C.Register(List<Guard>)", "PlainSink"),
+        Verify.UnownedContainerReturned(1, "C.ThroughAMarkedSink(MarkedSink<List<Guard>>)", "System.Collections.Generic.List<Guard>", because: KeptThroughATypeParameter(57, "MarkedSink<List<Guard>>.Invoke(List<Guard>)")),
+        Verify.UnownedContainerReturned(2, "C.ThroughAMarkedRefSink(MarkedRefSink<List<Guard>>)", "System.Collections.Generic.List<Guard>", because: KeptThroughATypeParameter(64, "MarkedRefSink<List<Guard>>.Invoke(ref List<Guard>)")),
+        Verify.UnownedContainerReturned(3, "C.ThroughAMarkedInSink(MarkedInSink<List<Guard>>)", "System.Collections.Generic.List<Guard>", because: KeptThroughATypeParameter(71, "MarkedInSink<List<Guard>>.Invoke(in List<Guard>)")));
+
+    // The same holds for an override and an implementation: a call through a base member or an interface member whose parameter is of
+    // a type parameter takes the container to be kept. A base member that the list marks 'borrows', and one whose parameter is a
+    // container, are not taken to keep, and a [Kept] parameter behind them still gets the warning.
+    [TestMethod]
+    public Task Kept_AnOverrideOrImplementationBehindAParameterOfATypeParameterAddsNothing() => Verify.AnalyzerAsync(
+        $$"""
+        using System.Collections.Generic;
+        using Singulink.CodeAnalysis;
+
+        public abstract class Base<[NonCopyable] T>
+        {
+            public abstract void Use(T item);
+        }
+
+        public interface IUse<[NonCopyable] T>
+        {
+            void Use(T item);
+        }
+
+        public abstract class Plain
+        {
+            public abstract void Use(List<Guard> list);
+        }
+
+        public abstract class Borrowing<[NonCopyable] T>
+        {
+            public abstract void Use(T item);
+        }
+
+        sealed class Derived : Base<List<Guard>>
+        {
+            private List<Guard> _list = new();
+
+            public override void Use([Kept] List<Guard> item) => _list = item;
+        }
+
+        sealed class Implementation : IUse<List<Guard>>
+        {
+            private List<Guard> _list = new();
+
+            public void Use([Kept] List<Guard> item) => _list = item;
+        }
+
+        sealed class Explicit : IUse<List<Guard>>
+        {
+            private List<Guard> _list = new();
+
+            void IUse<List<Guard>>.Use([Kept] List<Guard> item) => _list = item;
+        }
+
+        sealed class DerivedPlain : Plain
+        {
+            private List<Guard> _list = new();
+
+            public override void Use([Kept] List<Guard> {|#0:list|}) => _list = list;
+        }
+
+        sealed class DerivedBorrowing : Borrowing<List<Guard>>
+        {
+            private List<Guard> _list = new();
+
+            public override void Use([Kept] List<Guard> {|#1:item|}) => _list = item;
+        }
+
+        class C
+        {
+            List<Guard> ThroughBase(Base<List<Guard>> used)
+            {
+                var list = new List<Guard>();
+                used.Use(list);
+                return {|#2:list|};
+            }
+
+            List<Guard> ThroughInterface(IUse<List<Guard>> used)
+            {
+                var list = new List<Guard>();
+                used.Use(list);
+                return {|#3:list|};
+            }
+
+            List<Guard> ThroughBorrowing(Borrowing<List<Guard>> used)
+            {
+                var list = new List<Guard>();
+                used.Use(list);
+                return list;
+            }
+        }
+
+        {{Sources.Guard}}
+        """,
+        "M:Borrowing`1.Use(`0);borrows",
+        Verify.KeptNotOnBaseMember(0, "list", "DerivedPlain.Use(List<Guard>)", "Plain.Use(List<Guard>)"),
+        Verify.KeptNotOnBaseMember(1, "item", "DerivedBorrowing.Use(List<Guard>)", "Borrowing<T>.Use(T)"),
+        Verify.UnownedContainerReturned(2, "C.ThroughBase(Base<List<Guard>>)", "System.Collections.Generic.List<Guard>", because: KeptThroughATypeParameter(64, "Base<List<Guard>>.Use(List<Guard>)")),
+        Verify.UnownedContainerReturned(3, "C.ThroughInterface(IUse<List<Guard>>)", "System.Collections.Generic.List<Guard>", because: KeptThroughATypeParameter(71, "IUse<List<Guard>>.Use(List<Guard>)")));
+
+    // A lambda or an anonymous method is called only through the delegate that it is made as. Where every call through that delegate's
+    // parameter takes the container to be kept, by [Kept] or by a type parameter as its type, the lambda may keep it. The delegate is the
+    // target type, or the natural type of a lambda that has none. A lambda made as a delegate whose parameter is a container keeps
+    // SCA1032, and so does one of an expression tree, which is not made into a delegate where it stands. A later conversion of the
+    // delegate to another delegate type gets SCA1040 where its callers take the container to be theirs still.
+    [TestMethod]
+    public Task Kept_ALambdaThatKeepsBehindADelegateParameterThatKeepsIsClean() => Verify.AnalyzerAsync(
+        $$"""
+        using System;
+        using System.Collections.Generic;
+        using System.Linq.Expressions;
+        using Singulink.CodeAnalysis;
+
+        public delegate void PlainSink(List<Guard> list);
+
+        public delegate void KeptSink([Kept] List<Guard> list);
+
+        public delegate void MarkedSink<[NonCopyable] T>(T item);
+
+        class C
+        {
+            static readonly List<List<Guard>> s_all = new();
+
+            static void Register([Kept] List<Guard> list) => s_all.Add(list);
+
+            static void Take(Action<List<Guard>> action) { }
+
+            static void TakeFunc(Func<List<Guard>, int> func) { }
+
+            static void TakeDelegate<TDel>(TDel d) where TDel : Delegate { }
+
+            static MarkedSink<List<Guard>> MakeMarked() => list => Register(list);
+
+            static PlainSink MakePlain() => list => Register({|#0:list|});
+
+            void Lambdas()
+            {
+                MarkedSink<List<Guard>> marked = list => Register(list);
+                KeptSink kept = list => Register(list);
+                KeptSink keptWritten = ([Kept] list) => Register(list);
+                Action<List<Guard>> action = list => Register(list);
+                Take(list => Register(list));
+                TakeFunc(list => { Register(list); return 0; });
+                MarkedSink<List<Guard>> anonymous = delegate (List<Guard> list) { Register(list); };
+                var natural = (List<Guard> list) => Register(list);
+                Delegate asDelegate = {|#1:(List<Guard> list) => Register(list)|};
+                object asObject = {|#2:(List<Guard> list) => Register(list)|};
+                {|#3:TakeDelegate((List<Guard> list) => Register(list))|};
+
+                PlainSink plain = list => Register({|#4:list|});
+                PlainSink cast = (PlainSink)(list => Register({|#5:list|}));
+                Expression<Action<List<Guard>>> tree = list => Register({|#6:list|});
+
+                // A conversion of a delegate that keeps to one whose callers take the container to be theirs still.
+                PlainSink fromMarked = new PlainSink({|#7:marked|});
+                PlainSink fromInvoke = {|#8:marked.Invoke|};
+                PlainSink fromAction = new PlainSink({|#9:action|});
+                PlainSink fromNatural = new PlainSink({|#10:natural|});
+            }
+
+            // The caller of a delegate whose parameter keeps counts the container as kept.
+            List<Guard> ThroughAMarkedSink(MarkedSink<List<Guard>> marked)
+            {
+                var list = new List<Guard>();
+                marked(list);
+                return {|#11:list|};
+            }
+
+            List<Guard> ThroughAKeptSink(KeptSink kept)
+            {
+                var list = new List<Guard>();
+                kept(list);
+                return {|#12:list|};
+            }
+
+            List<Guard> ThroughAnAction(Action<List<Guard>> action)
+            {
+                var list = new List<Guard>();
+                action(list);
+                return {|#13:list|};
+            }
+
+            List<Guard> ThroughAFunc(Func<List<Guard>, int> func)
+            {
+                var list = new List<Guard>();
+                func(list);
+                return {|#14:list|};
+            }
+        }
+
+        {{Sources.Guard}}
+        """,
+        Verify.KeepsUnmarkedParameter(0, "lambda expression", "list", "System.Collections.Generic.List<Guard>"),
+        Verify.OpaqueConversion(1, "System.Action<System.Collections.Generic.List<Guard>>", "System.Delegate"),
+        Verify.OpaqueConversion(2, "System.Action<System.Collections.Generic.List<Guard>>", "object"),
+        Verify.OpaqueTypeArgument(3, "C.TakeDelegate<TDel>(TDel)", "System.Action<System.Collections.Generic.List<Guard>>", "TDel", "M:C.TakeDelegate``1(``0)"),
+        Verify.KeepsUnmarkedParameter(4, "lambda expression", "list", "System.Collections.Generic.List<Guard>"),
+        Verify.KeepsUnmarkedParameter(5, "lambda expression", "list", "System.Collections.Generic.List<Guard>"),
+        Verify.KeepsUnmarkedParameter(6, "lambda expression", "list", "System.Collections.Generic.List<Guard>"),
+        Verify.KeepingNotOnDelegate(7, "item", "MarkedSink<List<Guard>>.Invoke(List<Guard>)", "PlainSink"),
+        Verify.KeepingNotOnDelegate(8, "item", "MarkedSink<List<Guard>>.Invoke(List<Guard>)", "PlainSink"),
+        Verify.KeepingNotOnDelegate(9, "obj", "Action<List<Guard>>.Invoke(List<Guard>)", "PlainSink"),
+        Verify.KeepingNotOnDelegate(10, "obj", "Action<List<Guard>>.Invoke(List<Guard>)", "PlainSink"),
+        Verify.UnownedContainerReturned(11, "C.ThroughAMarkedSink(MarkedSink<List<Guard>>)", "System.Collections.Generic.List<Guard>", because: KeptThroughATypeParameter(57, "MarkedSink<List<Guard>>.Invoke(List<Guard>)")),
+        Verify.UnownedContainerReturned(
+            12,
+            "C.ThroughAKeptSink(KeptSink)",
+            "System.Collections.Generic.List<Guard>",
+            because: "'list' is not the method's own anywhere in the method, because on line 64 it is passed to 'KeptSink.Invoke(List<Guard>)', which keeps it"),
+        Verify.UnownedContainerReturned(13, "C.ThroughAnAction(Action<List<Guard>>)", "System.Collections.Generic.List<Guard>", because: KeptThroughATypeParameter(71, "Action<List<Guard>>.Invoke(List<Guard>)")),
+        Verify.UnownedContainerReturned(14, "C.ThroughAFunc(Func<List<Guard>, int>)", "System.Collections.Generic.List<Guard>", because: KeptThroughATypeParameter(78, "Func<List<Guard>, int>.Invoke(List<Guard>)")));
+
+    // A lambda whose parameter is a container passed by reference keeps SCA1032 where it keeps the container, with its natural type as
+    // with a delegate type that it is converted to. A caller that passes its own local by 'ref', 'in' or 'ref readonly' gives it up, but
+    // a method that forwards its own parameter the same way does not, and gets no SCA1032, so a lambda that kept the container behind
+    // such a delegate would go unwarned. Behind a parameter of a type parameter the forwarding method gets SCA1032, and the lambda may
+    // keep. An 'out' parameter is given nothing to keep. (QA9 small thing 1)
+    [TestMethod]
+    public Task Kept_ALambdaWhoseParameterIsPassedByReferenceKeepsItsWarning() => Verify.AnalyzerAsync(
+        $$"""
+        using System.Collections.Generic;
+        using Singulink.CodeAnalysis;
+
+        public delegate void RefSink(ref List<Guard> list);
+
+        public delegate void InSink(in List<Guard> list);
+
+        public delegate void RefReadOnlySink(ref readonly List<Guard> list);
+
+        public delegate void MarkedRefSink<[NonCopyable] T>(ref T item);
+
+        class C
+        {
+            static readonly List<List<Guard>> s_all = new();
+
+            static void Register([Kept] List<Guard> list) => s_all.Add(list);
+
+            void Lambdas()
+            {
+                var naturalRef = (ref List<Guard> list) => Register({|#0:list|});
+                var naturalIn = (in List<Guard> list) => Register({|#1:list|});
+                var naturalRefReadOnly = (ref readonly List<Guard> list) => Register({|#2:list|});
+                RefSink refSink = (ref List<Guard> list) => Register({|#3:list|});
+                InSink inSink = (in List<Guard> list) => Register({|#4:list|});
+                RefReadOnlySink refReadOnlySink = (ref readonly List<Guard> list) => Register({|#5:list|});
+                MarkedRefSink<List<Guard>> markedRef = (ref List<Guard> list) => Register(list);
+            }
+
+            // The caller's own local: passing it by reference ends the caller's ownership.
+            List<Guard> ThroughRef(RefSink sink)
+            {
+                var list = new List<Guard>();
+                sink(ref list);
+                return {|#6:list|};
+            }
+
+            List<Guard> ThroughIn(InSink sink)
+            {
+                var list = new List<Guard>();
+                sink(in list);
+                return {|#7:list|};
+            }
+
+            List<Guard> ThroughRefReadOnly(RefReadOnlySink sink)
+            {
+                var list = new List<Guard>();
+                sink(ref list);
+                return {|#8:list|};
+            }
+
+            // A parameter of the method that it forwards by reference: no warning, so the lambda must keep its own.
+            static void ForwardRef(RefSink sink, List<Guard> list) => sink(ref list);
+
+            static void ForwardIn(InSink sink, List<Guard> list) => sink(in list);
+
+            static void ForwardRefReadOnly(RefReadOnlySink sink, List<Guard> list) => sink(in list);
+
+            // Behind a type parameter, the forwarding method gets the warning instead.
+            static void ForwardMarkedRef(MarkedRefSink<List<Guard>> sink, List<Guard> list) => sink(ref {|#9:list|});
+        }
+
+        {{Sources.Guard}}
+        """,
+        Verify.KeepsUnmarkedParameter(0, "lambda expression", "list", "System.Collections.Generic.List<Guard>"),
+        Verify.KeepsUnmarkedParameter(1, "lambda expression", "list", "System.Collections.Generic.List<Guard>"),
+        Verify.KeepsUnmarkedParameter(2, "lambda expression", "list", "System.Collections.Generic.List<Guard>"),
+        Verify.KeepsUnmarkedParameter(3, "lambda expression", "list", "System.Collections.Generic.List<Guard>"),
+        Verify.KeepsUnmarkedParameter(4, "lambda expression", "list", "System.Collections.Generic.List<Guard>"),
+        Verify.KeepsUnmarkedParameter(5, "lambda expression", "list", "System.Collections.Generic.List<Guard>"),
+        Verify.UnownedContainerReturned(6, "C.ThroughRef(RefSink)", "System.Collections.Generic.List<Guard>", because: ByReference(33, "RefSink.Invoke(ref List<Guard>)")),
+        Verify.UnownedContainerReturned(7, "C.ThroughIn(InSink)", "System.Collections.Generic.List<Guard>", because: ByReference(40, "InSink.Invoke(in List<Guard>)")),
+        Verify.UnownedContainerReturned(8, "C.ThroughRefReadOnly(RefReadOnlySink)", "System.Collections.Generic.List<Guard>", because: ByReference(47, "RefReadOnlySink.Invoke(ref readonly List<Guard>)")),
+        Verify.KeepsUnmarkedParameter(9, "C.ForwardMarkedRef(MarkedRefSink<List<Guard>>, List<Guard>)", "list", "System.Collections.Generic.List<Guard>"));
+
+    private static string ByReference(int line, string target) =>
+        $"'list' is not the method's own anywhere in the method, because on line {line} it is passed to '{target}'";
 
     // A parameter whose type is a type parameter is taken to keep what it is given, in whatever form the container is passed to it:
     // as an element of the collection that the compiler makes for 'params', as the operand of an operator or of a conversion, as

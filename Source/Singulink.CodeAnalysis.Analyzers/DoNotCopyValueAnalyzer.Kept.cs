@@ -49,11 +49,13 @@ public sealed partial class DoNotCopyValueAnalyzer
         // The locals that hold a container parameter which is not marked [Kept]: keeping one of them keeps the parameter.
         private Dictionary<ISymbol, IParameterSymbol>? _parameterAliases;
         private HashSet<IParameterSymbol>? _keptParametersReported;
+        private Dictionary<IMethodSymbol, INamedTypeSymbol>? _delegatesOfFunctions;
 
         /// <summary>
         /// Gets a value indicating whether a parameter holds a container that its method is only given for the call: it is not marked
         /// [Kept], and its method is not a constructor or a setter, which are taken to keep what they are given. A [MovedFrom] parameter
-        /// hands its container over for good, so the method may keep it.
+        /// hands its container over for good, so the method may keep it. A lambda or an anonymous method may keep what the delegate that
+        /// it is made as takes to keep at every call: see <see cref="IsKeptThroughItsDelegate"/>.
         /// </summary>
         private bool IsParameterThatMustNotBeKept(IParameterSymbol parameter) =>
             parameter.RefKind is not RefKind.Out &&
@@ -61,7 +63,43 @@ public sealed partial class DoNotCopyValueAnalyzer
             parameter.Type.TypeKind is not TypeKind.Delegate &&
             types.IsContainer(parameter.Type) &&
             parameter.ContainingSymbol is IMethodSymbol or INamedTypeSymbol { IsExtension: true } &&
-            !NonCopyableTypes.KeepsWhatItIsGiven(parameter);
+            !NonCopyableTypes.KeepsWhatItIsGiven(parameter) &&
+            !IsKeptThroughItsDelegate(parameter);
+
+        /// <summary>
+        /// Gets a value indicating whether a parameter of a lambda or an anonymous method may keep what it is given: the function has no
+        /// signature that anything calls but the delegate that it is made as, and every call through that delegate's parameter takes
+        /// what it passes to be kept, by [Kept] or by a type parameter as its type. A lambda that is not made into a delegate where it
+        /// stands, such as one of an expression tree, keeps nothing.
+        /// </summary>
+        /// <remarks>
+        /// The delegate is the type of the delegate creation: the target type, or the natural type of a lambda that has none. A later
+        /// conversion of that delegate to another delegate type is a delegate creation of its own, which the check of delegate creations
+        /// judges by the same question.
+        /// </remarks>
+        private bool IsKeptThroughItsDelegate(IParameterSymbol parameter) =>
+            parameter.ContainingSymbol is IMethodSymbol { MethodKind: MethodKind.AnonymousFunction } function &&
+            GetDelegatesOfFunctions().TryGetValue(function, out var delegateType) &&
+            delegateType.DelegateInvokeMethod is { } invoke &&
+            parameter.Ordinal < invoke.Parameters.Length &&
+            types.IsTakenToKeepAtEveryCall(invoke.Parameters[parameter.Ordinal]);
+
+        // The delegate type that each lambda and anonymous method of the member is made as, made once.
+        private Dictionary<IMethodSymbol, INamedTypeSymbol> GetDelegatesOfFunctions()
+        {
+            if (_delegatesOfFunctions is { } known)
+                return known;
+
+            var delegates = new Dictionary<IMethodSymbol, INamedTypeSymbol>(SymbolEqualityComparer.Default);
+
+            foreach (var operation in GetAllOperations())
+            {
+                if (operation is IAnonymousFunctionOperation { Symbol: var function, Parent: IDelegateCreationOperation { Type: INamedTypeSymbol { TypeKind: TypeKind.Delegate } delegateType } })
+                    delegates[function] = delegateType;
+            }
+
+            return _delegatesOfFunctions = delegates;
+        }
 
         /// <summary>
         /// Gets a value indicating whether a parameter is one of the method, the lambda or the local function that a reference to it

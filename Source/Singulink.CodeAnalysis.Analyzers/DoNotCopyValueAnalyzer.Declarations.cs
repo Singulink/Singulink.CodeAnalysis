@@ -503,7 +503,7 @@ public sealed partial class DoNotCopyValueAnalyzer
             };
 
             if (overridden is not null)
-                CheckMarksOfMember(context, member, overridden, member);
+                CheckMarksOfMember(context, types, member, overridden, member);
 
             CheckCovariantReturn(context, types, member);
 
@@ -519,7 +519,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                 };
 
                 foreach (var interfaceMember in implemented)
-                    CheckMarksOfMember(context, member, interfaceMember, member);
+                    CheckMarksOfMember(context, types, member, interfaceMember, member);
             }
         }
 
@@ -537,7 +537,11 @@ public sealed partial class DoNotCopyValueAnalyzer
             return;
 
         // A type parameter that is constrained to a class can be returned as a base type as well, and can have a container bound to it.
-        if (types.HidesNonCopyableType(returnType, overriddenReturnType) || types.HidesTypeParameter(returnType, overriddenReturnType))
+        if (types.HidesNonCopyableType(returnType, overriddenReturnType) && types.FindCloningBindingWithin(returnType) is { } binding)
+        {
+            context.ReportDiagnostic(CreateDiagnostic(member, Rules.CloningUseConversion, returnType, overriddenReturnType, binding.Cloning, binding.Type, binding.Bound));
+        }
+        else if (types.HidesNonCopyableType(returnType, overriddenReturnType) || types.HidesTypeParameter(returnType, overriddenReturnType))
         {
             var rule = NonCopyableTypes.IsUntypedCollection(overriddenReturnType) ? Rules.UntypedCollectionReturn : Rules.OpaqueReturn;
             context.ReportDiagnostic(CreateDiagnostic(member, rule, returnType, overriddenReturnType, Display(member), Display(overridden.OriginalDefinition)));
@@ -615,7 +619,7 @@ public sealed partial class DoNotCopyValueAnalyzer
 
                 if (SymbolEqualityComparer.Default.Equals(implementation.ContainingType, type))
                 {
-                    CheckMarksOfMember(context, implementation, interfaceMember, implementation);
+                    CheckMarksOfMember(context, types, implementation, interfaceMember, implementation);
                 }
                 else if (isOfBaseClass && SymbolEqualityComparer.Default.Equals(type.BaseType?.FindImplementationForInterfaceMember(interfaceMember), implementation))
                 {
@@ -623,7 +627,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                 }
                 else if (implementation.ContainingType?.TypeKind is not TypeKind.Interface)
                 {
-                    CheckMarksOfMember(context, implementation, interfaceMember, type);
+                    CheckMarksOfMember(context, types, implementation, interfaceMember, type);
                     CheckInheritedKeeping(context, type, types, implementation, interfaceMember);
                     CheckInheritedImplementation(context, type, types, implementation, interfaceMember);
                     CheckInheritedOwner(context, type, types, implementation, interfaceMember);
@@ -740,7 +744,7 @@ public sealed partial class DoNotCopyValueAnalyzer
     /// stricter. A finding is reported on <paramref name="reported"/>: the member, or the type that inherits the member and uses it as an
     /// implementation.
     /// </summary>
-    private static void CheckMarksOfMember(SymbolAnalysisContext context, ISymbol member, ISymbol baseMember, ISymbol reported)
+    private static void CheckMarksOfMember(SymbolAnalysisContext context, NonCopyableTypes types, ISymbol member, ISymbol baseMember, ISymbol reported)
     {
         bool reportOnMember = SymbolEqualityComparer.Default.Equals(reported, member);
         member = member.OriginalDefinition;
@@ -796,7 +800,7 @@ public sealed partial class DoNotCopyValueAnalyzer
             }
 
             // And a caller through the base member takes a container that it passes to be still its own.
-            if (NonCopyableTypes.AddsKept(parameter, baseParameter))
+            if (types.AddsKept(parameter, baseParameter))
                 context.ReportDiagnostic(CreateDiagnostic(reportedForParameter, Rules.KeptNotOnBaseMember, parameter.Name, Display(member), Display(baseMember)));
         }
     }

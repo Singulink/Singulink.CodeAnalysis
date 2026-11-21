@@ -462,6 +462,20 @@ public sealed partial class DoNotCopyValueAnalyzer
         {
             CheckTypeInUnsupportedContext(operation);
 
+            // The value is converted to the type of the result with no conversion in the tree: a user-defined conversion is a member
+            // that is used, and any other is judged as a conversion node would be.
+            var valueConversion = operation.ValueConversion;
+            CheckMemberUse(operation.Syntax, valueConversion.MethodSymbol);
+
+            if (valueConversion is { Exists: true, IsIdentity: false, MethodSymbol: null } && operation.Value.Type is { } valueType)
+            {
+                var convertedType = valueType is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T } nullable &&
+                    operation.Type is not INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T }
+                    ? nullable.TypeArguments[0]
+                    : valueType;
+                CheckConversionWithoutNode(operation.Value.Syntax, convertedType, operation.Type, IsNew(operation.Value));
+            }
+
             // As for a conditional operator: what uses the result has checked both operands through it (see Acquire).
             bool currentIsHandled = _handledOperations.Contains(operation);
             using var handled = Handle();
@@ -500,6 +514,18 @@ public sealed partial class DoNotCopyValueAnalyzer
             // The user-defined conversions that take the target to the operator and its result back, with nothing written for them.
             CheckMemberUse(operation.Syntax, operation.InConversion.MethodSymbol);
             CheckMemberUse(operation.Syntax, operation.OutConversion.MethodSymbol);
+
+            // Any other conversion of the target to the left parameter of a user-defined operator, and of what the operator returns back to
+            // the target's type, with no node for either: the operator is given the target as that type, and the target is given its result.
+            if (operation.OperatorMethod is { IsStatic: true, Parameters: [var left, _], ReturnType: var operatorResult } binaryOperator)
+            {
+                if (operation.InConversion is { Exists: true, IsIdentity: false, MethodSymbol: null })
+                    CheckConversionWithoutNode(operation.Target.Syntax, operation.Target.Type, left.Type, sourceIsNew: false, binaryOperator);
+
+                if (operation.OutConversion is { Exists: true, IsIdentity: false, MethodSymbol: null })
+                    CheckConversionWithoutNode(operation.Syntax, operatorResult, operation.Target.Type, sourceIsNew: true);
+            }
+
             CheckTypeInUnsupportedContext(operation);
             CheckMembersRunOnOneValue(operation);
 
@@ -631,9 +657,9 @@ public sealed partial class DoNotCopyValueAnalyzer
 
                 // With a container bound to a type parameter there is no box: the conversion hands the container out as a type that hides
                 // its elements, and nothing in the generic can tell. And a generic struct that is non-copyable only through its type
-                // arguments runs unchecked code on its box, which hands out boxed copies. A member on the safe list may receive either,
-                // as it may a container.
-                if (GetReceivingMember(operation) is not { } member || !types.IsListed(member))
+                // arguments runs unchecked code on its box, which hands out boxed copies. A member that the list marks 'borrows' may
+                // receive either, as it may a container.
+                if (GetReceivingMember(operation) is not { } member || !types.IsBorrowing(member))
                 {
                     if (types.HidesTypeParameter(operand.Type, operation.Type))
                         Report(Rules.OpaqueTypeParameterConversion, operand.Syntax, operand.Type, operation.Type);
@@ -703,7 +729,7 @@ public sealed partial class DoNotCopyValueAnalyzer
             MarkDeconstructionTargets(operation.Target, handled);
 
             DeconstructionInfo? info = operation.Syntax is AssignmentExpressionSyntax syntax ? operation.SemanticModel?.GetDeconstructionInfo(syntax) : null;
-            CheckDeconstruction(operation.Target, value, info, IsNew(value), handled);
+            CheckDeconstruction(operation.Target, value, info, IsNew(value), handled, value.Type);
 
             base.VisitDeconstructionAssignment(operation);
         }
@@ -758,7 +784,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                 // a lambda is checked against the delegate's parameters itself.
                 for (int i = 0; i < parameters.Length && parameters.Length == invoke.Parameters.Length; i++)
                 {
-                    if (NonCopyableTypes.AddsKept(parameters[i], invoke.Parameters[i]))
+                    if (types.AddsKept(parameters[i], invoke.Parameters[i]))
                         Report(Rules.KeptNotOnDelegate, operation.Target.Syntax, parameters[i].Name, Display(function), operation.Type);
                     else if (operation.Target is not IAnonymousFunctionOperation && types.KeepsUnseenBehind(parameters[i], invoke.Parameters[i], out bool byUncheckedCode))
                         Report(Rules.KeepingNotOnDelegate, operation.Target.Syntax, parameters[i].Name, Display(function), operation.Type, Rules.DescribeKeeping(byUncheckedCode));
@@ -814,7 +840,7 @@ public sealed partial class DoNotCopyValueAnalyzer
         public override void VisitEventReference(IEventReferenceOperation operation)
         {
             CheckMemberUse(operation.Syntax, operation.Event);
-            CheckReceiverType(operation.Syntax, operation.Instance?.Type, operation.Event);
+            CheckReceiverType(operation.Syntax, GetReceiverType(operation.Instance), operation.Event, subscribes: operation.Parent is not IEventAssignmentOperation { Adds: false });
             CheckTypeInUnsupportedContext(operation);
 
             // An accessor runs on the value in place, and through a read-only reference on a copy unless it is readonly.
@@ -867,6 +893,13 @@ public sealed partial class DoNotCopyValueAnalyzer
             // the field would be reported as compiler errors so analyzer diagnostics are not required.
             using var handled = Handle();
             handled.Add(operation.Instance);
+
+            // A field of an object whose binding to a class that clones itself no declaration judged is a member of it, judged by its type.
+            if (!operation.Field.IsStatic && GetReceiverType(operation.Instance) is INamedTypeSymbol { TypeKind: TypeKind.Class } receiverClass &&
+                types.FindUnjudgedCloningBinding(receiverClass) is { } binding)
+            {
+                CheckMemberOfClonedObject(operation.Syntax, receiverClass, operation.Field, binding);
+            }
 
             CheckTypeInUnsupportedContext(operation);
             base.VisitFieldReference(operation);
@@ -1011,7 +1044,7 @@ public sealed partial class DoNotCopyValueAnalyzer
             // The string is built from the value as an object. With a custom handler the value is an argument of a call that is in the tree, and
             // the invocation checks it.
             if (operation.Parent is IInterpolatedStringOperation && types.HidesNonCopyableType(operation.Expression.Type, context.Compilation.ObjectType))
-                Report(Rules.OpaqueConversion, operation.Expression.Syntax, DescribeContainer(operation.Expression.Type), context.Compilation.ObjectType);
+                ReportContainerConversion(operation.Expression.Syntax, operation.Expression.Type, context.Compilation.ObjectType);
 
             // A hole takes its value like a parameter that takes it by value: the string is built from a copy, on which ToString or the
             // formatting member runs. So a new value, which a variable at its last use is, is moved into the hole, and a stored value
@@ -1040,7 +1073,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                 var hole = operation.Arguments.FirstOrDefault()?.Value.Syntax ?? operation.Syntax;
 
                 if (types.HidesNonCopyableType(appended.TypeArgument, context.Compilation.ObjectType))
-                    Report(Rules.OpaqueConversion, hole, DescribeContainer(appended.TypeArgument), context.Compilation.ObjectType);
+                    ReportContainerConversion(hole, appended.TypeArgument, context.Compilation.ObjectType);
 
                 use = default;
             }
@@ -1053,7 +1086,9 @@ public sealed partial class DoNotCopyValueAnalyzer
             if (IsMemberwiseClone(method))
                 CheckMemberwiseClone(operation, operation.Instance);
             else
-                CheckReceiverType(operation.Syntax, instance?.Type, method);
+                CheckReceiverType(operation.Syntax, GetReceiverType(instance), method);
+
+            CheckCloneOfOwnObject(operation, method, operation.Instance, operation.Arguments);
 
             if (IsGetObjectValue(method))
                 Report(Rules.GetObjectValueCall, operation.Syntax);
@@ -1145,8 +1180,8 @@ public sealed partial class DoNotCopyValueAnalyzer
             // The statement hands the value to Monitor.Enter as an object.
             var lockedValue = operation.LockedValue;
 
-            if (types.HidesNonCopyableType(lockedValue.Type, context.Compilation.ObjectType) && !types.IsListed(MonitorEnterId))
-                Report(Rules.OpaqueConversion, lockedValue.Syntax, DescribeContainer(lockedValue.Type), context.Compilation.ObjectType);
+            if (types.HidesNonCopyableType(lockedValue.Type, context.Compilation.ObjectType) && !types.IsBorrowing(MonitorEnterId))
+                ReportContainerConversion(lockedValue.Syntax, lockedValue.Type, context.Compilation.ObjectType);
 
             base.VisitLock(operation);
         }
@@ -1156,7 +1191,8 @@ public sealed partial class DoNotCopyValueAnalyzer
             // A delegate type has no code of its own, so the method it is created from is checked here.
             var method = operation.Method;
             var use = CheckMemberUse(operation.Syntax, method);
-            CheckReceiverType(operation.Syntax, operation.Instance?.Type, method);
+            CheckReceiverType(operation.Syntax, GetReceiverType(operation.Instance), method);
+            CheckCloneOfOwnObject(operation, method, operation.Instance, []);
 
             // A method group of MemberwiseClone or of GetObjectValue clones when the delegate is invoked.
             if (IsMemberwiseClone(method))
@@ -1194,6 +1230,35 @@ public sealed partial class DoNotCopyValueAnalyzer
             base.VisitMemberInitializer(operation);
         }
 
+        /// <summary>
+        /// Gets the type that the receiver of a member is judged by: 'this' and 'base' are the object of the class whose code it is, judged as
+        /// that class, whose declaration got any warning of its own. 'base' has the type of the base class in the tree.
+        /// </summary>
+        private ITypeSymbol? GetReceiverType(IOperation? instance) =>
+            instance is IInstanceReferenceOperation { ReferenceKind: InstanceReferenceKind.ContainingTypeInstance } && context.OwningSymbol.ContainingType is { TypeKind: TypeKind.Class } own
+                ? own
+                : instance?.Type;
+
+        public override void VisitDynamicObjectCreation(IDynamicObjectCreationOperation operation)
+        {
+            ReportCloningBindingOfCreation(operation);
+            base.VisitDynamicObjectCreation(operation);
+        }
+
+        // An object of a class whose objects a class that clones itself clones, created with a non-copyable type bound to it. This is the
+        // early warning where the project writes the binding; the uses of the object get theirs where it reaches the cloning code. An
+        // object that is converted where it is created gets the one warning of that conversion.
+        private void ReportCloningBindingOfCreation(IOperation creation)
+        {
+            if (creation.Type is INamedTypeSymbol created &&
+                !SymbolEqualityComparer.Default.Equals(created, created.OriginalDefinition) &&
+                !(SkipParenthesesUpward(creation).Parent is IConversionOperation { OperatorMethod: null } conversion && types.HidesNonCopyableType(created, conversion.Type)) &&
+                types.FindCloningBinding(created) is { } binding)
+            {
+                Report(Rules.CloningBinding, creation.Syntax, binding.Type, binding.Bound, binding.Cloning);
+            }
+        }
+
         public override void VisitNameOf(INameOfOperation operation)
         {
             // A 'nameof' operation does not copy anything in the value
@@ -1202,6 +1267,8 @@ public sealed partial class DoNotCopyValueAnalyzer
         public override void VisitObjectCreation(IObjectCreationOperation operation)
         {
             var use = CheckMemberUse(operation.Syntax, operation.Constructor);
+
+            ReportCloningBindingOfCreation(operation);
 
             if (use.Kind is MemberUseKind.Listed && types.IsNonCopyableType(operation.Type))
                 CheckHandedOutValue(operation.Syntax, use, operation.Type, AreInputsNew(null, operation.Arguments, forValue: true), operation.Arguments is [var only] ? only.Value : null);
@@ -1254,7 +1321,7 @@ public sealed partial class DoNotCopyValueAnalyzer
             var property = operation.Property;
             var instance = operation.Instance;
             var use = CheckMemberUse(operation.Syntax, property);
-            CheckReceiverType(operation.Syntax, instance?.Type, property);
+            CheckReceiverType(operation.Syntax, GetReceiverType(instance), property);
 
             // The value that a setter or an init accessor is given is a parameter of the accessor, which the property does not show.
             if (property.SetMethod is { } setter &&
@@ -1449,6 +1516,15 @@ public sealed partial class DoNotCopyValueAnalyzer
         {
             // A user-defined conversion of each element, with nothing written for it.
             CheckMemberUse(operation.Syntax, operation.ElementConversion.MethodSymbol);
+
+            // Any other conversion of each element to the element type of the new collection, with no node for it either. A stored value
+            // of a non-copyable type is reported below as a copy, which its box is.
+            if (operation.ElementConversion is { Exists: true, IsIdentity: false, MethodSymbol: null } &&
+                GetCollectionElementType(operation.Parent?.Type) is { } collectionElementType &&
+                types.HidesNonCopyableType(operation.ElementType, collectionElementType))
+            {
+                ReportHidingConversion(operation.Operand.Syntax, operation.ElementType!, collectionElementType, receivingMember: null);
+            }
 
             // A spread element copies every element of a collection into the new one, as a 'foreach' with a by-value variable does.
             // A view never owns its elements, so a spread over one copies them, whatever the view came from.

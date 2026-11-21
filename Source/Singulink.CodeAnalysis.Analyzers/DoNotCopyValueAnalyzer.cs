@@ -65,6 +65,8 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
 
             context.RegisterCompilationEndAction(moves.Report);
             context.RegisterCompilationEndAction(context => AnalyzeUncheckedReferences(context, list, listFiles));
+            context.RegisterSymbolAction(context => AnalyzeCloningBases(context, types), SymbolKind.NamedType);
+            context.RegisterSyntaxNodeAction(context => AnalyzeCloningBinding(context, types), SyntaxKind.ClassDeclaration);
 
             context.RegisterOperationBlockAction(context => {
                 // In the body of a member marked [RequiresCopyable] the marked type parameters count as copyable.
@@ -120,6 +122,30 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
         return name.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase) && name.EndsWith(Extension, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// Gets a value indicating whether a list file came in a package: it is under the NuGet package root of the build, which the props
+    /// file of the package makes visible to the compiler. Its author is the library's, whose own build reads it from the project's folder,
+    /// so a warning that a line adds nothing to the built-in list is given there and not in each project that uses the library. A build
+    /// that does not pass the property counts every file as its own.
+    /// </summary>
+    private static bool IsFileOfAPackage(AdditionalText file, AnalyzerOptions options)
+    {
+        if (!options.AnalyzerConfigOptionsProvider.GlobalOptions.TryGetValue(PackageRootOption, out string? root) || string.IsNullOrWhiteSpace(root))
+            return false;
+
+        try
+        {
+            string folder = Path.GetFullPath(root.Trim()).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            return Path.GetFullPath(file.Path).StartsWith(folder, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+
+    private const string PackageRootOption = "build_property.NuGetPackageRoot";
+
     private static IReadOnlyList<(AdditionalText File, SourceText Text)> GetListFiles(AnalyzerOptions options, CancellationToken cancellationToken)
     {
         List<(AdditionalText File, SourceText Text)>? files = null;
@@ -168,6 +194,20 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
         // the compilation does not reference is ignored, so that one file can serve several projects, except a 'noncopyable' line: a
         // mistyped ID there leaves the type copyable in a build that looks clean. The built-in list is not checked here: its lines for
         // newer frameworks may name nothing.
+        // A line that says a member makes no copy is left out where a 'clones' line of any symbol list file names the member, and gets its
+        // warning here whichever file that line is in.
+        var clonesOfFiles = new HashSet<string>(entries.Where(e => e.Marker is SafeListMarker.Clones).Select(e => e.Id), StringComparer.Ordinal);
+
+        foreach (var other in context.Options.AdditionalFiles)
+        {
+            if (ReferenceEquals(other, context.AdditionalFile) || !IsListFile(other) || other.GetText(context.CancellationToken) is not { } otherText)
+                continue;
+
+            var otherEntries = new List<SafeListEntry>();
+            SafeMemberList.Parse(otherText, otherEntries, errors: null);
+            clonesOfFiles.UnionWith(otherEntries.Where(e => e.Marker is SafeListMarker.Clones).Select(e => e.Id));
+        }
+
         foreach (var entry in entries)
         {
             if (SafeMemberList.GetErrorInCompilation(entry, context.Compilation) is { } reason)
@@ -176,6 +216,14 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
                 Report(Rules.SafeListNonCopyableNamesNothing, entry.Line, entry.Id);
             else if (entry.Marker is SafeListMarker.Copyable && SafeMemberList.GetWhyCopyableHasNoEffect(entry, context.Compilation) is { } why)
                 Report(Rules.SafeListCopyableHasNoEffect, entry.Line, entry.Id, why);
+            else if (SafeMemberList.GetAccessorOwnerId(entry, context.Compilation) is { } owner)
+                Report(Rules.SafeListNamesAccessor, entry.Line, entry.Id, owner);
+            else if (entry.Marker is SafeListMarker.Clones && SafeMemberList.GetWhyClonesHasNoEffect(entry, context.Compilation) is { } whyNot)
+                Report(Rules.SafeListClonesHasNoEffect, entry.Line, entry.Id, entry.Id[0] switch { 'T' => "a class that clones itself", 'E' => "an event that clones its object", _ => $"a {SafeMemberList.GetMemberKind(entry.Id)} that clones its object" }, whyNot);
+            else if (SafeMemberList.ContradictsClones(entry, clonesOfFiles))
+                Report(Rules.SafeListContradictsClones, entry.Line, entry.Id);
+            else if (SafeMemberList.FindWideningOfBuiltIn(entry) is { } widening && !IsFileOfAPackage(context.AdditionalFile, context.Options))
+                Report(Rules.SafeListWidensBuiltIn, entry.Line, entry.Id, widening.Added, widening.BuiltIn);
         }
 
         foreach (var error in errors)

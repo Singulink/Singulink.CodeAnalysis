@@ -301,12 +301,141 @@ internal static class Verify
         location,
         $"MemberwiseClone of '{type}' clones an object of '{derived}' as well, which derives from it, and copies its {(isParameter ? "parameter" : "field")} '{field}' of non-copyable type '{fieldType}'");
 
-    public static DiagnosticResult MemberwiseCloneOfOpenClass(int location, string type) => Diagnostic(
+    // The ID of the 'clones' line is 'T:' and the name, for a class that is not generic.
+    public static DiagnosticResult MemberwiseCloneOfOpenClass(int location, string type, string? id = null) => Diagnostic(
         DiagnosticIds.MemberwiseCloneOfOpenClass,
         location,
         $"MemberwiseClone of '{type}' clones an object of whatever class derives from it, and '{type}' can be derived from in another assembly, " +
         "where a derived class can hold a non-copyable value that the clone copies. Seal the class, copy its fields in a constructor " +
-        "instead, or suppress this warning as a rule that no derived class may hold a non-copyable value.");
+        "instead, or suppress this warning as a rule that no derived class may hold a non-copyable value. To keep the class open and " +
+        $"cloneable in a library, add '{id ?? "T:" + type};clones' to the symbol list file that ships with the library, so that a class that " +
+        "derives from it in another project gets a warning for a non-copyable value, and then suppress this warning.");
+
+    public static DiagnosticResult MemberwiseCloneThroughListedBase(int location, string type, string listedBase, string fieldType, string field, bool isParameter = false) => Diagnostic(
+        DiagnosticIds.CloningBase,
+        location,
+        $"'{type}' derives from '{listedBase}', whose own code clones an object field by field with MemberwiseClone, so a clone of an object " +
+        $"of '{type}' copies its {(isParameter ? "parameter" : "field")} '{field}' of non-copyable type '{fieldType}'. Hold the value in an " +
+        $"object of a class that '{type}' refers to, which the clone shares, or suppress this warning where no object of '{type}' is ever cloned.");
+
+    public static DiagnosticResult SafeListClonesHasNoEffect(int line, int startColumn, int endColumn, string id, string because) =>
+        new DiagnosticResult(DiagnosticIds.SafeListLine, DiagnosticSeverity.Warning)
+            .WithSpan(ListFileName, line, startColumn, line, endColumn)
+            .WithMessage(
+                $"This line of the symbol list file marks '{id}' as {id[0] switch { 'M' => "a method that clones its object", 'P' => "a property that clones its object", 'E' => "an event that clones its object", _ => "a class that clones itself" }}. " +
+                $"It has no effect, because {because}.");
+
+    public static DiagnosticResult SafeListNamesAccessor(int line, int endColumn, string id, string owner) =>
+        new DiagnosticResult(DiagnosticIds.SafeListLine, DiagnosticSeverity.Warning)
+            .WithSpan(ListFileName, line, 1, line, endColumn)
+            .WithMessage(
+                $"This line of the symbol list file names '{id}', an accessor of '{owner}'. It has no effect, because the analyzer looks up every " +
+                $"use of an accessor under its property or event: write the line for '{owner}' instead.");
+
+    public static DiagnosticResult SafeListContradictsClones(int line, int startColumn, int endColumn, string id) =>
+        new DiagnosticResult(DiagnosticIds.SafeListLine, DiagnosticSeverity.Warning)
+            .WithSpan(ListFileName, line, startColumn, line, endColumn)
+            .WithMessage(
+                $"This line of the symbol list file says that '{id}' makes no copy, and a 'clones' line says that it clones its object field by " +
+                "field with MemberwiseClone. The line is left out: remove it.");
+
+    public static DiagnosticResult MemberwiseCloneOfTypeParameterThroughListedBase(int location, string type, string listedBase, string fieldType, string field) => Diagnostic(
+        DiagnosticIds.CloningBase,
+        location,
+        $"'{type}' derives from '{listedBase}', whose own code clones an object field by field with MemberwiseClone, so a clone of an object " +
+        $"of '{type}' copies its field '{field}' of type '{fieldType}' with the non-copyable value that a project binds to its type parameter. " +
+        $"Suppress this warning only where the code of '{type}' never clones its objects: a project that binds a non-copyable type gets a " +
+        $"warning of its own where it hands such an object to the code of '{listedBase}'. Or hold the value in an object of a class that " +
+        $"'{type}' refers to, which the clone shares.");
+
+    public static DiagnosticResult CloningUseConversion(int location, string source, string target, string cloning, string boundType, string boundTo) => Diagnostic(
+        DiagnosticIds.CloningBase,
+        location,
+        $"'{source}' is converted to '{target}', which hands the object, or what holds it, to code that can clone it: the own code of " +
+        $"'{cloning}' clones its objects field by field with MemberwiseClone, and a clone copies the non-copyable '{boundType}' that is bound " +
+        $"to a type parameter of '{boundTo}'. Keep the value as '{source}', bind a class that refers to the value instead, which a clone " +
+        "shares, or suppress this warning where the object is never cloned.");
+
+    public static DiagnosticResult CloningUseMember(int location, string member, string receiver, string declaringType, string cloning, string boundType, string boundTo, string id) => Diagnostic(
+        DiagnosticIds.CloningBase,
+        location,
+        $"'{member}' uses '{receiver}' as '{declaringType}', which hands the object to code that can clone it: the own code of '{cloning}' " +
+        $"clones its objects field by field with MemberwiseClone, and a clone copies the non-copyable '{boundType}' that is bound to a type " +
+        $"parameter of '{boundTo}'. Bind a class that refers to the value instead, which a clone shares, add '{id}' to a NonCopyableSymbols.txt " +
+        "file if the member does not clone the object, or suppress this warning where the object is never cloned.");
+
+    public static DiagnosticResult CloningUseOfCloningMember(int location, string member, string objectType, string boundType, string boundTo) => Diagnostic(
+        DiagnosticIds.CloningBase,
+        location,
+        $"'{member}' clones its object field by field with MemberwiseClone, or hands it to code that can, so a clone of '{objectType}' can " +
+        $"copy the non-copyable '{boundType}' that is bound to a type parameter of '{boundTo}', and no line of a symbol list file can vouch " +
+        "for the member. Bind a class that refers to the value instead, which a clone shares, or avoid the use.");
+
+    public static DiagnosticResult CloningUseHandsBack(int location, string member, string receiver, string handBackType, string cloning, string boundType, string boundTo, string id) => Diagnostic(
+        DiagnosticIds.CloningBase,
+        location,
+        $"'{member}' can hand the object of '{receiver}' to other code as '{handBackType}', which no longer shows its binding: the own code " +
+        $"of '{cloning}' clones its objects field by field with MemberwiseClone, and a clone copies the non-copyable '{boundType}' that is " +
+        $"bound to a type parameter of '{boundTo}'. Bind a class that refers to the value instead, which a clone shares, or add '{id}' to a " +
+        "NonCopyableSymbols.txt file if the member never hands the object itself to other code.");
+
+    public static DiagnosticResult CloningUseOfUnknownMember(int location, string member, string receiver, string declaringType, string cloning, string boundType, string boundTo, string id, string cloningId) => Diagnostic(
+        DiagnosticIds.CloningBase,
+        location,
+        $"'{member}' is a member of '{declaringType}', and no line says 'clones=complete' for '{cloning}', so the member can clone the object " +
+        $"of '{receiver}': the own code of '{cloning}' clones its objects field by field with MemberwiseClone, and a clone copies the " +
+        $"non-copyable '{boundType}' that is bound to a type parameter of '{boundTo}'. Bind a class that refers to the value instead, which a " +
+        $"clone shares, add '{id}' to a NonCopyableSymbols.txt file if the member neither clones the object nor hands it on, or add " +
+        $"'{cloningId};clones=complete' to one once the 'clones' lines of '{cloning}' name every member that clones the object or hands it on.");
+
+    public static DiagnosticResult CloningUseOfMemberOfUncoveredClass(int location, string member, string receiver, string declaringType, string cloning, string boundType, string boundTo, string id, string declaringId) => Diagnostic(
+        DiagnosticIds.CloningBase,
+        location,
+        $"'{member}' is a member of '{declaringType}', a class of another assembly than '{cloning}' that was not built with the analyzers and " +
+        $"that no line that says 'clones=complete' covers, so the member can clone the object of '{receiver}': the own code of '{cloning}' " +
+        $"clones its objects field by field with MemberwiseClone, and a clone copies the non-copyable '{boundType}' that is bound to a type " +
+        $"parameter of '{boundTo}'. Bind a class that refers to the value instead, which a clone shares, add '{id}' to a NonCopyableSymbols.txt " +
+        $"file if the member neither clones the object nor hands it on, or add '{declaringId};clones=complete' to one once the 'clones' lines " +
+        $"of '{declaringType}' name every member that clones the object or hands it on.");
+
+    public static DiagnosticResult MemberClonesWithoutLine(int location, string member, string through, string type, string id, string? cloningOfLibrary = null, string? cloningId = null) => Diagnostic(
+        DiagnosticIds.MemberwiseCloneOfOpenClass,
+        location,
+        $"'{member}' clones its object through '{through}', and an object of '{type}' can hold a non-copyable value that another project " +
+        $"derives or binds, where nothing shows the clone. Add '{id};clones' to the symbol list file that ships with the library, so that a " +
+        $"call of '{member}' on such an object gets a warning where it is made" +
+        (cloningOfLibrary is null ? string.Empty : $"; once the 'clones' lines name every member of '{cloningOfLibrary}' that clones its object or hands it on, write its line as '{cloningId};clones=complete'") +
+        ".");
+
+    public static DiagnosticResult CloningUseTypeArgument(int location, string member, string argument, string typeParameter, string cloning, string boundType, string boundTo) => Diagnostic(
+        DiagnosticIds.CloningBase,
+        location,
+        $"'{member}' binds '{argument}' to type parameter '{typeParameter}', which is not marked [NonCopyable], so the generic can use the " +
+        $"object as a type that hands it to code that can clone it: the own code of '{cloning}' clones its objects field by field with " +
+        $"MemberwiseClone, and a clone copies the non-copyable '{boundType}' that is bound to a type parameter of '{boundTo}'. Bind a class " +
+        "that refers to the value instead, which a clone shares, or suppress this warning where the object is never cloned.");
+
+    public static DiagnosticResult CloningUseConstraint(int location, string member, string argument, string typeParameter, string constraint, string cloning, string boundType, string boundTo) => Diagnostic(
+        DiagnosticIds.CloningBase,
+        location,
+        $"'{member}' binds '{argument}' to type parameter '{typeParameter}', whose constraint '{constraint}' lets the generic use the object " +
+        $"as a type that hands it to code that can clone it: the own code of '{cloning}' clones its objects field by field with " +
+        $"MemberwiseClone, and a clone copies the non-copyable '{boundType}' that is bound to a type parameter of '{boundTo}'. Bind a class " +
+        "that refers to the value instead, which a clone shares, or suppress this warning where the object is never cloned.");
+
+    public static DiagnosticResult CloningBinding(int location, string bound, string boundTo, string cloning) => Diagnostic(
+        DiagnosticIds.CloningBase,
+        location,
+        $"Non-copyable type '{bound}' is bound to a type parameter of '{boundTo}', whose objects the own code of '{cloning}' clones field by " +
+        $"field with MemberwiseClone, so a clone copies the '{bound}' that it holds. Bind a class that refers to the value instead, which a " +
+        $"clone shares, or suppress this warning where no object of '{boundTo}' is ever cloned.");
+
+    public static DiagnosticResult OpaqueMemberThatClones(int location, string container, string declaringType, string member) => Diagnostic(
+        DiagnosticIds.OpaqueType,
+        location,
+        $"'{member}' uses container '{container}' as '{declaringType}', which hides its non-copyable elements from the analyzer, and " +
+        $"'{member}' clones its object field by field with MemberwiseClone, so no line of a symbol list file can vouch for it. Avoid the " +
+        $"use, or hold the values in an object of a class that '{container}' refers to.");
 
     public static DiagnosticResult GetObjectValueCall(int location) => Diagnostic(
         DiagnosticIds.GetObjectValue,
@@ -382,11 +511,38 @@ internal static class Verify
         $"'{member}' may copy non-copyable type '{type}': type parameter '{typeParameter}' is marked [NonCopyable], but the mark does not count in " +
         $"an assembly that was not built with the analyzer, and the member is not on the symbol list. Add '{id}' to {ListFileAdvice}");
 
+    public static DiagnosticResult UnlistedMemberThatClones(int location, string member, string type, string typeParameter) => Diagnostic(
+        DiagnosticIds.UnlistedMember,
+        location,
+        $"'{member}' may copy non-copyable type '{type}': type parameter '{typeParameter}' is not marked [NonCopyable], and the member clones its " +
+        "object field by field with MemberwiseClone, so no line of a symbol list file can vouch for it. Avoid the use.");
+
     public static DiagnosticResult UnlistedMember(int location, string member, string type, string typeParameter, string id) => Diagnostic(
         DiagnosticIds.UnlistedMember,
         location,
         $"'{member}' may copy non-copyable type '{type}': type parameter '{typeParameter}' is not marked [NonCopyable] and the member is not on the symbol " +
         $"list. Mark the type parameter, add '{id}' to {ListFileAdvice}");
+
+    public static DiagnosticResult MemberListedForOtherTypeParameter(int location, string member, string type, string typeParameter, string listedFor) => Diagnostic(
+        DiagnosticIds.UnlistedMember,
+        location,
+        $"'{member}' may copy non-copyable type '{type}': type parameter '{typeParameter}' is not marked [NonCopyable] in a build with the analyzer, " +
+        $"and the symbol list names the member for '{listedFor}' only, which says nothing of what it does with a value of '{typeParameter}'. " +
+        $"Bind a copyable type to '{typeParameter}', or avoid the use.");
+
+    public static DiagnosticResult OpaqueTypeArgumentListedForOther(int location, string member, string container, string typeParameter, string listedFor) => Diagnostic(
+        DiagnosticIds.OpaqueType,
+        location,
+        $"Container '{container}' is bound to type parameter '{typeParameter}' of '{member}', which is not marked [NonCopyable], and the symbol " +
+        $"list names the member for '{listedFor}' only, which says nothing of what it does with a value of '{typeParameter}'. Keep the " +
+        $"container out of '{typeParameter}', or avoid the use.");
+
+    public static DiagnosticResult SafeListWidensBuiltIn(int line, int endColumn, string id, string added, string builtIn) =>
+        new DiagnosticResult(DiagnosticIds.SafeListLine, DiagnosticSeverity.Warning)
+            .WithSpan(ListFileName, line, 1, line, endColumn)
+            .WithMessage(
+                $"This line of the symbol list file names '{id}' for {added}, where the built-in framework symbol list names it for '{builtIn}' " +
+                "only. It has no effect, because a line of a file can claim less of a member than the built-in list, not more.");
 
     public static DiagnosticResult RequiresCopyableMember(int location, string member, string type, string typeParameter) => Diagnostic(
         DiagnosticIds.RequiresCopyable,
@@ -397,7 +553,7 @@ internal static class Verify
         DiagnosticIds.UntypedCollection,
         location,
         $"Container {Container(container, through)} is converted to untyped collection '{targetType}', which hands out copies of its elements. " +
-        "Keep the element type visible, for example with a generic interface, or pass the container only to a member on the symbol list.");
+        "Keep the element type visible, for example with a generic interface, or pass the container only to a member that the symbol list marks 'borrows'.");
 
     public static DiagnosticResult UntypedCollectionVariance(int location, string container, string hidingType, string sourceType, string targetType) =>
         Diagnostic(
@@ -440,7 +596,7 @@ internal static class Verify
         DiagnosticIds.OpaqueType,
         location,
         $"Container {Container(container, through)} is converted to '{targetType}', which hides its non-copyable elements from the analyzer. " +
-        "Keep the element type visible, or pass the container only to a member on the symbol list.");
+        "Keep the element type visible, or pass the container only to a member that the symbol list marks 'borrows'.");
 
     public static DiagnosticResult OpaqueVariance(int location, string container, string hidingType, string sourceType, string targetType) => Diagnostic(
         DiagnosticIds.OpaqueType,

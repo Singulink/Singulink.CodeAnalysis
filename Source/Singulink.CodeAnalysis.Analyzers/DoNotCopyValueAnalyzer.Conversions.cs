@@ -113,6 +113,9 @@ public sealed partial class DoNotCopyValueAnalyzer
                 if (types.GetHiddenByVariance(source, target) is (var container, var hidingType))
                     (source, target) = (container, hidingType);
 
+                if (TryReportCloningUse(syntax, source, target))
+                    return;
+
                 var rule = NonCopyableTypes.IsUntypedCollection(target) ? Rules.UntypedCollectionMethodGroup : Rules.OpaqueMethodGroup;
                 Report(rule, syntax, source, target, converted, delegateType);
             }
@@ -120,7 +123,7 @@ public sealed partial class DoNotCopyValueAnalyzer
 
         /// <summary>
         /// Reports a container that is converted to a type which no longer mentions the non-copyable type, because the code that receives it cannot
-        /// be checked. A member on the safe list may receive it.
+        /// be checked. A member that the list marks 'borrows' may receive it.
         /// </summary>
         private void CheckContainerConversion(IConversionOperation operation)
         {
@@ -139,10 +142,127 @@ public sealed partial class DoNotCopyValueAnalyzer
             if (operation.Parent is IBinaryOperation { OperatorMethod: null, OperatorKind: BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals })
                 return;
 
-            if (GetReceivingMember(operation) is { } member && types.IsListed(member))
+            // An element of tuples that are compared with '==' or '!=' as references, which hands it to no code either.
+            if (targetType.SpecialType is SpecialType.System_Object && IsElementOfTupleComparison(operation))
                 return;
 
-            ReportContainerConversion(operation.Operand.Syntax, sourceType, targetType, IsUnwantedResultOfLambda(operation));
+            ReportHidingConversion(operation.Operand.Syntax, sourceType, targetType, GetReceivingMember(operation), IsUnwantedResultOfLambda(operation));
+        }
+
+        /// <summary>
+        /// Reports a value that is converted to a type which hides its non-copyable type, wherever the conversion stands, a node of the
+        /// tree or one that the compiler applies with no node. A member that receives the value lets it through only where the list
+        /// marks it 'borrows': a line with no marker says how the member treats the values that it holds, and not that it forgets a
+        /// reference that it is given, as Add, SetResult or TryWrite do not.
+        /// </summary>
+        private void ReportHidingConversion(SyntaxNode syntax, ITypeSymbol sourceType, ITypeSymbol targetType, ISymbol? receivingMember, bool isResultOfLambda = false)
+        {
+            if (receivingMember is not null && types.IsBorrowing(receivingMember))
+                return;
+
+            // An argument of a member that clones what it is given, such as CultureInfo.ReadOnly. An object whose binding to a class that
+            // clones itself was judged where it is declared has its warning there.
+            if (receivingMember is not null && types.IsCloningMember(NonCopyableTypes.GetListDefinition(receivingMember)))
+            {
+                if (TryReportCloningUse(syntax, sourceType, targetType, receivingMember) || types.HasJudgedCloningBinding(sourceType))
+                    return;
+            }
+
+            ReportContainerConversion(syntax, sourceType, targetType, isResultOfLambda);
+        }
+
+        /// <summary>
+        /// Checks a conversion that the compiler applies with no conversion node in the tree: the value of a '??', the elements of a
+        /// spread and of a deconstruction, and the receiver of an extension that a pattern calls. It is judged as a node would be: a
+        /// conversion that hides the non-copyable type, and a stored value of a non-copyable type that is boxed.
+        /// </summary>
+        private void CheckConversionWithoutNode(SyntaxNode syntax, ITypeSymbol? sourceType, ITypeSymbol? targetType, bool sourceIsNew, ISymbol? receivingMember = null)
+        {
+            if (sourceType is null || targetType is null || SymbolEqualityComparer.Default.Equals(sourceType, targetType))
+                return;
+
+            if (types.HidesNonCopyableType(sourceType, targetType))
+                ReportHidingConversion(syntax, sourceType, targetType, receivingMember);
+            else if (!sourceIsNew && targetType is { IsValueType: false } && types.IsNonCopyableType(sourceType) && !(receivingMember is not null && types.IsBorrowing(receivingMember)))
+                Report(Rules.Boxing, syntax, sourceType, targetType);
+        }
+
+        /// <summary>
+        /// Checks the receiver of an extension that the compiler calls by a pattern, with no argument in the tree for it: GetAwaiter,
+        /// GetEnumerator, GetAsyncEnumerator and Deconstruct. The value is converted to the type of the extension's receiver as an
+        /// argument would be. A written call of an extension has the argument, which is checked where it is visited.
+        /// </summary>
+        private void CheckPatternExtensionReceiver(SyntaxNode syntax, ITypeSymbol? receiverType, ISymbol? member)
+        {
+            var extensionReceiverType = member switch {
+                IMethodSymbol { IsExtensionMethod: true } method => method.ReducedFrom is not null ? method.ReceiverType : method.Parameters.FirstOrDefault()?.Type,
+                _ => NonCopyableTypes.GetExtensionReceiver(member)?.Type,
+            };
+
+            if (extensionReceiverType is not null && types.HidesNonCopyableType(receiverType, extensionReceiverType))
+                ReportHidingConversion(syntax, receiverType, extensionReceiverType, member);
+        }
+
+        /// <summary>
+        /// Gets a value indicating whether a converted value is an element of a tuple that is compared with '==' or '!='.
+        /// </summary>
+        private static bool IsElementOfTupleComparison(IOperation operation)
+        {
+            for (var current = operation.Parent; current is not null; current = current.Parent)
+            {
+                switch (current)
+                {
+                    case ITupleBinaryOperation:
+                        return true;
+                    case ITupleOperation or IParenthesizedOperation or IConversionOperation { OperatorMethod: null }:
+                        continue;
+                    default:
+                        return false;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Gets the type of the elements of a collection that a collection expression makes: the element type of an array, the type
+        /// argument of a span, or that of the IEnumerable&lt;T&gt; that the type is or implements.
+        /// </summary>
+        private static ITypeSymbol? GetCollectionElementType(ITypeSymbol? type)
+        {
+            if (type is IArrayTypeSymbol array)
+                return array.ElementType;
+
+            if (type is not INamedTypeSymbol named)
+                return null;
+
+            if (named.OriginalDefinition.SpecialType is SpecialType.System_Collections_Generic_IEnumerable_T)
+                return named.TypeArguments[0];
+
+            if (named is { IsRefLikeType: true, TypeArguments: [var spanElement] } && named.Name is "Span" or "ReadOnlySpan")
+                return spanElement;
+
+            return named.AllInterfaces.FirstOrDefault(i => i.OriginalDefinition.SpecialType is SpecialType.System_Collections_Generic_IEnumerable_T)?.TypeArguments[0];
+        }
+
+        /// <summary>
+        /// Reports a use of a value as a type that hides it where the value is, or holds, an object with a binding of a non-copyable type
+        /// to a class that clones itself which no declaration of the compilation judged (SCA1009), instead of the warning of a hidden
+        /// container. Every way that such an object reaches the code that clones it is such a use. A member that clones is named as such.
+        /// </summary>
+        private bool TryReportCloningUse(SyntaxNode syntax, ITypeSymbol sourceType, ITypeSymbol targetType, ISymbol? member = null)
+        {
+            if (types.FindCloningBindingWithin(sourceType) is not { } binding)
+                return false;
+
+            if (member is not null && NonCopyableTypes.GetListDefinition(member) is var definition && types.IsCloningMember(definition))
+                Report(Rules.CloningUseOfCloningMember, syntax, Display(definition), sourceType, binding.Type, binding.Bound);
+            else if (member is not null)
+                Report(Rules.CloningUseMember, syntax, Display(NonCopyableTypes.GetListDefinition(member)), sourceType, targetType, binding.Cloning, binding.Type, binding.Bound, GetListId(NonCopyableTypes.GetListDefinition(member)));
+            else
+                Report(Rules.CloningUseConversion, syntax, sourceType, targetType, binding.Cloning, binding.Type, binding.Bound);
+
+            return true;
         }
 
         /// <summary>
@@ -155,6 +275,9 @@ public sealed partial class DoNotCopyValueAnalyzer
 
         private void ReportContainerConversion(SyntaxNode syntax, ITypeSymbol sourceType, ITypeSymbol targetType, bool isResultOfLambda = false)
         {
+            if (TryReportCloningUse(syntax, sourceType, targetType))
+                return;
+
             // Through a variant type parameter it is what is bound to it that is hidden, from the code behind the converted reference.
             if (types.GetHiddenByVariance(sourceType, targetType) is (var container, var hidingType))
             {

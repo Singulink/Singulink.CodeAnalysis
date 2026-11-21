@@ -731,7 +731,8 @@ public sealed partial class DoNotCopyValueAnalyzer
         /// Checks the variables of a deconstruction, which are as new as the value that is deconstructed. The elements of a tuple literal are
         /// assigned one by one.
         /// </summary>
-        private void CheckDeconstruction(IOperation target, IOperation? value, DeconstructionInfo? info, bool valueIsNew, HandledScope handled)
+        private void CheckDeconstruction(
+            IOperation target, IOperation? value, DeconstructionInfo? info, bool valueIsNew, HandledScope handled, ITypeSymbol? sourceType = null, SyntaxNode? site = null)
         {
             RuntimeHelpers.EnsureSufficientExecutionStack();
 
@@ -746,6 +747,13 @@ public sealed partial class DoNotCopyValueAnalyzer
             if (target is not ITupleOperation targets)
             {
                 CheckDeconstructionTarget(target, value, valueIsNew);
+
+                // An element that a tuple or a Deconstruct method hands out is converted to the type of its target with no node in the
+                // tree. An element of a tuple literal has its own conversion, which is visited, and a user-defined conversion is a member
+                // that is used, which is checked above.
+                if (value is null && target is not IDiscardOperation && info?.Conversion is not { IsUserDefined: true } and not { IsIdentity: true })
+                    CheckConversionWithoutNode(target.Syntax, sourceType, (target as IDeclarationExpressionOperation)?.Expression.Type ?? target.Type, valueIsNew);
+
                 return;
             }
 
@@ -759,7 +767,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                 {
                     var element = literal.Elements[i];
                     handled.Add(element);
-                    CheckDeconstruction(targets.Elements[i], element, i < nested.Length ? nested[i] : null, IsNew(element), handled);
+                    CheckDeconstruction(targets.Elements[i], element, i < nested.Length ? nested[i] : null, IsNew(element), handled, element.Type);
                 }
 
                 return;
@@ -784,8 +792,13 @@ public sealed partial class DoNotCopyValueAnalyzer
             }
 
             bool elementsAreNew = info?.Method is { } deconstruct
-                ? FollowMember((value ?? target).Syntax, deconstruct, value?.Type, null, valueIsNew, "'Deconstruct'", null, report: true)
+                ? FollowMember(value?.Syntax ?? site ?? target.Syntax, deconstruct, value?.Type ?? sourceType, null, valueIsNew, "'Deconstruct'", null, report: true)
                 : valueIsNew;
+
+            // What each element is converted from: an output of the Deconstruct method, or an element of the tuple.
+            var outputs = info?.Method is { } method
+                ? (method.IsExtensionMethod && method.ReducedFrom is null ? method.Parameters.Skip(1) : method.Parameters).Select(p => p.Type).ToArray()
+                : (sourceType as INamedTypeSymbol) is { IsTupleType: true } tuple ? tuple.TupleElements.Select(e => e.Type).ToArray() : [];
 
             bool valuesAreNew = elementsAreNew || IsMarkedNew(info?.Method);
 
@@ -793,7 +806,7 @@ public sealed partial class DoNotCopyValueAnalyzer
             {
                 var element = targets.Elements[i];
                 bool elementIsNew = types.IsNonCopyableType(element.Type) ? valuesAreNew : elementsAreNew;
-                CheckDeconstruction(element, null, i < nested.Length ? nested[i] : null, elementIsNew, handled);
+                CheckDeconstruction(element, null, i < nested.Length ? nested[i] : null, elementIsNew, handled, i < outputs.Length ? outputs[i] : null);
             }
         }
 
