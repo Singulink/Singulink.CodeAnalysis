@@ -129,10 +129,6 @@ Two things are left, and both are small:
 
 A method with `[InterceptsLocation]` replaces the method that a call binds to after the analyzer has looked at the call. Every rule that goes by the method that is called judges the method that is written at the call: a `[NotNullRef]` parameter, <xref:Singulink.CodeAnalysis.NonCopyable.Move*?displayProperty=nameWithType>, `[Kept]` and the [symbol list](symbol-list-format.md).
 
-#### Records and Anonymous Types
-
-The `ToString`, `Equals` and `GetHashCode` that the compiler writes for a record or an anonymous type call the same member of each of their members, and the analyzer does not check those calls. That matters only for a class of another library whose own `ToString`, `Equals` or `GetHashCode` clones its object. The framework has no such class: a test checks that for .NET 10 and .NET 11.
-
 #### Overrides That Clone
 
 A symbol list line for a member says what that member's own code does. The analyzer does not follow a member of a base class into an override that a class below it adds. So where a class overrides a member with one that clones its object, a base class member that calls the overridden member runs the clone, and its use gets no warning:
