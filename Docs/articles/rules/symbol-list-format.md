@@ -63,6 +63,9 @@ M:Contoso.Document.Copy;clones
 # clones=complete: the class's clones lines name every member that clones its object or hands it on
 T:Contoso.Report;clones=complete
 M:Contoso.Report.Copy;clones
+
+# clones=none: neither the class nor a class above it clones its objects
+T:Contoso.Page;clones=none
 ```
 
 ## Markers
@@ -82,6 +85,7 @@ M:Contoso.Report.Copy;clones
 | A generic class or interface (`T:`) | `erasable` | No base type or interface hands out a value of its type arguments |
 | A class (`T:`) | `clones` | The class's own code clones its objects field by field with MemberwiseClone |
 | A class (`T:`) | `clones=complete` | As `clones`, and its `clones` lines name every member that clones the object or hands it on |
+| A class (`T:`) | `clones=none` | Neither the class's own code nor that of a class above it clones its objects |
 | A method (`M:`), a property (`P:`) or an event (`E:`) | `clones` | The member clones its object, or the object that it is given, field by field with MemberwiseClone, or hands it to code that can |
 
 #### No Marker
@@ -146,7 +150,7 @@ A `copyable` line gets a warning (SCA1042), and does nothing, where it names:
 
 #### Trusted
 
-An assembly marked `trusted` was not built with the analyzer, and its code makes no copy of the non-copyable values that it gets at. That holds even where its code runs behind a type of checked code or of the framework. The line turns off SCA1025 for the assembly and changes nothing else: its members stay unchecked code for every other rule. The name is matched without regard to case, as the runtime binds it. See [SCA1025](../diagnostics/sca1025.md).
+An assembly marked `trusted` was not built with the analyzer, and its code makes no copy of the non-copyable values that it gets at. That holds even where its code runs behind a type of checked code or of the framework. The line turns off SCA1025 for the assembly, and the warning on a field of a class of the project that derives from one of its classes (see [SCA1009](../diagnostics/sca1009.md#a-base-class-that-is-not-known)). It changes nothing else: its members stay unchecked code for every other rule. The name is matched without regard to case, as the runtime binds it. See [SCA1025](../diagnostics/sca1025.md).
 
 #### Clones
 
@@ -168,7 +172,7 @@ sealed class PinnedDocument : Contoso.Document
 | Question | Answer |
 |---|---|
 | Where can the line stand? | In any symbol list file: the project's own, and one that comes with a library. It counts whether or not the class's assembly was built with the analyzers, since it only adds warnings |
-| Can another line take it away? | No. `clones` has no opposite, and a line for the same class in another file does not turn it off. Suppress the warning where a class is never cloned |
+| Can another line take it away? | No. A line for the same class in another file does not turn it off, and a `clones=none` line for the class gets a warning and is left out (SCA1042). Suppress the warning where a class is never cloned |
 | What if one file says `clones=complete` and another `clones` alone? | `clones=complete` applies. A plain `clones` line says nothing about completeness. Where the lines miss a member, add a `clones` line for that member, in any file |
 | May the class be the project's own? | Yes, where its own code clones its objects by a means that the analyzer does not see. A call of `MemberwiseClone` in the project gets SCA1005 and SCA1008 as before |
 | Which classes of the framework have it? | Every one that clones itself: see [Classes That Clone Themselves](framework-symbol-list.md#classes-that-clone-themselves) |
@@ -203,6 +207,10 @@ Two other lines are for such a class:
 - **`borrows`,** for a member that receives the object as an argument, says that it uses the object during the call and keeps nothing of it. A member on the list with no marker that receives a value as a type that hides it, as `List<object>.Add` does, keeps it, and the conversion gets its warning.
 
 A member line with no marker gets no warning for having no effect: it can still be what lets a container of an unmarked generic through (SCA1023).
+
+**A class marked `clones=none` never clones its objects,** and neither does a class above it. The line is for a base class of a library that was not built with the analyzers, where nothing else tells the analyzer what the class does. Without it, a class of the project that derives from such a class gets a warning on each field that holds a non-copyable value: see [SCA1009](../diagnostics/sca1009.md#a-base-class-that-is-not-known).
+
+The analyzer cannot check the line, so write it only for a class whose code you know. Where a `clones` line names the class or a class above it, that line applies, and the `clones=none` line gets a warning.
 
 #### Erasable
 
@@ -239,7 +247,8 @@ An entry that names something the project does not reference is ignored, so one 
 
 - **A `noncopyable` line that names no type** gets a warning because a mistyped ID would leave the type copyable in a build that looks clean. A project that does not reference the type should take the line out of its file.
 - **A `copyable` line has no effect** in the cases that [Copyable](#copyable) gives.
-- **A `trusted` line has no effect** for an assembly that the project does not reference, for the project's own, and for one that was built with the analyzer. Nor does it for an assembly that references no assembly which declares a non-copyable type.
+- **A `trusted` line has no effect** for an assembly that the project does not reference, for the project's own, and for one that was built with the analyzer. Nor does it for an assembly that does neither of two things: reference an assembly which declares a non-copyable type, or declare a class that a class of the project derives from with a non-copyable value in a field.
+- **A `clones=none` line has no effect** for a class of the project, of the framework or of a library that was built with the analyzers, since the analyzer already knows what those do. Nor does it for a class that is static or sealed, since no class can derive from it, or where a `clones` line names the class or a class above it.
 - **A `clones` line has no effect** for a class that is static, or sealed and not generic, since no class can derive from it and no type can be bound to it. A line that names no type, no method, no property or no event gets a warning as a `noncopyable` line does, since a mistyped ID would leave the fields of every derived class with no warning. A line that repeats one of the built-in framework symbol list, or that names a class whose base class has a line, gets no warning: it has its effect already, and with `clones=complete` it covers the members of the class.
 
 A line cannot be parsed if it has:
@@ -247,7 +256,7 @@ A line cannot be parsed if it has:
 - an ID that cannot be a documentation comment ID, such as one with a parenthesis that is not closed;
 - a `for=` that names a type parameter which the member does not have, or one that fits more than one type parameter of the member and of the types that contain it;
 - a marker on something that it does not fit (see the table below);
-- `clones=complete` on a method, a property or an event, a value of `clones` other than `complete`, or `complete` written as a marker of its own;
+- `clones=complete` or `clones=none` on a method, a property or an event, a value of `clones` other than `complete` or `none`, or `complete` or `none` written as a marker of its own;
 - a marker other than `trusted` on an assembly, or `trusted` on anything but an assembly;
 - an assembly given by a display name with a version, or by a file name.
 
@@ -256,7 +265,7 @@ A line cannot be parsed if it has:
 | `view`, `noncopyable`, `copyable` | A struct |
 | `erasable` | A generic class or interface |
 | `clones` | A class, a method, a property or an event |
-| `clones=complete` | A class |
+| `clones=complete`, `clones=none` | A class |
 | `new`, `borrows` | A member, not a type |
 | `drains` | A method whose result is an <xref:System.Collections.Generic.IEnumerable`1> or an <xref:System.Collections.Generic.IAsyncEnumerable`1> |
 | `owned` | An instance property of a class whose type is <xref:System.Threading.Tasks.Task`1> |

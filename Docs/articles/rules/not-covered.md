@@ -4,46 +4,17 @@
 
 Ordinary C# code that is built with the analyzers gets a warning wherever it would copy a non-copyable value. That holds even when the copy is made inside the framework or another library.
 
-A few cases are left. Only one of them can happen in ordinary code. The rest either cannot be covered by any analyzer, or take something that you would have to do on purpose. This page goes through them in that order.
+A few cases are left, and none of them comes up in ordinary code. Each either cannot be covered by any analyzer, or takes something that you would have to do on purpose. This page goes through them.
 
 ### At a Glance
 
 | What | How likely you are to meet it | What to do |
 |---|---|---|
-| [A class that derives from a base class of another library that clones itself](#the-one-to-know-about), where no symbol list file names the base class | Ordinary code can hit this | Add a `clones` line for the base class, or hold the value in an object that the class refers to |
 | [Unsafe code, pointers, reflection and `dynamic`](#code-that-steps-outside-the-languages-safety) | Only with code that steps outside the language's safety | Nothing new: these can break any guarantee of the language |
 | [Live views and value task sources](#apis-used-against-their-documentation) | Only if you ignore the API's documentation | Follow the documentation, as you would without the analyzers |
 | [A suppressed warning, a wrong symbol list entry, a `trusted` line](#what-you-vouched-for) | Only where you vouched for something | Vouch only for what you know to be true |
 | [Code that was built without the analyzers](#code-built-without-the-analyzers) | Only if a library was built without the analyzers and you vouched for it, or for the ten built-in types | Answer SCA1025 once, where it appears |
-| [Interceptors, an override that clones, and a compiler newer than the tested ones](#rare-corners) | Rare | Know that the rules judge the method that is written at the call |
-
-## The One to Know About
-
-A base class can clone itself with <xref:System.Object.MemberwiseClone>, and the clone copies every field of a class that derives from it. The analyzer cannot read the code of another assembly, so it goes by the symbol list. The [built-in framework symbol list](framework-symbol-list.md#classes-that-clone-themselves) names every class of the framework that clones itself, <xref:System.Text.Encoding>, <xref:System.Globalization.CultureInfo> and <xref:System.Globalization.Calendar> among them. A class of yours that derives from one of them gets a warning on each field that holds a non-copyable value, a <xref:System.Runtime.InteropServices.GCHandle> included (SCA1009).
-
-So does a non-copyable type that you bind to a generic class that derives from one, a generic class of another library included. It gets the warning where you bind it, and where such an object is used as a type that hands it to the clone.
-
-Two cases are left:
-
-- a base class of another library that clones itself, and that no symbol list file names;
-- a class of a framework newer than .NET 10 and .NET 11, the ones that the framework symbol list was checked against.
-
-```cs
-sealed class PinnedEncoding : UTF8Encoding       // the built-in framework symbol list says that Encoding clones itself
-{
-    private GCHandle _pinned;                    // SCA1009: Encoding's Clone copies the handle
-}
-
-sealed class PinnedDocument : Contoso.Document   // Document of a library clones itself, and no symbol list file says so
-{
-    private GCHandle _pinned;                    // no warning: nothing tells the analyzer that Document clones itself
-}
-```
-
-> [!WARNING]
-> Before you hold a non-copyable value in a class that derives from a class of another library, find out whether the base class clones itself. If it does, add its `clones` line, such as `T:Contoso.Document;clones`, to a [symbol list file](../guides/symbol-list.md#a-base-class-that-clones-itself), and the field gets a warning. Or hold the value in an object of a class that your class refers to, which a clone shares.
-
-The analyzer warns about a call to `MemberwiseClone` in code that it checks: see [SCA1005](../diagnostics/sca1005.md) and, for a class that another assembly can derive from, [SCA1008](../diagnostics/sca1008.md). The warnings behind a base class that clones itself are [SCA1009](../diagnostics/sca1009.md).
+| [Interceptors, an override that clones, and a framework or compiler newer than the tested ones](#rare-corners) | Rare | Know that the rules judge the method that is written at the call |
 
 ## Code That Steps Outside the Language's Safety
 
@@ -123,7 +94,8 @@ Where you tell the analyzer something, it takes your word:
 - **a suppressed warning**;
 - **a symbol list entry that is wrong**, such as an entry for a member that copies, or for a member of a type that hands itself to another holder (see [Symbol List Format](symbol-list-format.md));
 - **a `clones=complete` line for a class whose `clones` lines leave a member out:** the marker says that the lines name every member that clones the object or hands it on (see [Clones](symbol-list-format.md#clones));
-- **a `borrows` or a `new` entry, or a `trusted` line,** for code that was built without the analyzers.
+- **a `borrows` or a `new` entry, or a `trusted` line,** for code that was built without the analyzers;
+- **a `clones=none` or a `trusted` line for a base class that does clone itself:** the line says that no code of the class, or of the assembly, clones the object (see [SCA1009](../diagnostics/sca1009.md#a-base-class-that-is-not-known)).
 
 ## Code Built Without the Analyzers
 
@@ -133,6 +105,7 @@ A third-party library does not void the protection:
 - **The framework** is covered by the [built-in framework symbol list](framework-symbol-list.md).
 - **Any other assembly** cannot be handed a non-copyable value directly to copy it silently. Passed by reference, in a container, in a view or through a pointer, the use gets a warning until you vouch for the member (SCA1024). Passed through a generic, it gets a warning until the member is on the [symbol list](symbol-list-format.md) (SCA1020).
 - **A container that such an assembly hands out** counts as stored.
+- **A base class of such an assembly** may clone itself, and the analyzer cannot tell. A class of yours that derives from it gets a warning on each field that holds a non-copyable value, until a symbol list line says whether the base class clones itself ([SCA1009](../diagnostics/sca1009.md#a-base-class-that-is-not-known)).
 - **An assembly that was not built with the analyzers and uses your non-copyable types** itself gets a warning, once ([SCA1025](../diagnostics/sca1025.md)).
 
 A library that uses non-copyable types is usually built with the analyzers. The attributes package brings them with it, and passes them on unless a library keeps them private (see [Sharing Your Library](../guides/libraries.md)).
@@ -141,7 +114,7 @@ So for a copy to go unseen, three things have to come together:
 
 1. **The library was built without the analyzers.** They were turned off, the library that it uses kept them private, or it is written in another language.
 2. **Its code breaks the rule of `[NonCopyable]`:** it copies a value of the type.
-3. **Your project vouched for the assembly** with a `trusted` line, or suppressed the warning about it (SCA1025).
+3. **Your project vouched for it** with a `trusted` or a `clones=none` line, or suppressed the warning about it (SCA1025 or SCA1009).
 
 Two things are left, and both are small:
 
@@ -171,6 +144,10 @@ var same = culture.GetFormat(typeof(NumberFormatInfo));       // no warning: Cul
 ```
 
 A use of the override itself gets its warning. Do not clone the object in an override of a member that its base class calls. Where a library does, treat the base class members that run the override as members that clone.
+
+#### Newer Frameworks
+
+The [built-in framework symbol list](framework-symbol-list.md#classes-that-clone-themselves) names every class of the framework that clones itself. It was checked against .NET 10 and .NET 11. A class that a newer framework adds, or one that starts to clone itself there, is not on the list until the list has been checked against that framework.
 
 #### Compilers
 

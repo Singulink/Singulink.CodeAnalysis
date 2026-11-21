@@ -156,6 +156,6 @@ A few things remain, and all are rare:
 - **A struct of unchecked code that only a `noncopyable` line makes non-copyable,** in the same way. A line for a struct of the framework would otherwise put a warning on every assembly of the framework.
 - **What is handed over or vouched for:** a value passed by value is the callee's from then on, and so is what a `borrows` or a `new` entry or a `trusted` line vouches for.
 
-How these weigh against the rest, and the one case to know about, a base class of another library that clones itself and that no symbol list file names: [What Is Not Covered](not-covered.md).
+How these weigh against the rest: [What Is Not Covered](not-covered.md).
 
 </div>

@@ -44,10 +44,8 @@ in two places. A type that the project takes out with a [`copyable` line of a sy
 and the guarantee does not cover it. Nothing guarantees that a value is disposed, or disposed only once: a guard should clear itself in `Dispose`, so that a second call on the
 same instance does nothing. A `readonly struct` guard cannot do that.
 
-**What it cannot see is small.** The one case that ordinary code can meet is a class that holds a non-copyable value and derives from a
-class of another library that clones itself with `MemberwiseClone`, where no symbol list file names that class. For the framework's own
-classes that do this, such as `Encoding`, you get a warning. Everything else takes unsafe code, reflection or `dynamic`, an API used
-against its documentation, or something that you vouched for. See
+**What it cannot see is small.** It takes unsafe code, reflection or `dynamic`, an API used against its documentation, or something that
+you vouched for. See
 [What Is Not Covered](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/rules/not-covered.html).
 
 **Documentation**: guides, an article for every warning and the fully documented API are on the [project documentation site](https://www.singulink.com/Docs/Singulink.CodeAnalysis/).

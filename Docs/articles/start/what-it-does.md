@@ -94,7 +94,7 @@ A `readonly struct` cannot do that. A struct that your project takes out of the 
 
 ## What It Cannot See
 
-Ordinary C# code that is built with the analyzers gets a warning wherever it would copy a non-copyable value, even when the copy is made inside the framework or another library. One case can come up in ordinary code: a class of another library that clones itself, where no symbol list file names that class. A non-copyable value in a class that derives from it gets no warning, whether the field is in a class of yours or in a generic class that you bind its type to. For the framework's own classes that clone themselves, such as <xref:System.Text.Encoding>, you do get a warning. Everything else takes unsafe code, reflection, an API used against its documentation, or something that you vouched for. [What Is Not Covered](../rules/not-covered.md) goes through each.
+Ordinary C# code that is built with the analyzers gets a warning wherever it would copy a non-copyable value, even when the copy is made inside the framework or another library. What is left takes unsafe code, reflection, an API used against its documentation, or something that you vouched for. [What Is Not Covered](../rules/not-covered.md) goes through each.
 
 ## Next Steps
 
