@@ -1104,8 +1104,8 @@ M:System.Threading.Tasks.Task.WaitAny(System.Threading.Tasks.Task[],System.Int32
 # own nor of a base class. It follows the calls from the members of every class whose chain reaches one of these to the members that
 # clone, and fails for a public or protected member that clones its object or one that it is given and has no line. And it follows
 # where the object of each member can reach other code, and fails for a member that has neither a line nor an entry in the evidence
-# that says why it hands nothing on. What clones in each class is in NonCopyableSymbols.evidence.md, section 14; what reaches other
-# code, and the judgements that the scan makes there, in section 16.
+# that says why it hands nothing on. What clones in each class is in NonCopyableSymbols.evidence.md, under Classes That Clone Themselves;
+# what reaches other code, and the judgements that the scan makes there, are under Members Whose Own Object Reaches Other Code.
 T:System.Text.Encoding;clones=complete
 T:System.Globalization.CultureInfo;clones=complete
 T:System.Globalization.Calendar;clones=complete

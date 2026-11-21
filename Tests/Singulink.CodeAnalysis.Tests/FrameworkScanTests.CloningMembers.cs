@@ -13,7 +13,8 @@ namespace Singulink.CodeAnalysis.Tests;
 /// since a member of such a class with no line is taken neither to clone the object that it is called on nor to hand it on.
 /// </summary>
 /// <remarks>
-/// Docs: articles/rules/framework-symbol-list.md and NonCopyableSymbols.evidence.md, sections 14 and 16.
+/// Docs: articles/rules/framework-symbol-list.md and NonCopyableSymbols.evidence.md, Classes That Clone Themselves and Members Whose Own
+/// Object Reaches Other Code.
 /// </remarks>
 public partial class FrameworkScanTests
 {
@@ -64,8 +65,9 @@ public partial class FrameworkScanTests
         }
 
         // A member whose own object may reach code outside the family of its class has a 'clones' line, which says that it hands the object
-        // on, or is named in section 16 of the evidence, which says why it does not. A member of a class whose line does not say
-        // 'clones=complete' needs neither: every member of it that no line names counts as one that can clone.
+        // on, or is named in the evidence section 'Members Whose Own Object Reaches Other Code', which says why it does not. A member of a
+        // class whose line does not say 'clones=complete' needs neither: every member of it that no line names counts as one that can
+        // clone.
         var complete = ReadCompleteClasses();
         var roots = FindCompleteRoots(scan, complete, cloningClasses);
         var handing = scan.FindMembersThatHandOnTheirObject(roots);
@@ -84,7 +86,7 @@ public partial class FrameworkScanTests
                 unjudged.Add($"{member.TypeName}.{member.Name}: {explained}");
         }
 
-        Assert.IsEmpty(unjudged, "The object of these members may reach code outside the family of their class, and they have neither a 'clones' line nor an entry in section 16 of NonCopyableSymbols.evidence.md:\n" + string.Join("\n", unjudged));
+        Assert.IsEmpty(unjudged, "The object of these members may reach code outside the family of their class, and they have neither a 'clones' line nor an entry in the section 'Members Whose Own Object Reaches Other Code' of NonCopyableSymbols.evidence.md:\n" + string.Join("\n", unjudged));
 
         Assert.IsTrue(members.Any(m => m is { TypeName: "System.Globalization.CultureInfo", Name: "Clone" }), "The scan finds the clone of CultureInfo.");
         Assert.IsTrue(members.Any(m => m is { TypeName: "System.Globalization.CultureInfo", Name: "ReadOnly" }), "The scan finds that CultureInfo.ReadOnly clones what it is given.");
@@ -119,8 +121,8 @@ public partial class FrameworkScanTests
             Assert.IsFalse(complete.Contains(xml), $"{xml} is left without 'clones=complete': the members of the Xml classes were not analyzed.");
     }
 
-    // The members that section 16 of the evidence names, as `Stroke.OnInvalidated`, or `new PrinterSettings()` for the constructors of a
-    // class: one name covers every overload.
+    // The members that the evidence section 'Members Whose Own Object Reaches Other Code' names, as `Stroke.OnInvalidated`, or
+    // `new PrinterSettings()` for the constructors of a class: one name covers every overload.
     private static HashSet<string> ReadHandOnEvidence()
     {
         string? repository = null;
@@ -133,8 +135,8 @@ public partial class FrameworkScanTests
 
         Assert.IsNotNull(repository, "No repository above the test assembly.");
         string text = File.ReadAllText(Path.Combine(repository, "Source", "Singulink.CodeAnalysis.Analyzers", "NonCopyableSymbols.evidence.md"));
-        int start = text.IndexOf("\n## 16.", StringComparison.Ordinal);
-        Assert.IsGreaterThanOrEqualTo(0, start, "The evidence has no section 16.");
+        int start = text.IndexOf("\n## Members Whose Own Object Reaches Other Code", StringComparison.Ordinal);
+        Assert.IsGreaterThanOrEqualTo(0, start, "The evidence has no section 'Members Whose Own Object Reaches Other Code'.");
         int end = text.IndexOf("\n## ", start + 1, StringComparison.Ordinal);
         string section = end < 0 ? text[start..] : text[start..end];
 

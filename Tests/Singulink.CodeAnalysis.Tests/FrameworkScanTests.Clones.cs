@@ -11,7 +11,7 @@ namespace Singulink.CodeAnalysis.Tests;
 /// a base class.
 /// </summary>
 /// <remarks>
-/// Docs: articles/rules/framework-symbol-list.md and NonCopyableSymbols.evidence.md, section 14.
+/// Docs: articles/rules/framework-symbol-list.md and NonCopyableSymbols.evidence.md, Classes That Clone Themselves.
 /// </remarks>
 public partial class FrameworkScanTests
 {

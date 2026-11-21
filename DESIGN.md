@@ -368,7 +368,7 @@ entry was read in the runtime's source, and the evidence is in
 [NonCopyableSymbols.evidence.md](Source/Singulink.CodeAnalysis.Analyzers/NonCopyableSymbols.evidence.md), beside the list. The criterion is
 the one of the principles: a member is on the list only if it makes no copy other than the value that it hands out. Members of
 `Unsafe`, `MemoryMarshal` and the other marshal classes are on the list for that one fact. The analyzer guarantees nothing about code
-that uses them to do what the language otherwise rules out (see section 8 of the evidence file).
+that uses them to do what the language otherwise rules out (see "Members That Make Read-only Storage Writable" in the evidence file).
 
 The scope of the list was chosen by who uses non-copyable structs. They are a low-level tool: in nearly all code a guard is a local or a
 field, and sometimes an array element reached through a span. So the list covers thoroughly what such code uses (spans, memory, arrays,
@@ -571,7 +571,7 @@ statement:
   can go, for the classes whose line says `clones=complete` and the classes that derive from them, to a fixed point: stored in a field, a static or an element, given to a method with no
   body to read (a delegate's `Invoke`, the constructor of a delegate that captures it), or given, other than as the object that the call
   is made on, to a virtual method that an application can override. Each member that it flags has a `clones` line or an entry in
-  section 16 of NonCopyableSymbols.evidence.md that says why it hands nothing on, and the test fails for one with neither. Constructors
+  the section "Members Whose Own Object Reaches Other Code" of NonCopyableSymbols.evidence.md that says why it hands nothing on, and the test fails for one with neither. Constructors
   are followed too, for an object that one stores in another object that a member hands out: the constructor of `PrinterSettings` stores
   the object in the `PageSettings` of `DefaultPageSettings`, whose `PrinterSettings` hands it back, so `DefaultPageSettings` has a
   `clones` line. The members of `Stroke` and `DrawingAttributes` that raise their events need no line: a handler gets the object only
@@ -655,7 +655,7 @@ statement:
 | A null-check helper that the analyzer knows by name | Replaced by `[NotNullRef]`, so that one rule holds for every reference and a project can write its own check |
 | Counting a string concatenation as running nothing | It can fail for long strings, and that failure can be caught |
 | Walking from a lambda's graph into the graph of the method around it | The method's `try` is not around the lambda's body. It also made the analyzer fail with an exception on a lambda inside a `foreach`, which left the rest of the member unchecked |
-| Taking the members that make read-only storage writable off the list | The list says of a member only that it makes no copy. Section 8 of the evidence file has the reasoning |
+| Taking the members that make read-only storage writable off the list | The list says of a member only that it makes no copy. "Members That Make Read-only Storage Writable" in the evidence file has the reasoning |
 | A `borrows` entry for the explicit conversion of `Nullable<T>` | It would also let a stored nullable of a non-copyable type be passed by value |
 | Reporting every class that holds a non-copyable value and derives from a base class of unchecked code | It would hit every stream or form that holds a pooled buffer. A `clones` line names the classes that clone themselves instead; see [Classes That Clone Themselves](#classes-that-clone-themselves) |
 | The built-in types on in every project | A library would bring warnings about its users' own `GCHandle` code |
