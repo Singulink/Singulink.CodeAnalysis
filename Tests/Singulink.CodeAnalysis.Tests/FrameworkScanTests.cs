@@ -231,9 +231,9 @@ public partial class FrameworkScanTests
                 continue;
 
             string? best = Directory.GetDirectories(root)
-                .Select(directory => (directory, parsed: Version.TryParse(Path.GetFileName(directory).Split('-')[0], out var v) ? v : null))
-                .Where(candidate => candidate.parsed is { } v && v.Major == version.Major)
-                .OrderByDescending(candidate => candidate.parsed)
+                .Select(directory => (directory, Parsed: Version.TryParse(Path.GetFileName(directory).Split('-')[0], out var v) ? v : null))
+                .Where(candidate => candidate.Parsed is { } v && v.Major == version.Major)
+                .OrderByDescending(candidate => candidate.Parsed)
                 .Select(candidate => candidate.directory)
                 .FirstOrDefault();
 

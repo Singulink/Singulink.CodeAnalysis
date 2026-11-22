@@ -657,10 +657,12 @@ public class SafeListTests
         foreach (string article in articles)
             Assert.Contains(article, ids, $"The article {article}.md in Docs/articles/diagnostics is not the article of a diagnostic.");
 
-        string[] listed = [.. File.ReadAllLines(Path.Combine(folder, "toc.yml"))
+        var hrefs = File.ReadAllLines(Path.Combine(folder, "toc.yml"))
             .Select(line => line.Trim())
             .Where(line => line.StartsWith("href:", StringComparison.Ordinal))
-            .Select(line => line["href:".Length..].Trim())];
+            .Select(line => line["href:".Length..].Trim());
+
+        string[] listed = [.. hrefs];
 
         CollectionAssert.AreEqual(ids.Select(id => id + ".md").ToArray(), listed, "The toc.yml of the diagnostics lists every article once, in order of ID.");
 

@@ -210,8 +210,8 @@ public sealed partial class DoNotCopyValueAnalyzer
             return current.Parent is IDeconstructionAssignmentOperation deconstruction &&
                 ReferenceEquals(deconstruction.Value, current) &&
                 FindGroup(graph, deconstruction, copiedTypes) is not null
-                ? deconstruction
-                : null;
+                    ? deconstruction
+                    : null;
         }
 
         /// <summary>
@@ -338,8 +338,8 @@ public sealed partial class DoNotCopyValueAnalyzer
                     // A struct that is created with no constructor of its own is all zeros.
                     return creation is { Type.IsValueType: true, Constructor.IsImplicitlyDeclared: true, Arguments.IsEmpty: true, Initializer: null } &&
                         !HasInitializers(creation.Type)
-                        ? null
-                        : Call;
+                            ? null
+                            : Call;
 
                 case IConversionOperation conversion:
                     return DescribeConversion(conversion);
@@ -366,8 +366,8 @@ public sealed partial class DoNotCopyValueAnalyzer
                     return binary.OperatorKind is BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals &&
                         (IsNull(binary.LeftOperand) || IsNull(binary.RightOperand) ||
                             (binary.LeftOperand.Type is { IsReferenceType: true } && binary.RightOperand.Type is { IsReferenceType: true }))
-                        ? null
-                        : Other;
+                                ? null
+                                : Other;
 
                 case IUnaryOperation unary:
                     if (unary.OperatorMethod is not null || IsDynamic(unary.Operand.Type))
@@ -377,8 +377,8 @@ public sealed partial class DoNotCopyValueAnalyzer
                     return !unary.IsChecked &&
                         IsSimple(unary.Operand.Type) &&
                         unary.OperatorKind is UnaryOperatorKind.Plus or UnaryOperatorKind.Minus or UnaryOperatorKind.BitwiseNegation or UnaryOperatorKind.Not
-                        ? null
-                        : Other;
+                            ? null
+                            : Other;
 
                 // The elements of a tuple literal are assigned one by one, each with a conversion of its own. A tuple in a variable is
                 // read element by element, with conversions that are no operations of their own unless the types are the same. Anything
@@ -439,8 +439,8 @@ public sealed partial class DoNotCopyValueAnalyzer
                         IsSimple(compound.Target.Type) &&
                         IsSimple(compound.Value.Type) &&
                         IsArithmeticThatCannotThrow(compound.OperatorKind)
-                        ? null
-                        : Other;
+                            ? null
+                            : Other;
 
                 case IIncrementOrDecrementOperation increment:
                     if (increment.OperatorMethod is not null || !IsPlainTarget(increment.Target) || IsDynamic(increment.Target.Type))

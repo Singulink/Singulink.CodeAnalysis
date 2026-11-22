@@ -6,12 +6,12 @@ using System.Reflection.PortableExecutable;
 
 namespace Singulink.CodeAnalysis.Tests;
 
-/// <summary>
+/// <content>
 /// Scans the IL of the shared frameworks for the members that clone an object of a class that clones itself, directly with
 /// MemberwiseClone or through other members, and for those whose own object reaches other code: every such member that code of another
 /// assembly can call needs a 'clones' line of its own, or for the second kind an entry in the evidence that says why it hands nothing on,
 /// since a member of such a class with no line is taken neither to clone the object that it is called on nor to hand it on.
-/// </summary>
+/// </content>
 /// <remarks>
 /// Docs: articles/rules/framework-symbol-list.md and NonCopyableSymbols.evidence.md, Classes That Clone Themselves and Members Whose Own
 /// Object Reaches Other Code.
@@ -367,12 +367,14 @@ public partial class FrameworkScanTests
             }
             while (_changed);
 
-            return [.. targets.Where(id => _clones[id] != 0).Select(id => {
+            var members = targets.Where(id => _clones[id] != 0).Select(id => {
                 var method = _methods[id];
                 var (kind, name) = method.IsSpecialName ? MemberOfMethod(method.Name) : ('M', method.Name);
                 string arguments = string.Join(",", Enumerable.Range(0, 64).Where(b => (_clones[id] & (1UL << b)) != 0));
                 return new CloningMember(method.Assembly, method.TypeName, name, method.IsStatic, kind, method.IsVisible, arguments);
-            })];
+            });
+
+            return [.. members];
 
             void AddReached(int id)
             {

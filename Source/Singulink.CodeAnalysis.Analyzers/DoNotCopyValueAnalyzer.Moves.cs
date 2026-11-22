@@ -50,9 +50,11 @@ public sealed partial class DoNotCopyValueAnalyzer
                 }
                 else if (NonCopyableTypes.ChangesMovedFrom(parameter, invoke.Parameters[i]))
                 {
-                    var rule = !isMarked ? Rules.MovedFromDropped
-                        : NonCopyableTypes.HasUncountedMovedFrom(invoke.Parameters[i]) ? Rules.MovedFromAddedOverUncheckedMark
-                        : Rules.MovedFromAdded;
+                    var rule = !isMarked
+                        ? Rules.MovedFromDropped
+                        : NonCopyableTypes.HasUncountedMovedFrom(invoke.Parameters[i])
+                            ? Rules.MovedFromAddedOverUncheckedMark
+                            : Rules.MovedFromAdded;
 
                     Report(
                         rule,

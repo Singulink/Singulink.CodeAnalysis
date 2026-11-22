@@ -471,8 +471,8 @@ public sealed partial class DoNotCopyValueAnalyzer
             {
                 var convertedType = valueType is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T } nullable &&
                     operation.Type is not INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T }
-                    ? nullable.TypeArguments[0]
-                    : valueType;
+                        ? nullable.TypeArguments[0]
+                        : valueType;
                 CheckConversionWithoutNode(operation.Value.Syntax, convertedType, operation.Type, IsNew(operation.Value));
             }
 

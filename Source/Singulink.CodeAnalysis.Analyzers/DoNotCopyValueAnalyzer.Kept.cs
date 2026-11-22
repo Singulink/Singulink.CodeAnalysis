@@ -648,8 +648,8 @@ public sealed partial class DoNotCopyValueAnalyzer
                     {
                         return NonCopyableTypes.IsMarkedKept(receiving) ||
                             (receiving.OriginalDefinition.Type is ITypeParameterSymbol formatted && NonCopyableTypes.IsMarkedNonCopyable(formatted))
-                            ? ParameterUse.Keeps
-                            : ParameterUse.Allowed;
+                                ? ParameterUse.Keeps
+                                : ParameterUse.Allowed;
                     }
 
                     // The parameter of an indexer is one of its accessors: of the setter where the indexer is assigned, which keeps

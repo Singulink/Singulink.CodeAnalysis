@@ -358,9 +358,11 @@ public sealed partial class DoNotCopyValueAnalyzer
                 case MemberUseKind.UnlistedNonCopyable:
                     // A type parameter that is marked in an assembly that was not built with the analyzer cannot be marked any better.
                     Report(
-                        types.IsCloningMember(use.Definition!) ? Rules.UnlistedMemberThatClones
-                            : NonCopyableTypes.HasUncountedNonCopyableMark(use.TypeParameter!) ? Rules.UnlistedMemberOfUncheckedCode
-                            : Rules.UnlistedMember,
+                        types.IsCloningMember(use.Definition!)
+                            ? Rules.UnlistedMemberThatClones
+                            : NonCopyableTypes.HasUncountedNonCopyableMark(use.TypeParameter!)
+                                ? Rules.UnlistedMemberOfUncheckedCode
+                                : Rules.UnlistedMember,
                         syntax,
                         Display(use.Definition!),
                         use.TypeArgument,
@@ -469,9 +471,11 @@ public sealed partial class DoNotCopyValueAnalyzer
                 return;
 
             // A member that clones its object copies what the container holds, whatever a symbol list file could say of it.
-            var rule = NonCopyableTypes.IsUntypedCollection(declaringType) ? Rules.UntypedCollectionMember
-                : types.IsCloningMember(definition) ? Rules.OpaqueMemberThatClones
-                : Rules.OpaqueMember;
+            var rule = NonCopyableTypes.IsUntypedCollection(declaringType)
+                ? Rules.UntypedCollectionMember
+                : types.IsCloningMember(definition)
+                    ? Rules.OpaqueMemberThatClones
+                    : Rules.OpaqueMember;
             Report(rule, syntax, receiverType, declaringType, Display(definition), GetListId(definition));
         }
 
@@ -1010,8 +1014,8 @@ public sealed partial class DoNotCopyValueAnalyzer
             return model.TryGetSpeculativeSemanticModel(position, initializer, out var inInitializer) &&
                 inInitializer is not null &&
                 initializer.DescendantNodes().OfType<ForEachStatementSyntax>().FirstOrDefault() is { } bound
-                ? inInitializer.GetForEachStatementInfo(bound)
-                : null;
+                    ? inInitializer.GetForEachStatementInfo(bound)
+                    : null;
         }
 
         /// <summary>

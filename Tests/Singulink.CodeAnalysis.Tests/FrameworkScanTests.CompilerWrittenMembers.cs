@@ -6,10 +6,10 @@ using Microsoft.CodeAnalysis.CSharp;
 
 namespace Singulink.CodeAnalysis.Tests;
 
-/// <summary>
+/// <content>
 /// Pins why the members that the compiler writes for a record or an anonymous type are not checked: they do nothing with the values of
 /// their members but call ToString, Equals and GetHashCode, and no member of that name of a framework class clones its object.
-/// </summary>
+/// </content>
 /// <remarks>
 /// Docs: DESIGN.md, the row of the code that the compiler writes for a record or an anonymous type.
 /// </remarks>

@@ -158,8 +158,8 @@ public sealed partial class DoNotCopyValueAnalyzer
                     // writable, and is not an operation of a kind that the tree names.
                     return fieldReference.Instance is { Type.IsValueType: true, Kind: not OperationKind.None } owner &&
                         Acquire(owner) is RefKind.RefReadOnly or RefKind.RefReadOnlyParameter
-                        ? RefKind.RefReadOnly
-                        : RefKind.Ref;
+                            ? RefKind.RefReadOnly
+                            : RefKind.Ref;
 
                 case OperationKind.ImplicitIndexerReference:
                     var implicitIndexer = (IImplicitIndexerReferenceOperation)operation;

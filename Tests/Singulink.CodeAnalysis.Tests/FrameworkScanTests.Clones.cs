@@ -5,11 +5,11 @@ using System.Reflection.PortableExecutable;
 
 namespace Singulink.CodeAnalysis.Tests;
 
-/// <summary>
+/// <content>
 /// Scans the IL of the shared frameworks that the tests run on for the classes whose own code clones an object with MemberwiseClone:
 /// every such class that a class of another assembly can derive from must have a 'clones' line in the built-in list, of its own or of
 /// a base class.
-/// </summary>
+/// </content>
 /// <remarks>
 /// Docs: articles/rules/framework-symbol-list.md and NonCopyableSymbols.evidence.md, Classes That Clone Themselves.
 /// </remarks>

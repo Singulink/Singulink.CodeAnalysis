@@ -2079,8 +2079,9 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
     /// lines by the warning of SCA1008 there. A plain 'clones' line for the class between changes neither.
     /// </summary>
     public bool AreCloningMembersKnown(INamedTypeSymbol declaring, INamedTypeSymbol cloning) =>
-        IsAtOrAbove(declaring, cloning) ? list.IsComplete(cloning.OriginalDefinition)
-        : list.IsComplete(declaring.OriginalDefinition) || (IsCoveredByLinesOf(declaring, cloning) && list.IsComplete(cloning.OriginalDefinition));
+        IsAtOrAbove(declaring, cloning)
+            ? list.IsComplete(cloning.OriginalDefinition)
+            : list.IsComplete(declaring.OriginalDefinition) || (IsCoveredByLinesOf(declaring, cloning) && list.IsComplete(cloning.OriginalDefinition));
 
     /// <summary>
     /// Gets a value indicating whether the line of the class that clones itself is what says whether the members of a class in its chain

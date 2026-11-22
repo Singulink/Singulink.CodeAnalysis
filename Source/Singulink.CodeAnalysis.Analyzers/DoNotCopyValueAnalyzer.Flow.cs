@@ -566,8 +566,8 @@ public sealed partial class DoNotCopyValueAnalyzer
             return current.Parent is ISimpleAssignmentOperation { IsRef: false } assignment &&
                 ReferenceEquals(assignment.Value, current) &&
                 assignment.Target is ILocalReferenceOperation or IParameterReferenceOperation or IFieldReferenceOperation or IArrayElementReferenceOperation
-                ? assignment
-                : null;
+                    ? assignment
+                    : null;
         }
 
         /// <summary>
@@ -1110,8 +1110,8 @@ public sealed partial class DoNotCopyValueAnalyzer
 
             return current.Parent is ISimpleAssignmentOperation { IsRef: false, Target: ILocalReferenceOperation { Local: { RefKind: RefKind.None } local } } assignment &&
                 ReferenceEquals(assignment.Value, current)
-                ? local
-                : null;
+                    ? local
+                    : null;
         }
 
         /// <summary>

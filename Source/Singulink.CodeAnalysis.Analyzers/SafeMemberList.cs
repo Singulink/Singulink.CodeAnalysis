@@ -520,8 +520,8 @@ internal sealed class SafeMemberList
         elementType = type is INamedTypeSymbol { TypeArguments: [var element], OriginalDefinition: var definition } &&
             (definition.SpecialType is SpecialType.System_Collections_Generic_IEnumerable_T ||
                 (definition is { Name: "IAsyncEnumerable", Arity: 1, ContainingType: null } && NonCopyableTypes.IsInNamespace(definition, "System.Collections.Generic")))
-            ? element
-            : null;
+                    ? element
+                    : null;
 
         return elementType is not null;
     }
