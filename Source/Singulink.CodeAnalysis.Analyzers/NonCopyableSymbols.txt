@@ -2,7 +2,7 @@
 # Format: one documentation-comment ID per line, with an optional marker (";new", ";borrows", ";drains", ";owned", ";view", ";noncopyable", ";copyable", ";erasable", ";clones" or ";clones=complete") and optional ";for=" type parameter names.
 # A symbol list file of a project can also vouch for an assembly, with a line of the form "A:Assembly.Name;trusted".
 # Runtime source read: dotnet/runtime d757c03be2c3. What in that source backs each entry is in NonCopyableSymbols.evidence.md beside this file.
-# A line ending in "# net9+", "# net10+" or "# net11+" names a member that exists from that version of .NET on. It does not resolve in a project that targets an earlier one.
+# A line ending in "# net11+" names a member that exists from .NET 11 on. It does not resolve in a project that targets .NET 10.
 #
 #
 # "borrows" also answers who keeps a container. A parameter whose type mentions a type parameter that is not marked is taken to
@@ -45,10 +45,10 @@ T:System.Runtime.CompilerServices.ConfiguredTaskAwaitable`1.ConfiguredTaskAwaite
 
 T:System.Threading.SpinLock;noncopyable
 T:System.Runtime.InteropServices.GCHandle;noncopyable
-T:System.Runtime.InteropServices.GCHandle`1;noncopyable  # net10+
-T:System.Runtime.InteropServices.PinnedGCHandle`1;noncopyable  # net10+
-T:System.Runtime.InteropServices.WeakGCHandle`1;noncopyable  # net10+
-T:System.Threading.Lock.Scope;noncopyable  # net9+
+T:System.Runtime.InteropServices.GCHandle`1;noncopyable
+T:System.Runtime.InteropServices.PinnedGCHandle`1;noncopyable
+T:System.Runtime.InteropServices.WeakGCHandle`1;noncopyable
+T:System.Threading.Lock.Scope;noncopyable
 T:System.Buffers.MemoryHandle;noncopyable
 T:System.Runtime.CompilerServices.DefaultInterpolatedStringHandler;noncopyable
 T:System.Threading.AsyncFlowControl;noncopyable
@@ -61,14 +61,14 @@ M:System.Runtime.InteropServices.GCHandle.Equals(System.Runtime.InteropServices.
 M:System.Runtime.InteropServices.GCHandle.op_Equality(System.Runtime.InteropServices.GCHandle,System.Runtime.InteropServices.GCHandle);borrows
 M:System.Runtime.InteropServices.GCHandle.op_Inequality(System.Runtime.InteropServices.GCHandle,System.Runtime.InteropServices.GCHandle);borrows
 M:System.Runtime.InteropServices.GCHandle.op_Explicit(System.Runtime.InteropServices.GCHandle)~System.IntPtr;borrows
-M:System.Runtime.InteropServices.GCHandle`1.ToIntPtr(System.Runtime.InteropServices.GCHandle{`0});borrows  # net10+
-M:System.Runtime.InteropServices.GCHandle`1.Equals(System.Runtime.InteropServices.GCHandle{`0});borrows  # net10+
-M:System.Runtime.InteropServices.PinnedGCHandle`1.ToIntPtr(System.Runtime.InteropServices.PinnedGCHandle{`0});borrows  # net10+
-M:System.Runtime.InteropServices.PinnedGCHandle`1.Equals(System.Runtime.InteropServices.PinnedGCHandle{`0});borrows  # net10+
-M:System.Runtime.InteropServices.WeakGCHandle`1.ToIntPtr(System.Runtime.InteropServices.WeakGCHandle{`0});borrows  # net10+
-M:System.Runtime.InteropServices.WeakGCHandle`1.Equals(System.Runtime.InteropServices.WeakGCHandle{`0});borrows  # net10+
-M:System.Runtime.InteropServices.GCHandleExtensions.GetAddressOfArrayData``1(System.Runtime.InteropServices.PinnedGCHandle{``0[]});borrows  # net10+
-M:System.Runtime.InteropServices.GCHandleExtensions.GetAddressOfStringData(System.Runtime.InteropServices.PinnedGCHandle{System.String});borrows  # net10+
+M:System.Runtime.InteropServices.GCHandle`1.ToIntPtr(System.Runtime.InteropServices.GCHandle{`0});borrows
+M:System.Runtime.InteropServices.GCHandle`1.Equals(System.Runtime.InteropServices.GCHandle{`0});borrows
+M:System.Runtime.InteropServices.PinnedGCHandle`1.ToIntPtr(System.Runtime.InteropServices.PinnedGCHandle{`0});borrows
+M:System.Runtime.InteropServices.PinnedGCHandle`1.Equals(System.Runtime.InteropServices.PinnedGCHandle{`0});borrows
+M:System.Runtime.InteropServices.WeakGCHandle`1.ToIntPtr(System.Runtime.InteropServices.WeakGCHandle{`0});borrows
+M:System.Runtime.InteropServices.WeakGCHandle`1.Equals(System.Runtime.InteropServices.WeakGCHandle{`0});borrows
+M:System.Runtime.InteropServices.GCHandleExtensions.GetAddressOfArrayData``1(System.Runtime.InteropServices.PinnedGCHandle{``0[]});borrows
+M:System.Runtime.InteropServices.GCHandleExtensions.GetAddressOfStringData(System.Runtime.InteropServices.PinnedGCHandle{System.String});borrows
 M:System.Threading.AsyncFlowControl.Equals(System.Threading.AsyncFlowControl);borrows
 M:System.Threading.AsyncFlowControl.op_Equality(System.Threading.AsyncFlowControl,System.Threading.AsyncFlowControl);borrows
 M:System.Threading.AsyncFlowControl.op_Inequality(System.Threading.AsyncFlowControl,System.Threading.AsyncFlowControl);borrows
@@ -88,11 +88,11 @@ M:System.Threading.AsyncFlowControl.op_Inequality(System.Threading.AsyncFlowCont
 #   as GCHandle.Free does.
 M:System.String.Create(System.IFormatProvider,System.Runtime.CompilerServices.DefaultInterpolatedStringHandler@);borrows
 M:System.String.Create(System.IFormatProvider,System.Span{System.Char},System.Runtime.CompilerServices.DefaultInterpolatedStringHandler@);borrows
-M:Microsoft.Extensions.Caching.Hybrid.HybridCache.GetOrCreateAsync``1(System.Runtime.CompilerServices.DefaultInterpolatedStringHandler@,System.Func{System.Threading.CancellationToken,System.Threading.Tasks.ValueTask{``0}},Microsoft.Extensions.Caching.Hybrid.HybridCacheEntryOptions,System.Collections.Generic.IEnumerable{System.String},System.Threading.CancellationToken);borrows  # net10+
-M:Microsoft.Extensions.Caching.Hybrid.HybridCache.GetOrCreateAsync``2(System.Runtime.CompilerServices.DefaultInterpolatedStringHandler@,``0,System.Func{``0,System.Threading.CancellationToken,System.Threading.Tasks.ValueTask{``1}},Microsoft.Extensions.Caching.Hybrid.HybridCacheEntryOptions,System.Collections.Generic.IEnumerable{System.String},System.Threading.CancellationToken);borrows  # net10+
+M:Microsoft.Extensions.Caching.Hybrid.HybridCache.GetOrCreateAsync``1(System.Runtime.CompilerServices.DefaultInterpolatedStringHandler@,System.Func{System.Threading.CancellationToken,System.Threading.Tasks.ValueTask{``0}},Microsoft.Extensions.Caching.Hybrid.HybridCacheEntryOptions,System.Collections.Generic.IEnumerable{System.String},System.Threading.CancellationToken);borrows
+M:Microsoft.Extensions.Caching.Hybrid.HybridCache.GetOrCreateAsync``2(System.Runtime.CompilerServices.DefaultInterpolatedStringHandler@,``0,System.Func{``0,System.Threading.CancellationToken,System.Threading.Tasks.ValueTask{``1}},Microsoft.Extensions.Caching.Hybrid.HybridCacheEntryOptions,System.Collections.Generic.IEnumerable{System.String},System.Threading.CancellationToken);borrows
 M:Microsoft.Extensions.Caching.Hybrid.HybridCache.GetOrCreateAsync``1(System.Runtime.CompilerServices.DefaultInterpolatedStringHandler@,System.Func{Microsoft.Extensions.Caching.Hybrid.HybridCacheEntryContext,System.Threading.CancellationToken,System.Threading.Tasks.ValueTask{``0}},Microsoft.Extensions.Caching.Hybrid.HybridCacheEntryOptions,System.Collections.Generic.IEnumerable{System.String},System.Threading.CancellationToken);borrows  # net11+
 M:Microsoft.Extensions.Caching.Hybrid.HybridCache.GetOrCreateAsync``2(System.Runtime.CompilerServices.DefaultInterpolatedStringHandler@,``0,System.Func{``0,Microsoft.Extensions.Caching.Hybrid.HybridCacheEntryContext,System.Threading.CancellationToken,System.Threading.Tasks.ValueTask{``1}},Microsoft.Extensions.Caching.Hybrid.HybridCacheEntryOptions,System.Collections.Generic.IEnumerable{System.String},System.Threading.CancellationToken);borrows  # net11+
-M:System.Runtime.InteropServices.Java.JavaMarshal.FinishCrossReferenceProcessing(System.Runtime.InteropServices.Java.MarkCrossReferencesArgs*,System.ReadOnlySpan{System.Runtime.InteropServices.GCHandle});borrows  # net10+
+M:System.Runtime.InteropServices.Java.JavaMarshal.FinishCrossReferenceProcessing(System.Runtime.InteropServices.Java.MarkCrossReferencesArgs*,System.ReadOnlySpan{System.Runtime.InteropServices.GCHandle});borrows
 
 # ============================================================================
 # Erasable types: no base type or interface hands out a value of the type arguments
@@ -422,14 +422,14 @@ M:System.Runtime.InteropServices.MemoryMarshal.CreateFromPinnedArray``1(``0[],Sy
 # System.Runtime.InteropServices.CollectionsMarshal
 M:System.Runtime.InteropServices.CollectionsMarshal.AsSpan``1(System.Collections.Generic.List{``0})
 M:System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrNullRef``2(System.Collections.Generic.Dictionary{``0,``1},``0);for=TValue
-M:System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrNullRef``3(System.Collections.Generic.Dictionary{``0,``1}.AlternateLookup{``2},``2);for=TValue  # net9+
+M:System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrNullRef``3(System.Collections.Generic.Dictionary{``0,``1}.AlternateLookup{``2},``2);for=TValue
 M:System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault``2(System.Collections.Generic.Dictionary{``0,``1},``0,System.Boolean@);for=TValue
-M:System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault``3(System.Collections.Generic.Dictionary{``0,``1}.AlternateLookup{``2},``2,System.Boolean@);for=TValue  # net9+
+M:System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault``3(System.Collections.Generic.Dictionary{``0,``1}.AlternateLookup{``2},``2,System.Boolean@);for=TValue
 
 # System.Runtime.InteropServices.ImmutableCollectionsMarshal
 M:System.Runtime.InteropServices.ImmutableCollectionsMarshal.AsImmutableArray``1(``0[])
 M:System.Runtime.InteropServices.ImmutableCollectionsMarshal.AsArray``1(System.Collections.Immutable.ImmutableArray{``0})
-M:System.Runtime.InteropServices.ImmutableCollectionsMarshal.AsMemory``1(System.Collections.Immutable.ImmutableArray{``0}.Builder)  # net10+
+M:System.Runtime.InteropServices.ImmutableCollectionsMarshal.AsMemory``1(System.Collections.Immutable.ImmutableArray{``0}.Builder)
 
 # System.Runtime.InteropServices.SequenceMarshal
 M:System.Runtime.InteropServices.SequenceMarshal.TryGetReadOnlySequenceSegment``1(System.Buffers.ReadOnlySequence{``0},System.Buffers.ReadOnlySequenceSegment{``0}@,System.Int32@,System.Buffers.ReadOnlySequenceSegment{``0}@,System.Int32@)
@@ -1050,23 +1050,23 @@ M:System.Threading.Tasks.Task.Dispose
 # Task.WhenAll, WhenAny, WaitAll, WaitAny (the overloads that take non-generic tasks)
 M:System.Threading.Tasks.Task.WhenAll(System.Threading.Tasks.Task[])
 M:System.Threading.Tasks.Task.WhenAll(System.Collections.Generic.IEnumerable{System.Threading.Tasks.Task})
-M:System.Threading.Tasks.Task.WhenAll(System.ReadOnlySpan{System.Threading.Tasks.Task})  # net9+
+M:System.Threading.Tasks.Task.WhenAll(System.ReadOnlySpan{System.Threading.Tasks.Task})
 M:System.Threading.Tasks.Task.WhenAny(System.Threading.Tasks.Task[])
 M:System.Threading.Tasks.Task.WhenAny(System.Threading.Tasks.Task,System.Threading.Tasks.Task)
 M:System.Threading.Tasks.Task.WhenAny(System.Collections.Generic.IEnumerable{System.Threading.Tasks.Task})
-M:System.Threading.Tasks.Task.WhenAny(System.ReadOnlySpan{System.Threading.Tasks.Task})  # net9+
+M:System.Threading.Tasks.Task.WhenAny(System.ReadOnlySpan{System.Threading.Tasks.Task})
 # The generic WhenAny returns one of the tasks that it is given and copies no result, so what it hands out follows its inputs.
 M:System.Threading.Tasks.Task.WhenAny``1(System.Threading.Tasks.Task{``0}[])
 M:System.Threading.Tasks.Task.WhenAny``1(System.Threading.Tasks.Task{``0},System.Threading.Tasks.Task{``0})
 M:System.Threading.Tasks.Task.WhenAny``1(System.Collections.Generic.IEnumerable{System.Threading.Tasks.Task{``0}})
-M:System.Threading.Tasks.Task.WhenAny``1(System.ReadOnlySpan{System.Threading.Tasks.Task{``0}})  # net9+
+M:System.Threading.Tasks.Task.WhenAny``1(System.ReadOnlySpan{System.Threading.Tasks.Task{``0}})
 M:System.Threading.Tasks.Task.WaitAll(System.Threading.Tasks.Task[]);borrows
-M:System.Threading.Tasks.Task.WaitAll(System.ReadOnlySpan{System.Threading.Tasks.Task})  # net9+
+M:System.Threading.Tasks.Task.WaitAll(System.ReadOnlySpan{System.Threading.Tasks.Task})
 M:System.Threading.Tasks.Task.WaitAll(System.Threading.Tasks.Task[],System.TimeSpan)
 M:System.Threading.Tasks.Task.WaitAll(System.Threading.Tasks.Task[],System.Int32)
 M:System.Threading.Tasks.Task.WaitAll(System.Threading.Tasks.Task[],System.Threading.CancellationToken)
 M:System.Threading.Tasks.Task.WaitAll(System.Threading.Tasks.Task[],System.Int32,System.Threading.CancellationToken)
-M:System.Threading.Tasks.Task.WaitAll(System.Collections.Generic.IEnumerable{System.Threading.Tasks.Task},System.Threading.CancellationToken);borrows  # net9+
+M:System.Threading.Tasks.Task.WaitAll(System.Collections.Generic.IEnumerable{System.Threading.Tasks.Task},System.Threading.CancellationToken);borrows
 M:System.Threading.Tasks.Task.WaitAny(System.Threading.Tasks.Task[]);borrows
 M:System.Threading.Tasks.Task.WaitAny(System.Threading.Tasks.Task[],System.TimeSpan)
 M:System.Threading.Tasks.Task.WaitAny(System.Threading.Tasks.Task[],System.Threading.CancellationToken)

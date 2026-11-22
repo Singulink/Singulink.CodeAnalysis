@@ -180,11 +180,18 @@ public sealed partial class DoNotCopyValueAnalyzer
                     };
 
                 case OperationKind.InstanceReference:
-                    // The object that an initializer fills has just been created.
-                    if (((IInstanceReferenceOperation)operation).ReferenceKind is InstanceReferenceKind.ImplicitReceiver)
-                        return RefKind.None;
+                    return ((IInstanceReferenceOperation)operation).ReferenceKind switch {
+                        // The object that an initializer fills has just been created.
+                        InstanceReferenceKind.ImplicitReceiver => RefKind.None,
 
-                    return IsReadOnly(context.OwningSymbol) ? RefKind.RefReadOnly : RefKind.Ref;
+                        // 'this', which a readonly member and a member of a readonly struct cannot write to.
+                        InstanceReferenceKind.ContainingTypeInstance => IsReadOnly(context.OwningSymbol) ? RefKind.RefReadOnly : RefKind.Ref,
+
+                        // A place of the compiler's own that only stands where 'this' would: the handler that an interpolated string is
+                        // built in, and the temporary that a pattern reads from. Neither is 'this', so whether the member around it may
+                        // write to 'this' says nothing about it, and the compiler runs members on it in place.
+                        _ => RefKind.Ref,
+                    };
 
                 case OperationKind.Invocation:
                     var invocation = (IInvocationOperation)operation;

@@ -36,7 +36,7 @@ The build files of the package add an assembly attribute to every project that r
 - **A project with `GenerateAssemblyInfo` set to `false`** gets nothing from the item that the package adds, and writes the attribute itself, with the version of the analyzers that it is built with as the value:
 
   ```cs
-  [assembly: System.Reflection.AssemblyMetadata("Singulink.CodeAnalysis.Analyzed", "0.7.4")]
+  [assembly: System.Reflection.AssemblyMetadata("Singulink.CodeAnalysis.Analyzed", "0.7.5")]
   ```
 
   The line is only for such a project. A project that generates its assembly info gets the line from the package, and must not write it as well: the assembly would then carry two markers.

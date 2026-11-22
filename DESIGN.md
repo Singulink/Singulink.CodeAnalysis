@@ -829,8 +829,7 @@ in order of ID.
 
 1. Read the member in the runtime's source, and write what shows that it makes no copy in
    [NonCopyableSymbols.evidence.md](Source/Singulink.CodeAnalysis.Analyzers/NonCopyableSymbols.evidence.md).
-2. Add the line to `NonCopyableSymbols.txt`. A member that exists only from some version of .NET on gets a trailing comment such as
-   `# net10+`.
+2. Add the line to `NonCopyableSymbols.txt`. A member that exists only from .NET 11 on gets the trailing comment `# net11+`.
 3. Run the tests on both targets: `FrameworkScanTests` checks the members that reach the ten built-in types against the runtime that
    the tests run on.
 4. Update [Built-in Framework Symbol List](Docs/articles/rules/framework-symbol-list.md) where the change is one that a user would

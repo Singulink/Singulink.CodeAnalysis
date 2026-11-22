@@ -227,6 +227,86 @@ public class CompilerCopyTests
         Verify.ValuePassedTwice(1, "Flag", "'operator true' and then to 'Flag.operator |(Flag, Flag)' or on as the result"));
 
     [TestMethod]
+    public Task Handler_InAReadOnlyMember_RunsItsMembersInPlace() => Verify.AnalyzerAsync(
+        """
+        using System.Globalization;
+        using System.Runtime.CompilerServices;
+        using Singulink.CodeAnalysis;
+
+        [InterpolatedStringHandler]
+        [NonCopyable]
+        ref struct Message
+        {
+            public Message(int literalLength, int formattedCount) { }
+
+            public void AppendLiteral(string text) { }
+
+            public void AppendFormatted<T>(T value) { }
+        }
+
+        static class Log
+        {
+            public static void Write(Message message) { }
+        }
+
+        // The handler that the compiler builds an interpolated string in is a temporary of its own and not 'this', so its members run
+        // on it in place, whatever the member around it may write to.
+        readonly record struct Cursor(long Since, long After)
+        {
+            public override string ToString() => string.Create(CultureInfo.InvariantCulture, $"{Since}-{After}");
+
+            public string Padded() => string.Create(CultureInfo.InvariantCulture, stackalloc char[64], $"{Since,8}-{After:X}");
+
+            public void Write() => Log.Write($"{Since}-{After}");
+        }
+
+        struct Counter
+        {
+            public long Count;
+
+            public readonly string Text() => string.Create(CultureInfo.InvariantCulture, $"count {Count}");
+
+            public readonly void Write() => Log.Write($"count {Count}");
+
+            public string TextOfAMemberThatWrites() => string.Create(CultureInfo.InvariantCulture, $"count {++Count}");
+        }
+
+        sealed class Holder
+        {
+            public long Count;
+
+            public string Text() => string.Create(CultureInfo.InvariantCulture, $"count {Count}");
+
+            public void Write() => Log.Write($"count {Count}");
+        }
+        """);
+
+    [TestMethod]
+    public Task Pattern_InAReadOnlyMember_IsJudgedAsInAnyOtherMember() => Verify.AnalyzerAsync(
+        """
+        using Singulink.CodeAnalysis;
+
+        [NonCopyable]
+        struct Flag
+        {
+            private int _reads;
+
+            public bool IsSet => ++_reads > 0;
+        }
+
+        // What a pattern reads from is a temporary of the compiler's and not 'this'. The copy is reported, in the same way in both
+        // members, and the getter is not reported again as one that runs on a copy.
+        struct Holder
+        {
+            public readonly bool ReadOnlyMember(ref Flag flag) => flag is {|#0:{ IsSet: true }|};
+
+            public bool OtherMember(ref Flag flag) => flag is {|#1:{ IsSet: true }|};
+        }
+        """,
+        Verify.CopyOfStoredValue(0, "The pattern reads from", "Flag"),
+        Verify.CopyOfStoredValue(1, "The pattern reads from", "Flag"));
+
+    [TestMethod]
     public Task Handler_AnArgumentThatTheHandlerAlsoReceivesIsPassedTwice() => Verify.AnalyzerAsync(
         $$"""
         using System.Runtime.CompilerServices;
