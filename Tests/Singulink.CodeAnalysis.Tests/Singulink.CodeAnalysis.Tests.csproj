@@ -26,5 +26,8 @@
     <PackageReference Include="PrefixClassName.MsTest" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" />
+
+    <!-- Replaces the vulnerable version that Analyzer.Testing depends on: see Directory.Packages.props. -->
+    <PackageReference Include="System.Security.Cryptography.Pkcs" />
   </ItemGroup>
 </Project>
