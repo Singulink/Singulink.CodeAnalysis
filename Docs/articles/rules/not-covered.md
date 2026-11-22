@@ -14,7 +14,7 @@ A few cases are left, and none of them comes up in ordinary code. Each either ca
 | [Live views and value task sources](#apis-used-against-their-documentation) | Only if you ignore the API's documentation | Follow the documentation, as you would without the analyzers |
 | [A suppressed warning, a wrong symbol list entry, a `trusted` line](#what-you-vouched-for) | Only where you vouched for something | Vouch only for what you know to be true |
 | [Code that was built without the analyzers](#code-built-without-the-analyzers) | Only if a library was built without the analyzers and you vouched for it | Answer SCA1025 once, where it appears |
-| [Interceptors, an override that clones, and a framework or compiler newer than the tested ones](#rare-corners) | Rare | Know that the rules judge the method that is written at the call |
+| [Interceptors, and a framework or compiler newer than the tested ones](#rare-corners) | Rare | Know that the rules judge the method that is written at the call |
 
 ## Code That Steps Outside the Language's Safety
 
@@ -125,18 +125,6 @@ One thing is left, and it is small: a value that you pass by value belongs to th
 #### Interceptors
 
 A method with `[InterceptsLocation]` replaces the method that a call binds to after the analyzer has looked at the call. Every rule that goes by the method that is called judges the method that is written at the call: a `[NotNullRef]` parameter, <xref:Singulink.CodeAnalysis.NonCopyable.Move*?displayProperty=nameWithType>, `[Kept]` and the [symbol list](symbol-list-format.md).
-
-#### Overrides That Clone
-
-A symbol list line for a member says what that member's own code does. The analyzer does not follow a member of a base class into an override that a class below it adds. So where a class overrides a member with one that clones its object, a base class member that calls the overridden member runs the clone, and its use gets no warning:
-
-```cs
-// A library's culture class overrides NumberFormat with a getter that clones the culture, and a 'clones' line names the override
-var format = culture.NumberFormat;                            // SCA1009: the line says that the override clones
-var same = culture.GetFormat(typeof(NumberFormatInfo));       // no warning: CultureInfo.GetFormat reads NumberFormat, and so runs the override
-```
-
-A use of the override itself gets its warning. Do not clone the object in an override of a member that its base class calls. Where a library does, treat the base class members that run the override as members that clone.
 
 #### Newer Frameworks
 

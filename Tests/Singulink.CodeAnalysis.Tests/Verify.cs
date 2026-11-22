@@ -427,6 +427,36 @@ internal static class Verify
         $"file if the member neither clones the object nor hands it on, or add '{declaringId};clones=complete' to one once the 'clones' lines " +
         $"of '{declaringType}' name every member that clones the object or hands it on.");
 
+    public static DiagnosticResult CloningUseRunsMemberThatClones(int location, string member, string receiver, string below, string declaringType, string boundType, string boundTo) => Diagnostic(
+        DiagnosticIds.CloningBase,
+        location,
+        $"'{member}' is a member of '{declaringType}', whose code can run '{below}' on the object of '{receiver}', itself or through another " +
+        $"member that it runs: '{below}' is an override, or implements a member of an interface, in a class below '{declaringType}', and its " +
+        $"'clones' line says that it clones the object or hands it to code that can. A clone copies the non-copyable '{boundType}' that is " +
+        $"bound to a type parameter of '{boundTo}', and no line of a symbol list file can vouch for the use. Bind a class that refers to the " +
+        "value instead, which a clone shares, or avoid the use.");
+
+    public static DiagnosticResult CloningUseRunsOverrideOfCloningClass(int location, string member, string receiver, string below, string declaringType, string boundType, string boundTo, string id) => Diagnostic(
+        DiagnosticIds.CloningBase,
+        location,
+        $"'{member}' is a member of '{declaringType}', whose code can run '{below}' on the object of '{receiver}', itself or through another " +
+        $"member that it runs: '{below}' overrides a member that '{declaringType}' has or inherits, and its 'clones' line says that it clones " +
+        $"the object or hands it to code that can. A clone copies the non-copyable '{boundType}' that is bound to a type parameter of " +
+        $"'{boundTo}'. Bind a class that refers to the value instead, which a clone shares, add '{id};clones' to a NonCopyableSymbols.txt " +
+        $"file if the member runs it, or add '{id}' if it neither clones the object nor hands it on.");
+
+    public static DiagnosticResult CloningUseRunsUnknownMember(int location, string member, string receiver, string below, string belowClass, string declaringType, string cloning, string boundType, string boundTo, string id, string belowClassId) => Diagnostic(
+        DiagnosticIds.CloningBase,
+        location,
+        $"'{member}' is a member of '{declaringType}', whose code can run '{below}' on the object of '{receiver}', itself or through another " +
+        $"member that it runs: '{below}' is an override, or implements a member of an interface, in '{belowClass}', a class below " +
+        $"'{declaringType}' of an assembly that was not built with the analyzers and that no line that says 'clones=complete' covers, so it " +
+        $"can clone the object. The own code of '{cloning}' clones its objects " +
+        $"field by field with MemberwiseClone, and a clone copies the non-copyable '{boundType}' that is bound to a type parameter of " +
+        $"'{boundTo}'. Bind a class that refers to the value instead, which a clone shares, add '{id}' to a NonCopyableSymbols.txt file if " +
+        $"that member neither clones the object nor hands it on, or add '{belowClassId};clones=complete' to one once the 'clones' lines of " +
+        $"'{belowClass}' name every member that clones the object or hands it on.");
+
     public static DiagnosticResult MemberClonesWithoutLine(int location, string member, string through, string type, string id, string? cloningOfLibrary = null, string? cloningId = null) => Diagnostic(
         DiagnosticIds.MemberwiseCloneOfOpenClass,
         location,

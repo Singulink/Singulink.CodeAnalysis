@@ -197,7 +197,7 @@ A use of a member marked `clones` gets a warning with no advice to add a line, b
 
 Take a use of a member that no line names, on an object whose class binds a non-copyable type. It gets a warning unless the class's line says `clones=complete`. With `clones=complete`, it gets a warning only where the member's signature shows that it can hand the object on: see [Uses](../diagnostics/sca1009.md#uses).
 
-A member line names a member that another assembly can call, and that clones the object or hands it on directly or through another member. A private or internal member is not imported where the library is referenced, so a line for it has no effect there and gets SCA1042: name the member that calls it instead.
+A member line names a member that another assembly can call, and that clones the object or hands it on directly or through another member. A private or internal member is not imported where the library is referenced, so a line for it has no effect there and gets SCA1042: name the member that calls it instead. A `clones` line for an override also puts the warning on the members of its base class, which can run it: see [Overrides That a Base Class Runs](../diagnostics/sca1009.md#overrides-that-a-base-class-runs).
 
 A class can sit between the class that clones itself and the object's own class. Where it is of a library that was not built with the analyzers, it takes a type line of its own for its own members, such as ``T:Contoso.TaggedDocument`1;clones=complete``. The class above it already has a `clones` line, but this line is not redundant, so it gets no SCA1042 warning for having no effect.
 

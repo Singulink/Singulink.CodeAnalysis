@@ -339,7 +339,7 @@ internal sealed class SafeMemberList
     /// repeats one of the built-in list, or names a class whose base class is listed, has its effect already and is not reported, as a
     /// repeated line of any other marker is not.
     /// </summary>
-    public static string? GetWhyClonesHasNoEffect(SafeListEntry entry, Compilation compilation)
+    public static string? GetWhyClonesHasNoEffect(SafeListEntry entry, Compilation compilation, ICollection<string> clonesOfFiles)
     {
         var symbols = DocumentationCommentId.GetSymbolsForDeclarationId(entry.Id, compilation);
 
@@ -354,11 +354,24 @@ internal sealed class SafeMemberList
         if (classes.All(c => c.IsStatic))
             return "the class is static, so no class can derive from it";
 
-        // A sealed generic class can still be bound: a non-copyable type bound to it is cloned with the object.
-        if (classes.All(c => c.IsSealed && !IsGenericOrInGeneric(c)))
+        // A sealed generic class can still be bound: a non-copyable type bound to it is cloned with the object. A line that says
+        // 'clones=complete' for a sealed class below a class that clones itself speaks for the members of the class: its own members and
+        // its overrides are judged by it.
+        if (classes.All(c => c.IsSealed && !IsGenericOrInGeneric(c) && !(entry.IsComplete && IsBelowClonesClass(c))))
             return "the class is sealed and not generic, so no class can derive from it and no type can be bound to it";
 
         return null;
+
+        bool IsBelowClonesClass(INamedTypeSymbol type)
+        {
+            for (var current = type.BaseType; current is not null; current = current.BaseType)
+            {
+                if (current.OriginalDefinition.GetDocumentationCommentId() is { } id && (clonesOfFiles.Contains(id) || s_builtInClones.Value.Contains(id)))
+                    return true;
+            }
+
+            return false;
+        }
     }
 
     /// <summary>

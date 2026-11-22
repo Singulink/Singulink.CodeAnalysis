@@ -213,6 +213,29 @@ internal static class Rules
         "object nor hands it on, or add '{7};clones=complete' to one once the 'clones' lines of '{2}' name every member that clones the " +
         "object or hands it on.";
 
+    private const string CloningUseRunsMemberThatClonesMessage =
+        "'{0}' is a member of '{3}', whose code can run '{2}' on the object of '{1}', itself or through another member that it runs: '{2}' " +
+        "is an override, or implements a member of an interface, in a class below '{3}', and its 'clones' line says that it clones the " +
+        "object or hands it to code that can. A clone copies the non-copyable '{4}' that is bound to a type parameter of '{5}', and no " +
+        "line of a symbol list file can vouch for the use. Bind a class that refers to the value instead, which a clone shares, or avoid " +
+        "the use.";
+
+    private const string CloningUseRunsOverrideOfCloningClassMessage =
+        "'{0}' is a member of '{3}', whose code can run '{2}' on the object of '{1}', itself or through another member that it runs: '{2}' " +
+        "overrides a member that '{3}' has or inherits, and its 'clones' line says that it clones the object or hands it to code that can. " +
+        "A clone copies the non-copyable '{4}' that is bound to a type parameter of '{5}'. Bind a class that refers to the value instead, " +
+        "which a clone shares, add '{6};clones' to a NonCopyableSymbols.txt file if the member runs it, or add '{6}' if it neither clones " +
+        "the object nor hands it on.";
+
+    private const string CloningUseRunsUnknownMemberMessage =
+        "'{0}' is a member of '{4}', whose code can run '{2}' on the object of '{1}', itself or through another member that it runs: '{2}' " +
+        "is an override, or implements a member of an interface, in '{3}', a class below '{4}' of an assembly that was not built with the " +
+        "analyzers and that no line that says 'clones=complete' covers, so it can clone the object. The own code of '{5}' clones its " +
+        "objects field by field with MemberwiseClone, and a clone copies the " +
+        "non-copyable '{6}' that is bound to a type parameter of '{7}'. Bind a class that refers to the value instead, which a clone " +
+        "shares, add '{8}' to a NonCopyableSymbols.txt file if that member neither clones the object nor hands it on, or add " +
+        "'{9};clones=complete' to one once the 'clones' lines of '{3}' name every member that clones the object or hands it on.";
+
     private const string MemberClonesWithoutLineMessage =
         "'{0}' clones its object through '{1}', and an object of '{2}' can hold a non-copyable value that another project derives or " +
         "binds, where nothing shows the clone. Add '{3};clones' to the symbol list file that ships with the library, so that a call of " +
@@ -1028,6 +1051,24 @@ internal static class Rules
         CloningUseOfMemberOfUncoveredClassMessage,
         CloningBaseDescription);
 
+    public static readonly DiagnosticDescriptor CloningUseRunsMemberThatClones = Create(
+        DiagnosticIds.CloningBase,
+        CloningBaseTitle,
+        CloningUseRunsMemberThatClonesMessage,
+        CloningBaseDescription);
+
+    public static readonly DiagnosticDescriptor CloningUseRunsOverrideOfCloningClass = Create(
+        DiagnosticIds.CloningBase,
+        CloningBaseTitle,
+        CloningUseRunsOverrideOfCloningClassMessage,
+        CloningBaseDescription);
+
+    public static readonly DiagnosticDescriptor CloningUseRunsUnknownMember = Create(
+        DiagnosticIds.CloningBase,
+        CloningBaseTitle,
+        CloningUseRunsUnknownMemberMessage,
+        CloningBaseDescription);
+
     public static readonly DiagnosticDescriptor CloningUseOfUnknownMember = Create(
         DiagnosticIds.CloningBase,
         CloningBaseTitle,
@@ -1728,6 +1769,9 @@ internal static class Rules
         CloningUseHandsBack,
         CloningUseOfUnknownMember,
         CloningUseOfMemberOfUncoveredClass,
+        CloningUseRunsMemberThatClones,
+        CloningUseRunsOverrideOfCloningClass,
+        CloningUseRunsUnknownMember,
         MemberClonesWithoutLine,
         GetObjectValueCall,
         FieldOfCopyableType,

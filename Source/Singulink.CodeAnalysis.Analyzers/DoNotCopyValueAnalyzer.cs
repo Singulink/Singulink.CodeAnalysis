@@ -223,7 +223,7 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
                 Report(Rules.SafeListCopyableHasNoEffect, entry.Line, entry.Id, why);
             else if (SafeMemberList.GetAccessorOwnerId(entry, context.Compilation) is { } owner)
                 Report(Rules.SafeListNamesAccessor, entry.Line, entry.Id, owner);
-            else if (entry.Marker is SafeListMarker.Clones && SafeMemberList.GetWhyClonesHasNoEffect(entry, context.Compilation) is { } whyNot)
+            else if (entry.Marker is SafeListMarker.Clones && SafeMemberList.GetWhyClonesHasNoEffect(entry, context.Compilation, clonesOfFiles) is { } whyNot)
                 Report(Rules.SafeListClonesHasNoEffect, entry.Line, entry.Id, entry.Id[0] switch { 'T' => "a class that clones itself", 'E' => "an event that clones its object", _ => $"a {SafeMemberList.GetMemberKind(entry.Id)} that clones its object" }, whyNot);
             else if (entry.Marker is SafeListMarker.NeverClones && SafeMemberList.GetWhyNeverClonesHasNoEffect(entry, context.Compilation, clonesOfFiles) is { } whyNever)
                 Report(Rules.SafeListClonesHasNoEffect, entry.Line, entry.Id, "a class that never clones its objects", whyNever);

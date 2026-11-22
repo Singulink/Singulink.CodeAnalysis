@@ -23,7 +23,7 @@
     without it needs a list entry where it gets at a non-copyable value other than by value. A build that does not run analyzers does
     not get it. A project with GenerateAssemblyInfo false gets nothing from this item, and writes the attribute itself with the version
     of the analyzers that it is built with, such as:
-    [assembly: System.Reflection.AssemblyMetadata("Singulink.CodeAnalysis.Analyzed", "0.7.3")]
+    [assembly: System.Reflection.AssemblyMetadata("Singulink.CodeAnalysis.Analyzed", "0.7.4")]
     The version is the package's own: pack writes this file with it in place of the value below (see the project file).
   -->
   <ItemGroup Condition="'$(RunAnalyzers)' != 'false' and '$(RunAnalyzersDuringBuild)' != 'false'">

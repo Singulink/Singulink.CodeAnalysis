@@ -2090,6 +2090,243 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
     public bool IsJudgedByLineOf(INamedTypeSymbol declaring, INamedTypeSymbol cloning) =>
         IsAtOrAbove(declaring, cloning) || IsCoveredByLinesOf(declaring, cloning);
 
+    /// <summary>
+    /// Gets a member of a class below the class that declares a member, in the chain of an object's class, that the code of the
+    /// declaring class can run on the object and that can clone it. Null if there is none.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A line for a member says what the code of that member does, and that code can call a member of its own object that a class below
+    /// put in the place of one of its class: an override of a virtual member, or the member that implements a member of an interface
+    /// for the object, which the code reaches where it uses its object as the interface. The analyzer cannot tell which member calls
+    /// which, so a member of a base class is judged by every such member below its class. The code of a member that can be run can run
+    /// the members below its own class in turn, so the walk goes down from the declaring class, and each class that has a member which
+    /// can be run adds its own virtual members to what the classes below it can replace.
+    /// </para>
+    /// <para>
+    /// Such a member can clone the object where its 'clones' line says so, in any assembly. One with no line can where nothing says
+    /// what the members of its class do: the class is of an assembly that was not built with the analyzers, and no line that says
+    /// 'clones=complete' covers it. A line for the member itself, with no marker, says that it neither clones the object nor hands it
+    /// on.
+    /// </para>
+    /// <para>
+    /// Four things are left out. A member of the class that clones itself or of a class above it, which the lines of that class speak
+    /// for: they say what the members of those classes do with an object of it, where they run each other included. Such a member
+    /// still takes part in what the classes below can replace, and is the answer in one case only: it is an override that a 'clones'
+    /// line names, and the member that is used has no line of its own. The lines then say that the override clones and nothing of the
+    /// member that can run it, as with a template method whose step the class that clones itself overrides with a clone; a line for
+    /// the member says whether it runs the override. A member that takes the place of one that clones already: a member that
+    /// runs it counts as one that clones by the lines, by its own line or by what 'clones=complete' says of a member with none,
+    /// whatever stands in its place. A member of a class of the framework, which is never the answer either: the scan of the framework
+    /// followed the framework's own overrides. And everything where the declaring class is <see cref="object"/>, whose code calls no
+    /// member of its object that a class can replace.
+    /// </para>
+    /// </remarks>
+    /// <param name="receiver">The class of the object.</param>
+    /// <param name="declaring">The class that declares the member that is used.</param>
+    /// <param name="cloning">The class that clones itself.</param>
+    /// <param name="memberHasLine">Whether a line names the member that is used.</param>
+    /// <returns>The member, whether a 'clones' line names it, and whether it is of the class that clones itself or of a class above
+    /// it.</returns>
+    public (ISymbol Member, bool Clones, bool IsOfCloningClass)? FindMemberBelowThatCanClone(
+        INamedTypeSymbol receiver,
+        INamedTypeSymbol declaring,
+        INamedTypeSymbol cloning,
+        bool memberHasLine)
+    {
+        if (declaring.SpecialType is SpecialType.System_Object || declaring.TypeKind is not TypeKind.Class || !IsAtOrAbove(declaring, receiver))
+            return null;
+
+        var declaringDefinition = declaring.OriginalDefinition;
+        var below = new List<INamedTypeSymbol>();
+        var lowest = declaring;
+
+        for (var current = receiver; current is not null; current = current.BaseType)
+        {
+            if (SymbolEqualityComparer.Default.Equals(current.OriginalDefinition, declaringDefinition))
+            {
+                lowest = current;
+                break;
+            }
+
+            below.Add(current);
+        }
+
+        ISymbol? unknown = null;
+
+        // From the class below the declaring class down to the object's class. 'lowest' is the lowest class whose code can run.
+        for (int i = below.Count - 1; i >= 0; i--)
+        {
+            bool runs = false;
+
+            foreach (var member in GetMembersThatRunFor(below[i], lowest))
+            {
+                runs = true;
+
+                // A member of the framework only passes the call on.
+                if (member.ContainingType is not { } memberType || FrameworkAssemblies.Contains(memberType.ContainingAssembly))
+                    continue;
+
+                // So does one of the class that clones itself or of a class above it, but for an override that a 'clones' line names
+                // where no line says what the member that is used does.
+                if (IsAtOrAbove(memberType, cloning))
+                {
+                    if (!memberHasLine && IsCloningMember(member) && member is IMethodSymbol { IsOverride: true } or IPropertySymbol { IsOverride: true } or IEventSymbol { IsOverride: true })
+                        return (member, true, true);
+
+                    continue;
+                }
+
+                if (IsCloningMember(member))
+                    return (member, true, false);
+
+                bool known = SymbolEqualityComparer.Default.Equals(memberType.ContainingAssembly, compilationAssembly) ||
+                    AnalyzedAssemblies.IsAnalyzed(memberType.ContainingAssembly) ||
+                    AreCloningMembersKnown(memberType, cloning);
+
+                if (!known && unknown is null && !IsListed(member))
+                    unknown = member;
+            }
+
+            if (runs)
+                lowest = below[i];
+        }
+
+        return unknown is null ? null : (unknown, false, false);
+    }
+
+    // The members that a class puts in the place of members which the code of a class above it can call on its own object: the
+    // overrides of a member that the class above has or inherits, and the members that implement a member of an interface for the
+    // class where the class below it has another one or none. One that takes the place of a member that clones is left out.
+    private IEnumerable<ISymbol> GetMembersThatRunFor(INamedTypeSymbol type, INamedTypeSymbol lowest)
+    {
+        foreach (var member in type.GetMembers())
+        {
+            if (member is not (IMethodSymbol { IsOverride: true, MethodKind: MethodKind.Ordinary } or IPropertySymbol { IsOverride: true } or IEventSymbol { IsOverride: true }))
+                continue;
+
+            ISymbol? first = null;
+            bool replacesCloningMember = false;
+
+            for (var overridden = GetOverridden(member); overridden is not null; overridden = GetOverridden(overridden))
+            {
+                first = overridden;
+                replacesCloningMember |= IsCloningMember(overridden);
+            }
+
+            if (first?.ContainingType is { } firstType && IsAtOrAbove(firstType, lowest) && !replacesCloningMember)
+                yield return member;
+        }
+
+        // The code of a class can use its object as an interface that it does not implement itself, after a test of the object's type,
+        // so every interface of the class counts, and not only those of the class above.
+        foreach (var contract in type.AllInterfaces)
+        {
+            foreach (var contractMember in contract.GetMembers())
+            {
+                if (contractMember.IsStatic || contractMember is not (IMethodSymbol { MethodKind: MethodKind.Ordinary } or IPropertySymbol or IEventSymbol))
+                    continue;
+
+                var implementation = type.FindImplementationForInterfaceMember(contractMember);
+                var replaced = type.BaseType?.FindImplementationForInterfaceMember(contractMember);
+
+                if (replaced is not null && IsCloningMember(replaced))
+                    continue;
+
+                // In a compiled class, an explicit implementation can be one that the compiler wrote to hand the call on to a member that
+                // the class inherits, as it does where the class lists the interface again and a class between has a member that fits.
+                // What it does cannot be read, so the member that it would hand the call on to counts as well, and is named first. For
+                // a property or an event the compiler writes only the accessors, and the class then has no member that implements it.
+                bool isCompiled = type.DeclaringSyntaxReferences.IsEmpty;
+
+                if (isCompiled && (implementation is null ? HasAccessorOfItsOwn(type, contractMember) : IsOwnExplicitImplementation(type, implementation)) &&
+                    FindInheritedMemberThatFits(type, contractMember, lowest) is { } inherited &&
+                    !SymbolEqualityComparer.Default.Equals(replaced?.OriginalDefinition, inherited.OriginalDefinition))
+                {
+                    yield return inherited;
+                }
+
+                if (implementation?.ContainingType is not { } implementationType || SymbolEqualityComparer.Default.Equals(replaced?.OriginalDefinition, implementation.OriginalDefinition))
+                    continue;
+
+                // A member of the class above, or of a class above that one, is code that already runs.
+                if (implementationType.TypeKind is not TypeKind.Class || IsAtOrAbove(implementationType, lowest))
+                    continue;
+
+                yield return implementation;
+            }
+        }
+
+        static ISymbol? GetOverridden(ISymbol member) => member switch {
+            IMethodSymbol method => method.OverriddenMethod,
+            IPropertySymbol property => property.OverriddenProperty,
+            IEventSymbol @event => @event.OverriddenEvent,
+            _ => null,
+        };
+
+        static bool IsOwnExplicitImplementation(INamedTypeSymbol type, ISymbol member) =>
+            SymbolEqualityComparer.Default.Equals(member.ContainingType, type) && member switch {
+                IMethodSymbol method => !method.ExplicitInterfaceImplementations.IsEmpty,
+                IPropertySymbol property => !property.ExplicitInterfaceImplementations.IsEmpty,
+                IEventSymbol @event => !@event.ExplicitInterfaceImplementations.IsEmpty,
+                _ => false,
+            };
+
+        static bool HasAccessorOfItsOwn(INamedTypeSymbol type, ISymbol contractMember)
+        {
+            var accessors = contractMember switch {
+                IPropertySymbol property => (property.GetMethod, property.SetMethod),
+                IEventSymbol @event => (@event.AddMethod, @event.RemoveMethod),
+                _ => default((IMethodSymbol?, IMethodSymbol?)),
+            };
+
+            return IsOfType(accessors.Item1) || IsOfType(accessors.Item2);
+
+            bool IsOfType(IMethodSymbol? accessor) =>
+                accessor is not null && SymbolEqualityComparer.Default.Equals(type.FindImplementationForInterfaceMember(accessor)?.ContainingType, type);
+        }
+
+        static ISymbol? FindInheritedMemberThatFits(INamedTypeSymbol type, ISymbol contractMember, INamedTypeSymbol lowest)
+        {
+            var lowestDefinition = lowest.OriginalDefinition;
+
+            for (var current = type.BaseType; current is not null && !SymbolEqualityComparer.Default.Equals(current.OriginalDefinition, lowestDefinition); current = current.BaseType)
+            {
+                foreach (var candidate in current.GetMembers(contractMember.Name))
+                {
+                    if (candidate is { IsStatic: false, DeclaredAccessibility: Accessibility.Public } && Fits(candidate, contractMember))
+                        return candidate;
+                }
+            }
+
+            return null;
+        }
+
+        static bool Fits(ISymbol candidate, ISymbol contractMember) => (candidate, contractMember) switch {
+            (IMethodSymbol { MethodKind: MethodKind.Ordinary } method, IMethodSymbol contract) =>
+                method.Arity == contract.Arity && HaveSameTypes(method.Parameters, contract.Parameters, method.Arity > 0),
+            (IPropertySymbol property, IPropertySymbol contract) => HaveSameTypes(property.Parameters, contract.Parameters, isGeneric: false),
+            (IEventSymbol, IEventSymbol) => true,
+            _ => false,
+        };
+
+        // The parameters of a generic method name its own type parameters, which are not those of the interface's method, so only their
+        // number is compared there.
+        static bool HaveSameTypes(ImmutableArray<IParameterSymbol> parameters, ImmutableArray<IParameterSymbol> contract, bool isGeneric)
+        {
+            if (parameters.Length != contract.Length)
+                return false;
+
+            for (int i = 0; i < parameters.Length && !isGeneric; i++)
+            {
+                if (!SymbolEqualityComparer.Default.Equals(parameters[i].Type, contract[i].Type))
+                    return false;
+            }
+
+            return true;
+        }
+    }
+
     private static bool IsAtOrAbove(INamedTypeSymbol declaring, INamedTypeSymbol cloning)
     {
         var declaringDefinition = declaring.OriginalDefinition;

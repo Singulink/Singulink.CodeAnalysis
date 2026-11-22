@@ -1587,62 +1587,798 @@ public class CloningUseTests
         }
         """;
 
-    // A line for a member says what that member's own code does. So a member of a base class that runs an override of a class below it is
-    // not followed into that override: CultureInfo.GetFormat returns NumberFormat, which the library's class overrides with a getter that
-    // clones the culture. The use of the override itself gets its warning, by its 'clones' line; the use of GetFormat gets none. Not
-    // checked: see DESIGN.md and rules/not-covered.md, "Overrides That Clone". (QA9 round 11, N8)
+    // A library that was not built with the analyzers, whose classes put members of their own in the place of members of CultureInfo.
+    private const string OverridingLibrary = """
+        using System;
+        using System.Globalization;
+        using System.Runtime.InteropServices;
+
+        namespace LibO
+        {
+            public class TaggedCulture<T> : CultureInfo
+            {
+                public T Tag = default!;
+
+                public TaggedCulture() : base("en-US") { }
+            }
+
+            // Overrides a member that the code of CultureInfo calls: GetFormat returns NumberFormat.
+            public class Bound : TaggedCulture<GCHandle>
+            {
+                public override NumberFormatInfo NumberFormat
+                {
+                    get { _ = Clone(); return base.NumberFormat; }
+                    set => base.NumberFormat = value;
+                }
+            }
+
+            // Overrides only a member that clones already.
+            public class Recloning : TaggedCulture<GCHandle>
+            {
+                public override object Clone() => base.Clone();
+            }
+
+            // Overrides nothing.
+            public class Plain : TaggedCulture<GCHandle>
+            {
+                public int Size() => 1;
+            }
+
+            // Implements a member of an interface of CultureInfo again.
+            public class Reimplementing : TaggedCulture<GCHandle>, IFormatProvider
+            {
+                object? IFormatProvider.GetFormat(Type? formatType)
+                {
+                    _ = Clone();
+                    return null;
+                }
+            }
+
+            // Has a virtual member of its own, which the code of CultureInfo cannot call.
+            public class Mid : TaggedCulture<GCHandle>
+            {
+                public virtual void Hook() { }
+
+                public void RunHook() => Hook();
+            }
+
+            public class Low : Mid
+            {
+                public override void Hook() => _ = Clone();
+            }
+
+            // Its binding comes from its own type argument alone.
+            public class Open<T> : CultureInfo
+            {
+                public T Tag = default!;
+
+                public Open() : base("en-US") { }
+
+                public override NumberFormatInfo NumberFormat
+                {
+                    get { _ = Clone(); return base.NumberFormat; }
+                    set => base.NumberFormat = value;
+                }
+            }
+        }
+        """;
+
+    private const string Handle = "System.Runtime.InteropServices.GCHandle";
+    private const string TaggedHandleCulture = "LibO.TaggedCulture<System.Runtime.InteropServices.GCHandle>";
+
+    private static async Task<Verify.Test> CreateOverridingTestAsync(string code, string lines)
+    {
+        var library = await Verify.CompileLibraryAsync(Verify.Test.NetReferenceAssemblies, OverridingLibrary, analyzed: false, "LibO");
+        var test = new Verify.Test { TestCode = code };
+
+        if (lines.Length > 0)
+            test.TestState.AdditionalFiles.Add((Verify.ListFileName, lines));
+
+        test.TestState.AdditionalReferences.Add(library);
+        return test;
+    }
+
+    // A line for a member says what that member's own code does, and that code can call a virtual member of its own object, which runs
+    // the override of a class below. CultureInfo.GetFormat returns NumberFormat, which the library's class overrides with a getter that
+    // clones the culture. The analyzer cannot tell which member of CultureInfo calls which, so every member of CultureInfo counts as
+    // one that can run the override, and gets the warning where the override's 'clones' line says that it clones. A member of object
+    // calls no virtual member of its object, and gets none.
     [TestMethod]
-    public async Task Member_OfABaseClassThatRunsAnOverrideThatClonesGetsNoWarning()
+    public async Task Member_OfABaseClassGetsAWarningWhereAnOverrideBelowItClones()
+    {
+        var test = await CreateOverridingTestAsync(
+            """
+            using System.Globalization;
+            using LibO;
+
+            class C
+            {
+                void Uses(Bound culture)
+                {
+                    _ = {|#0:culture.GetFormat(typeof(NumberFormatInfo))|};
+                    _ = {|#1:culture.Name|};
+                    _ = {|#2:culture.ToString()|};
+                    _ = {|#3:culture.NumberFormat|};
+                    _ = culture.GetType();
+                }
+            }
+            """,
+            "T:LibO.Bound;clones=complete\nP:LibO.Bound.NumberFormat;clones");
+
+        test.ExpectedDiagnostics.Add(Verify.CloningUseRunsMemberThatClones(0, "CultureInfo.GetFormat(Type?)", "LibO.Bound", "Bound.NumberFormat", Culture, Handle, TaggedHandleCulture));
+        test.ExpectedDiagnostics.Add(Verify.CloningUseRunsMemberThatClones(1, "CultureInfo.Name", "LibO.Bound", "Bound.NumberFormat", Culture, Handle, TaggedHandleCulture));
+        test.ExpectedDiagnostics.Add(Verify.CloningUseRunsMemberThatClones(2, "CultureInfo.ToString()", "LibO.Bound", "Bound.NumberFormat", Culture, Handle, TaggedHandleCulture));
+        test.ExpectedDiagnostics.Add(Verify.CloningUseOfCloningMember(3, "Bound.NumberFormat", "LibO.Bound", Handle, TaggedHandleCulture));
+        await test.RunAsync();
+    }
+
+    // Where nothing says what the members of the overriding class do, the override can clone: the class is of a library that was not
+    // built with the analyzers, and no line that says 'clones=complete' covers it. A line for the class that says it, or a line for the
+    // override with no marker, says that the override does not clone, and the members of the base class get no warning.
+    [TestMethod]
+    [DataRow("", true)]
+    [DataRow("T:LibO.Bound;clones=complete", false)]
+    [DataRow("P:LibO.Bound.NumberFormat", false)]
+    public async Task Member_OfABaseClassGetsAWarningWhereNothingSaysWhatAnOverrideBelowItDoes(string lines, bool reported)
+    {
+        var test = await CreateOverridingTestAsync(
+            """
+            using System.Globalization;
+            using LibO;
+
+            class C
+            {
+                void Uses(Bound culture)
+                {
+                    _ = {|#0:culture.GetFormat(typeof(NumberFormatInfo))|};
+                    _ = {|#1:culture.Name|};
+                    _ = culture.GetType();
+                }
+            }
+            """,
+            lines);
+
+        if (reported)
+        {
+            test.ExpectedDiagnostics.Add(Verify.CloningUseRunsUnknownMember(
+                0, "CultureInfo.GetFormat(Type?)", "LibO.Bound", "Bound.NumberFormat", "LibO.Bound", Culture, Culture, Handle, TaggedHandleCulture, "P:LibO.Bound.NumberFormat", "T:LibO.Bound"));
+            test.ExpectedDiagnostics.Add(Verify.CloningUseRunsUnknownMember(
+                1, "CultureInfo.Name", "LibO.Bound", "Bound.NumberFormat", "LibO.Bound", Culture, Culture, Handle, TaggedHandleCulture, "P:LibO.Bound.NumberFormat", "T:LibO.Bound"));
+        }
+
+        await test.RunAsync();
+    }
+
+    // A class that puts nothing in the place of a member of the base class gives the base class nothing to run: one that overrides
+    // nothing, and one that overrides only a member that clones already, since a member of the base class that runs that one counts as
+    // one that clones by its own line.
+    [TestMethod]
+    public async Task Member_OfABaseClassGetsNoWarningWhereTheClassBelowReplacesNothingThatItCanRun()
+    {
+        var test = await CreateOverridingTestAsync(
+            """
+            using System.Globalization;
+            using LibO;
+
+            class C
+            {
+                void Uses(Plain plain, Recloning recloning)
+                {
+                    _ = plain.GetFormat(typeof(NumberFormatInfo));
+                    _ = plain.Name;
+                    _ = recloning.GetFormat(typeof(NumberFormatInfo));
+                    _ = recloning.Name;
+                    _ = {|#0:recloning.Clone()|};
+                }
+            }
+            """,
+            string.Empty);
+
+        // The override of Clone is a member of the library's class, which no line covers.
+        test.ExpectedDiagnostics.Add(Verify.CloningUseOfMemberOfUncoveredClass(
+            0, "Recloning.Clone()", "LibO.Recloning", "LibO.Recloning", Culture, Handle, TaggedHandleCulture, "M:LibO.Recloning.Clone", "T:LibO.Recloning"));
+        await test.RunAsync();
+    }
+
+    // A member that implements a member of an interface of the base class again is run where the code of the base class calls its
+    // object through the interface, so it is judged as an override is.
+    [TestMethod]
+    [DataRow("", true)]
+    [DataRow("T:LibO.Reimplementing;clones=complete", false)]
+    public async Task Member_OfABaseClassGetsAWarningWhereAClassBelowItImplementsItsInterfaceAgain(string lines, bool reported)
+    {
+        var test = await CreateOverridingTestAsync(
+            """
+            using LibO;
+
+            class C
+            {
+                void Uses(Reimplementing culture)
+                {
+                    _ = {|#0:culture.Name|};
+                }
+            }
+            """,
+            lines);
+
+        if (reported)
+        {
+            test.ExpectedDiagnostics.Add(Verify.CloningUseRunsUnknownMember(
+                0, "CultureInfo.Name", "LibO.Reimplementing", "Reimplementing.IFormatProvider.GetFormat(Type?)", "LibO.Reimplementing", Culture, Culture, Handle, TaggedHandleCulture,
+                "M:LibO.Reimplementing.System#IFormatProvider#GetFormat(System.Type)", "T:LibO.Reimplementing"));
+        }
+
+        await test.RunAsync();
+    }
+
+    // The code of a class can run only an override of a member that it has or inherits. An override of a virtual member that a class
+    // below CultureInfo declares is nothing that a member of CultureInfo can run; a member of the class that declares it can.
+    [TestMethod]
+    public async Task Member_OfABaseClassIsJudgedOnlyByTheOverridesOfMembersThatItsClassHas()
+    {
+        var test = await CreateOverridingTestAsync(
+            """
+            using LibO;
+
+            class C
+            {
+                void Uses(Low culture)
+                {
+                    _ = culture.Name;
+                    {|#0:culture.RunHook()|};
+                    {|#1:culture.Hook()|};
+                }
+            }
+            """,
+            "T:LibO.Mid;clones=complete\nT:LibO.Low;clones=complete\nM:LibO.Low.Hook;clones");
+
+        test.ExpectedDiagnostics.Add(Verify.CloningUseRunsMemberThatClones(0, "Mid.RunHook()", "LibO.Low", "Low.Hook()", "LibO.Mid", Handle, TaggedHandleCulture));
+        test.ExpectedDiagnostics.Add(Verify.CloningUseOfCloningMember(1, "Low.Hook()", "LibO.Low", Handle, TaggedHandleCulture));
+        await test.RunAsync();
+    }
+
+    // The same holds for a generic class of such a library whose binding comes from its own type argument alone: a member of the base
+    // class gets the warning until a line says what the override does.
+    [TestMethod]
+    [DataRow("", true)]
+    [DataRow("T:LibO.Open`1;clones=complete", false)]
+    [DataRow("P:LibO.Open`1.NumberFormat", false)]
+    public async Task Member_OfABaseClassIsJudgedByTheOverridesOfAGenericClassBelowItToo(string lines, bool reported)
+    {
+        var test = await CreateOverridingTestAsync(
+            """
+            using System.Globalization;
+            using System.Runtime.InteropServices;
+            using LibO;
+
+            class C
+            {
+                void Uses(Open<GCHandle> culture)
+                {
+                    _ = {|#0:culture.GetFormat(typeof(NumberFormatInfo))|};
+                }
+            }
+            """,
+            lines);
+
+        if (reported)
+        {
+            test.ExpectedDiagnostics.Add(Verify.CloningUseRunsUnknownMember(
+                0, "CultureInfo.GetFormat(Type?)", "LibO.Open<System.Runtime.InteropServices.GCHandle>", "Open<T>.NumberFormat", "LibO.Open<System.Runtime.InteropServices.GCHandle>", Culture, Culture, Handle,
+                "LibO.Open<System.Runtime.InteropServices.GCHandle>", "P:LibO.Open`1.NumberFormat", "T:LibO.Open`1"));
+        }
+
+        await test.RunAsync();
+    }
+
+    // A 'clones' line names an override in any assembly: a library that was built with the analyzers names its members that clone
+    // (SCA1008), and a member of the base class can run such an override as well.
+    [TestMethod]
+    [DataRow("P:LibA.Marked`1.NumberFormat;clones", true)]
+    [DataRow("", false)]
+    public async Task Member_OfABaseClassGetsAWarningWhereAnOverrideOfAnAnalyzedLibraryClones(string lines, bool reported)
     {
         var library = await Verify.CompileLibraryAsync(Verify.Test.NetReferenceAssemblies, """
             using System.Globalization;
-            using System.Runtime.InteropServices;
+            using Singulink.CodeAnalysis;
 
-            namespace LibO
+            namespace LibA
             {
-                public class TaggedCulture<T> : CultureInfo
+                public class Marked<[NonCopyable] T> : CultureInfo
                 {
                     public T Tag = default!;
 
-                    public TaggedCulture() : base("en-US") { }
-                }
+                    public Marked() : base("en-US") { }
 
-                public class Bound : TaggedCulture<GCHandle>
-                {
                     public override NumberFormatInfo NumberFormat
                     {
                         get { _ = Clone(); return base.NumberFormat; }
                         set => base.NumberFormat = value;
                     }
                 }
-
-                public static class Make
-                {
-                    public static Bound NewBound() => new();
-                }
             }
-            """, analyzed: false, "LibO");
+            """, analyzed: true, "LibA");
 
         var test = new Verify.Test {
             TestCode = """
-                using System.Globalization;
-                using LibO;
+                using System.Runtime.InteropServices;
+                using LibA;
 
                 class C
                 {
-                    void Uses()
+                    void Uses(Marked<GCHandle> culture)
                     {
-                        var culture = Make.NewBound();
-                        _ = culture.GetFormat(typeof(NumberFormatInfo));
-                        _ = {|#0:culture.NumberFormat|};
+                        _ = {|#0:culture.Name|};
                     }
                 }
                 """,
         };
 
-        test.TestState.AdditionalFiles.Add((Verify.ListFileName, "T:LibO.Bound;clones=complete\nP:LibO.Bound.NumberFormat;clones\nM:LibO.Make.NewBound;new"));
+        if (lines.Length > 0)
+            test.TestState.AdditionalFiles.Add((Verify.ListFileName, lines));
+
         test.TestState.AdditionalReferences.Add(library);
-        test.ExpectedDiagnostics.Add(Verify.CloningUseOfCloningMember(0, "Bound.NumberFormat", "LibO.Bound", "System.Runtime.InteropServices.GCHandle", "LibO.TaggedCulture<System.Runtime.InteropServices.GCHandle>"));
+
+        if (reported)
+        {
+            test.ExpectedDiagnostics.Add(Verify.CloningUseRunsMemberThatClones(
+                0, "CultureInfo.Name", "LibA.Marked<System.Runtime.InteropServices.GCHandle>", "Marked<T>.NumberFormat", Culture, Handle, "LibA.Marked<System.Runtime.InteropServices.GCHandle>"));
+        }
+
+        await test.RunAsync();
+    }
+
+    // Two libraries that were not built with the analyzers: one with a class that clones itself and a base class above it whose
+    // members run members of their own object in every way that a class below can take part in, and one with the classes below.
+    private const string RunningLibrary = """
+        using System;
+
+        namespace LibD
+        {
+            public interface IWork
+            {
+                void Run();
+
+                int Size { get; }
+            }
+
+            public interface IOther { void Go(); }
+
+            public class Root : IWork
+            {
+                public virtual void Run() { }
+
+                public virtual int Size => 0;
+
+                // Calls a virtual member, its own object as an interface of its class, and as an interface that it does not implement.
+                public void Plain()
+                {
+                    Run();
+                    ((IWork)this).Run();
+                    _ = ((IWork)this).Size;
+                    (this as IOther)?.Go();
+                }
+
+                public virtual event EventHandler? Custom { add { } remove { OnRemove(); } }
+
+                protected virtual void OnRemove() { }
+            }
+
+            // The class that clones itself implements an interface that the class above it does not, with a member that clones.
+            public class Doc : Root, ICloneable
+            {
+                public Doc Copy() => (Doc)MemberwiseClone();
+
+                public object Clone() => MemberwiseClone();
+            }
+
+            public class Tagged<T> : Doc { public T Tag = default!; }
+        }
+        """;
+
+    private const string RunLibrary = """
+        using System.Runtime.InteropServices;
+        using LibD;
+
+        namespace LibK
+        {
+            // Its override of a member of Root runs a virtual member of its own, which the class below overrides.
+            public class Mid : Tagged<GCHandle>
+            {
+                public override void Run() => HookA();
+
+                public virtual void HookA() { }
+            }
+
+            public class Chained : Mid
+            {
+                public override void HookA() => _ = Copy();
+            }
+
+            // Implements an interface that Root does not implement and tests its object for.
+            public class Other : Tagged<GCHandle>, IOther
+            {
+                public void Go() => _ = Copy();
+            }
+
+            // Overrides what the remove accessor of an event of Root runs.
+            public class Removing : Tagged<GCHandle>
+            {
+                protected override void OnRemove() => _ = Copy();
+            }
+
+            public sealed class Sealed : Tagged<GCHandle>
+            {
+                public override void Run() { }
+            }
+
+            // Lists the interface of Root again, which makes the member that it inherits from the class between the implementation.
+            public class Hiding : Tagged<GCHandle>
+            {
+                public new void Run() => _ = Copy();
+            }
+
+            public class Relisting : Hiding, IWork { }
+
+            // The same for a property, for which the compiler writes only an accessor in the class that lists the interface again.
+            public class HidingSize : Tagged<GCHandle>
+            {
+                public new int Size
+                {
+                    get
+                    {
+                        _ = Copy();
+                        return 0;
+                    }
+                }
+            }
+
+            public class RelistingSize : HidingSize, IWork { }
+
+            // Puts nothing in the place of a member of the classes above it.
+            public class Nothing : Tagged<GCHandle> { }
+
+            // A sealed class that is below no class that clones itself.
+            public sealed class Lone : System.Exception { }
+        }
+        """;
+
+    private const string RunLines = "T:LibD.Doc;clones=complete\nM:LibD.Doc.Copy;clones\nM:LibD.Doc.Clone;clones\n";
+    private const string TaggedHandleDoc = "LibD.Tagged<System.Runtime.InteropServices.GCHandle>";
+
+    private static async Task<Verify.Test> CreateRunTestAsync(string code, string lines)
+    {
+        var docs = await Verify.CompileLibraryAsync(Verify.Test.NetReferenceAssemblies, RunningLibrary, analyzed: false, "LibD");
+        var below = await Verify.CompileLibraryAsync(Verify.Test.NetReferenceAssemblies, RunLibrary, analyzed: false, "LibK", docs);
+
+        var test = new Verify.Test { TestCode = code };
+        test.TestState.AdditionalFiles.Add((Verify.ListFileName, RunLines + lines));
+        test.TestState.AdditionalReferences.Add(docs);
+        test.TestState.AdditionalReferences.Add(below);
+        return test;
+    }
+
+    // The code of a member that can be run can run the members below its own class in turn: Root.Plain runs Mid.Run, which runs a
+    // virtual member of Mid that the class below overrides. So the walk goes down from the member's class, class by class.
+    [TestMethod]
+    public async Task Member_OfABaseClassIsJudgedByWhatTheOverridesBelowItRunInTurn()
+    {
+        var test = await CreateRunTestAsync(
+            """
+            using LibK;
+
+            class C
+            {
+                void Uses(Chained chained)
+                {
+                    {|#0:chained.Plain()|};
+                    {|#1:chained.Run()|};
+                    {|#2:chained.HookA()|};
+                }
+            }
+            """,
+            "T:LibK.Mid;clones=complete\nT:LibK.Chained;clones=complete\nM:LibK.Chained.HookA;clones");
+
+        test.ExpectedDiagnostics.Add(Verify.CloningUseRunsMemberThatClones(0, "Root.Plain()", "LibK.Chained", "Chained.HookA()", "LibD.Root", Handle, TaggedHandleDoc));
+        test.ExpectedDiagnostics.Add(Verify.CloningUseRunsMemberThatClones(1, "Mid.Run()", "LibK.Chained", "Chained.HookA()", "LibK.Mid", Handle, TaggedHandleDoc));
+        test.ExpectedDiagnostics.Add(Verify.CloningUseOfCloningMember(2, "Chained.HookA()", "LibK.Chained", Handle, TaggedHandleDoc));
+        await test.RunAsync();
+    }
+
+    // The code of a class can test its object for an interface that the class does not implement, and call it. So a member that
+    // implements a member of any interface of a class below counts as one that the base class can run.
+    [TestMethod]
+    [DataRow("T:LibK.Other;clones=complete\nM:LibK.Other.Go;clones", true, false)]
+    [DataRow("", false, true)]
+    [DataRow("T:LibK.Other;clones=complete", false, false)]
+    public async Task Member_OfABaseClassIsJudgedByTheMembersOfAnInterfaceThatOnlyAClassBelowImplements(string lines, bool clones, bool unknown)
+    {
+        var test = await CreateRunTestAsync(
+            """
+            using LibK;
+
+            class C
+            {
+                void Uses(Other other)
+                {
+                    {|#0:other.Plain()|};
+                }
+            }
+            """,
+            lines);
+
+        if (clones)
+            test.ExpectedDiagnostics.Add(Verify.CloningUseRunsMemberThatClones(0, "Root.Plain()", "LibK.Other", "Other.Go()", "LibD.Root", Handle, TaggedHandleDoc));
+
+        if (unknown)
+        {
+            test.ExpectedDiagnostics.Add(Verify.CloningUseRunsUnknownMember(
+                0, "Root.Plain()", "LibK.Other", "Other.Go()", "LibK.Other", "LibD.Root", "LibD.Doc", Handle, TaggedHandleDoc, "M:LibK.Other.Go", "T:LibK.Other"));
+        }
+
+        await test.RunAsync();
+    }
+
+    // The accessors of an event are code of its class like any other member: removing a handler runs the remove accessor, which can run
+    // an override below it. Only the handing on of the object to a handler is a matter of adding one.
+    [TestMethod]
+    public async Task Member_OfABaseClassThatIsAnEventIsJudgedWhereAHandlerIsRemovedToo()
+    {
+        var test = await CreateRunTestAsync(
+            """
+            using LibK;
+
+            class C
+            {
+                void Uses(Removing removing)
+                {
+                    {|#0:removing.Custom|} += null;
+                    {|#1:removing.Custom|} -= null;
+                }
+            }
+            """,
+            "E:LibD.Root.Custom\nT:LibK.Removing;clones=complete\nM:LibK.Removing.OnRemove;clones");
+
+        test.ExpectedDiagnostics.Add(Verify.CloningUseRunsMemberThatClones(0, "Root.Custom", "LibK.Removing", "Removing.OnRemove()", "LibD.Root", Handle, TaggedHandleDoc));
+        test.ExpectedDiagnostics.Add(Verify.CloningUseRunsMemberThatClones(1, "Root.Custom", "LibK.Removing", "Removing.OnRemove()", "LibD.Root", Handle, TaggedHandleDoc));
+        await test.RunAsync();
+    }
+
+    // The lines of the class that clones itself say what its members and those of the classes above it do with an object of it, as
+    // one piece of code. So a member of the class that clones itself is nothing that the walk looks at: its Clone, which implements an
+    // interface that the class above does not, leaves the members of the class above with no warning where nothing below replaces one.
+    [TestMethod]
+    public async Task Member_OfAClassAboveTheCloningClassIsNotJudgedByTheMembersOfTheCloningClass()
+    {
+        var test = await CreateRunTestAsync(
+            """
+            using LibK;
+
+            class C
+            {
+                void Uses(Nothing nothing)
+                {
+                    nothing.Plain();
+                    nothing.Run();
+                    _ = nothing.Size;
+                    _ = {|#0:nothing.Clone()|};
+                }
+            }
+            """,
+            string.Empty);
+
+        test.ExpectedDiagnostics.Add(Verify.CloningUseOfCloningMember(0, "Doc.Clone()", "LibK.Nothing", Handle, TaggedHandleDoc));
+        await test.RunAsync();
+    }
+
+    // A member of a class above the class that clones itself can run an override below only through what it can call: an override
+    // of a virtual member of the class that clones itself is out of its reach where nothing between runs that member.
+    [TestMethod]
+    public async Task Member_OfAClassAboveTheCloningClassIsJudgedOnlyByWhatItCanReach()
+    {
+        var library = await Verify.CompileLibraryAsync(Verify.Test.NetReferenceAssemblies, """
+            using System.Runtime.InteropServices;
+
+            namespace LibT
+            {
+                public class Top
+                {
+                    public virtual void TopHook() { }
+
+                    public void TopPlain() => TopHook();
+                }
+
+                public class Doc : Top
+                {
+                    public Doc Copy() => (Doc)MemberwiseClone();
+
+                    public virtual void DocHook() { }
+
+                    public void DocPlain() => DocHook();
+                }
+
+                public class Tagged<T> : Doc { public T Tag = default!; }
+
+                public class Low : Tagged<GCHandle>
+                {
+                    public override void DocHook() => _ = Copy();
+                }
+            }
+            """, analyzed: false, "LibT");
+
+        var test = new Verify.Test {
+            TestCode = """
+                using LibT;
+
+                class C
+                {
+                    void Uses(Low low)
+                    {
+                        low.TopPlain();
+                        {|#0:low.DocPlain()|};
+                    }
+                }
+                """,
+        };
+
+        test.TestState.AdditionalFiles.Add((Verify.ListFileName, "T:LibT.Doc;clones=complete\nM:LibT.Doc.Copy;clones\nM:LibT.Low.DocHook;clones"));
+        test.TestState.AdditionalReferences.Add(library);
+        test.ExpectedDiagnostics.Add(Verify.CloningUseRunsMemberThatClones(0, "Doc.DocPlain()", "LibT.Low", "Low.DocHook()", "LibT.Doc", Handle, "LibT.Tagged<System.Runtime.InteropServices.GCHandle>"));
+        await test.RunAsync();
+    }
+
+    // The lines of the class that clones itself speak for its members and for those of the classes above it, with one exception: an
+    // override there that a 'clones' line names. The lines say that it clones, and nothing of a member above it that can run it, as
+    // with a template method whose step the class that clones itself overrides with a clone. Such a member gets the warning until a
+    // line of its own says whether it runs the override. A member of the class that clones itself which implements an interface is no
+    // such exception: see the test of ICloneable above.
+    [TestMethod]
+    [DataRow("", true, true)]
+    [DataRow("M:LibS.Top.Size", true, false)]
+    [DataRow("M:LibS.Top.Snapshot;clones\nM:LibS.Top.Size", false, false)]
+    public async Task Member_OfAClassAboveTheCloningClassGetsAWarningWhereTheCloningClassOverridesItsStepWithAClone(string lines, bool snapshotRuns, bool sizeRuns)
+    {
+        var library = await Verify.CompileLibraryAsync(Verify.Test.NetReferenceAssemblies, """
+            namespace LibS
+            {
+                public abstract class Top
+                {
+                    protected abstract object CloneCore();
+
+                    public void Snapshot() => _ = CloneCore();
+
+                    public int Size() => 0;
+                }
+
+                public class Doc : Top
+                {
+                    protected override object CloneCore() => MemberwiseClone();
+
+                    public void Touch() { }
+                }
+
+                public class Tagged<T> : Doc { public T Tag = default!; }
+            }
+            """, analyzed: false, "LibS");
+
+        var test = new Verify.Test {
+            TestCode = """
+                using System.Runtime.InteropServices;
+                using LibS;
+
+                class C
+                {
+                    void Uses(Tagged<GCHandle> tagged)
+                    {
+                        {|#0:tagged.Snapshot()|};
+                        _ = {|#1:tagged.Size()|};
+                        tagged.Touch();
+                    }
+                }
+                """,
+        };
+
+        const string Tagged = "LibS.Tagged<System.Runtime.InteropServices.GCHandle>";
+
+        test.TestState.AdditionalFiles.Add((Verify.ListFileName, "T:LibS.Doc;clones=complete\nM:LibS.Doc.CloneCore;clones" + (lines.Length > 0 ? "\n" + lines : string.Empty)));
+        test.TestState.AdditionalReferences.Add(library);
+
+        test.ExpectedDiagnostics.Add(snapshotRuns
+            ? Verify.CloningUseRunsOverrideOfCloningClass(0, "Top.Snapshot()", Tagged, "Doc.CloneCore()", "LibS.Top", Handle, Tagged, "M:LibS.Top.Snapshot")
+            : Verify.CloningUseOfCloningMember(0, "Top.Snapshot()", Tagged, Handle, Tagged));
+
+        if (sizeRuns)
+            test.ExpectedDiagnostics.Add(Verify.CloningUseRunsOverrideOfCloningClass(1, "Top.Size()", Tagged, "Doc.CloneCore()", "LibS.Top", Handle, Tagged, "M:LibS.Top.Size"));
+
+        await test.RunAsync();
+    }
+
+    // The same as the test before for a property: the compiler writes only an accessor into the class that lists the interface again,
+    // so the class has no member that implements the property, and the inherited property that fits is what counts.
+    [TestMethod]
+    public async Task Member_OfABaseClassIsJudgedByTheInheritedPropertyThatAnInterfaceListedAgainRuns()
+    {
+        var test = await CreateRunTestAsync(
+            """
+            using LibK;
+
+            class C
+            {
+                void Uses(RelistingSize relisting)
+                {
+                    {|#0:relisting.Plain()|};
+                }
+            }
+            """,
+            "T:LibK.HidingSize;clones=complete\nT:LibK.RelistingSize;clones=complete\nP:LibK.HidingSize.Size;clones");
+
+        test.ExpectedDiagnostics.Add(Verify.CloningUseRunsMemberThatClones(0, "Root.Plain()", "LibK.RelistingSize", "HidingSize.Size", "LibD.Root", Handle, TaggedHandleDoc));
+        await test.RunAsync();
+    }
+
+    // A line that says 'clones=complete' for a sealed class that is below no class that clones itself still has no effect.
+    [TestMethod]
+    public async Task CompleteLine_ForASealedClassBelowNoCloningClassHasNoEffect()
+    {
+        var test = await CreateRunTestAsync("class C { }", "T:LibK.Lone;clones=complete");
+
+        test.ExpectedDiagnostics.Add(Verify.SafeListClonesHasNoEffect(
+            4, 1, 28, "T:LibK.Lone", "the class is sealed and not generic, so no class can derive from it and no type can be bound to it"));
+
+        await test.RunAsync();
+    }
+
+    // The line that the warning proposes for the class of the override has its effect for a sealed class too, and is not reported as a
+    // line with none.
+    [TestMethod]
+    [DataRow("", true)]
+    [DataRow("T:LibK.Sealed;clones=complete", false)]
+    public async Task CompleteLine_ForASealedClassBelowCoversItsOverrides(string lines, bool reported)
+    {
+        var test = await CreateRunTestAsync(
+            """
+            using LibK;
+
+            class C
+            {
+                void Uses(Sealed @sealed)
+                {
+                    {|#0:@sealed.Plain()|};
+                }
+            }
+            """,
+            lines);
+
+        if (reported)
+        {
+            test.ExpectedDiagnostics.Add(Verify.CloningUseRunsUnknownMember(
+                0, "Root.Plain()", "LibK.Sealed", "Sealed.Run()", "LibK.Sealed", "LibD.Root", "LibD.Doc", Handle, TaggedHandleDoc, "M:LibK.Sealed.Run", "T:LibK.Sealed"));
+        }
+
+        await test.RunAsync();
+    }
+
+    // A class that lists an interface of the base class again makes a member that it inherits from a class between the
+    // implementation. In a compiled class the compiler wrote a member that hands the call on to it, whose code cannot be read, so the
+    // inherited member that fits counts as well: its 'clones' line gives the warning.
+    [TestMethod]
+    public async Task Member_OfABaseClassIsJudgedByTheInheritedMemberThatAnInterfaceListedAgainRuns()
+    {
+        var test = await CreateRunTestAsync(
+            """
+            using LibK;
+
+            class C
+            {
+                void Uses(Relisting relisting)
+                {
+                    {|#0:relisting.Plain()|};
+                }
+            }
+            """,
+            "T:LibK.Hiding;clones=complete\nT:LibK.Relisting;clones=complete\nM:LibK.Hiding.Run;clones");
+
+        test.ExpectedDiagnostics.Add(Verify.CloningUseRunsMemberThatClones(0, "Root.Plain()", "LibK.Relisting", "Hiding.Run()", "LibD.Root", Handle, TaggedHandleDoc));
         await test.RunAsync();
     }
 

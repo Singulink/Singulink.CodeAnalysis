@@ -440,14 +440,10 @@ public sealed partial class DoNotCopyValueAnalyzer
             // The object itself, with a binding to a class that clones itself that no declaration judged.
             if (receiverType is INamedTypeSymbol { TypeKind: TypeKind.Class } receiverClass && types.FindUnjudgedCloningBinding(receiverClass) is { } binding)
             {
-                // An event hands the object to its handlers only where one is subscribed. One whose line says that it clones does so where
-                // a handler is added and where one is removed.
-                if (member is not IEventSymbol || subscribes || types.IsCloningMember(NonCopyableTypes.GetListDefinition(member)) ||
-                    types.IsCloningMember(NonCopyableTypes.GetListDefinition(NonCopyableTypes.FindImplementationIn(receiverClass, member))))
-                {
-                    CheckMemberOfClonedObject(syntax, receiverClass, member, binding);
-                }
-
+                // An event hands the object to its handlers only where one is subscribed. Its accessors are code of its class like any
+                // other member: one whose line says that it clones does so where a handler is added and where one is removed, and so
+                // can one that nothing is known of, or that runs a member of a class below.
+                CheckMemberOfClonedObject(syntax, receiverClass, member, binding, handsOn: member is not IEventSymbol || subscribes);
                 return;
             }
 
@@ -488,7 +484,7 @@ public sealed partial class DoNotCopyValueAnalyzer
         /// the class that shows the binding, or of a class between it and the class that clones itself, is judged by its own line and its
         /// own signature.
         /// </summary>
-        private void CheckMemberOfClonedObject(SyntaxNode syntax, INamedTypeSymbol receiver, ISymbol member, CloningBinding binding)
+        private void CheckMemberOfClonedObject(SyntaxNode syntax, INamedTypeSymbol receiver, ISymbol member, CloningBinding binding, bool handsOn = true)
         {
             var implementation = NonCopyableTypes.FindImplementationIn(receiver, member);
             var definition = NonCopyableTypes.GetListDefinition(implementation);
@@ -506,9 +502,13 @@ public sealed partial class DoNotCopyValueAnalyzer
             if (implementation.ContainingType is not { } declaring)
                 return;
 
-            // A line for the member itself says that it neither clones the object nor hands it on.
+            // A line for the member itself says that it neither clones the object nor hands it on. That is a statement of its own code,
+            // which can still run a member that a class below put in the place of one of its class.
             if (types.IsListed(implementation))
+            {
+                CheckMembersBelow(hasLine: true);
                 return;
+            }
 
             // Where the members that clone are not known, because no line that says 'clones=complete' covers the member's class, any member
             // can clone. A member of a class that shows the binding is code of the project, or of an assembly that was built with the
@@ -529,9 +529,59 @@ public sealed partial class DoNotCopyValueAnalyzer
                 else
                     Report(Rules.CloningUseOfMemberOfUncoveredClass, syntax, Display(definition), receiver, declaring, binding.Cloning, binding.Type, binding.Bound, GetListId(definition), GetListId(declaring.OriginalDefinition));
             }
-            else if (NonCopyableTypes.FindHandBackType(receiver, implementation) is { } handBackType)
+            else if (handsOn && NonCopyableTypes.FindHandBackType(receiver, implementation) is { } handBackType)
             {
                 Report(Rules.CloningUseHandsBack, syntax, Display(definition), receiver, handBackType, binding.Cloning, binding.Type, binding.Bound, GetListId(definition));
+            }
+            else
+            {
+                CheckMembersBelow(hasLine: false);
+            }
+
+            // A member that neither clones the object nor hands it on, as far as its own code goes, can run a member of a class below
+            // its own on the object: an override, or a member that implements an interface of its class again.
+            void CheckMembersBelow(bool hasLine)
+            {
+                if (types.FindMemberBelowThatCanClone(receiver, declaring, binding.Cloning, hasLine) is not { } below)
+                    return;
+
+                var belowDefinition = NonCopyableTypes.GetListDefinition(below.Member);
+
+                if (below.IsOfCloningClass)
+                {
+                    Report(
+                        Rules.CloningUseRunsOverrideOfCloningClass,
+                        syntax,
+                        Display(definition),
+                        receiver,
+                        Display(belowDefinition),
+                        declaring,
+                        binding.Type,
+                        binding.Bound,
+                        GetListId(definition));
+                }
+                else if (below.Clones)
+                {
+                    Report(Rules.CloningUseRunsMemberThatClones, syntax, Display(definition), receiver, Display(belowDefinition), declaring, binding.Type, binding.Bound);
+                }
+                else
+                {
+                    var belowClass = below.Member.ContainingType;
+
+                    Report(
+                        Rules.CloningUseRunsUnknownMember,
+                        syntax,
+                        Display(definition),
+                        receiver,
+                        Display(belowDefinition),
+                        belowClass,
+                        declaring,
+                        binding.Cloning,
+                        binding.Type,
+                        binding.Bound,
+                        GetListId(belowDefinition),
+                        GetListId(belowClass.OriginalDefinition));
+                }
             }
         }
 
