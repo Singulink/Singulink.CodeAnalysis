@@ -69,8 +69,10 @@ using var g1 = await first;                              // OK: both tasks run a
 using var g2 = await second;                             //     the other waits no longer than WhenAll does
 
 var pending = myLock.EnterAsync();
-using var held = await pending.WaitAsync(timeout);       // OK: a time limit without WhenAny and a delay
+using var held = await pending.WaitAsync(timeout);       // OK: no copy, since 'pending' is not used again
 ```
+
+The second form gets no warning, but it is not how to limit a wait for a lock: see [Time Limit on a Wait](../guides/tasks.md#time-limit-on-a-wait).
 
 ## Tasks in a Variable
 

@@ -12,6 +12,7 @@ A `Task<LockGuard>` holds its guard until somebody awaits it, and every await of
 | Start now and await later | A local that is awaited once and not used again |
 | Await a value task in a field | `await NonCopyable.Move(ref _pending)` |
 | Wait for several tasks | Await each one in turn |
+| Limit how long a wait takes | Give the time limit to the lock, not to its task |
 | Hand out a task that a waiter completes | Make the `TaskCompletionSource` in the method that returns its task |
 | Pass a guard to a callback | A delegate with a `ref` parameter |
 
@@ -46,12 +47,22 @@ var first = a.EnterAsync();
 var second = b.EnterAsync();
 using var g1 = await first;                              // OK: both tasks run already, so awaiting them one after
 using var g2 = await second;                             //     the other waits no longer than WhenAll does
-
-var pending = myLock.EnterAsync();
-using var held = await pending.WaitAsync(timeout);       // OK: a time limit without WhenAny and a delay
 ```
 
 Where a race is what you need, see [A Race Between Two Tasks](correct-code-with-warnings.md#race-between-two-tasks-that-hold-a-guard).
+
+## Time Limit on a Wait
+
+Give the time limit to the lock, through the method or the cancellation token that it offers for that. The lock then ends the wait itself:
+
+```cs
+using var held = await myLock.TryEnterAsync(timeout);    // OK: the lock ends the wait
+if (!held.IsEntered)
+    return;
+```
+
+> [!WARNING]
+> **A time limit on the task does not end the wait.** `await pending.WaitAsync(timeout)` and a `WhenAny` with a delay give up on the `await`, and the lock can still hand the guard to the task afterwards. Nobody awaits that task any more, so nobody releases the guard and the lock stays held. The analyzer reports copies, and there is none here, so `WaitAsync` on such a task gets no warning.
 
 ## Making a Task for a Waiter
 
