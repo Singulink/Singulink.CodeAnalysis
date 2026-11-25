@@ -154,14 +154,21 @@ public sealed partial class DoNotCopyValueAnalyzer
             bool boxes = types.IsNonCopyableType(pattern.InputType) &&
                 (pattern.NarrowedType is { IsReferenceType: true } ||
                     (pattern.NarrowedType is ITypeParameterSymbol && !SymbolEqualityComparer.Default.Equals(pattern.InputType, pattern.NarrowedType)));
+
+            // What the box hides is a second rule, for a new value and a stored one alike: a stored value that is boxed is copied as
+            // well.
             bool boxesCopy = boxes && !inputIsNew;
-            bool hidesTypeParameter = boxes && inputIsNew && types.HidesTypeParameter(pattern.InputType, pattern.NarrowedType);
-            bool boxesUncheckedStruct = boxes && inputIsNew && !hidesTypeParameter &&
+            bool hidesTypeParameter = boxes && types.HidesTypeParameter(pattern.InputType, pattern.NarrowedType);
+            bool boxesUncheckedStruct = boxes && !hidesTypeParameter &&
                 types.IsStructOfUncheckedCode(pattern.InputType) && types.LosesNonCopyableType(pattern.InputType, pattern.NarrowedType!);
 
             // And a struct whose members run on the box with a type that a type parameter of it does not take.
-            bool boxesBindingNotTaken = boxes && inputIsNew && !hidesTypeParameter && !boxesUncheckedStruct &&
+            bool boxesBindingNotTaken = boxes && !hidesTypeParameter && !boxesUncheckedStruct &&
                 types.FindStructBindingNotTaken(pattern.InputType) is not null;
+
+            // And any other generic struct whose type arguments carry containers, which other code can reach through the box.
+            bool boxesContainers = boxes && !hidesTypeParameter && !boxesUncheckedStruct && !boxesBindingNotTaken &&
+                types.HidesContainersOfTypeArguments(pattern.InputType, pattern.NarrowedType);
 
             switch (pattern)
             {
@@ -177,12 +184,15 @@ public sealed partial class DoNotCopyValueAnalyzer
 
                     if (boxesCopy && declaration.DeclaredSymbol is not null)
                         Report(Rules.Boxing, declaration.Syntax, declaration.InputType, declaration.NarrowedType);
-                    else if (hidesTypeParameter && declaration.DeclaredSymbol is not null)
+
+                    if (hidesTypeParameter && declaration.DeclaredSymbol is not null)
                         Report(Rules.OpaqueTypeParameterConversion, declaration.Syntax, declaration.InputType, declaration.NarrowedType);
                     else if (boxesUncheckedStruct && declaration.DeclaredSymbol is not null)
                         ReportOpaqueBoxing(declaration);
                     else if (boxesBindingNotTaken && declaration.DeclaredSymbol is not null)
                         CheckBoxOfBindingNotTaken(declaration.Syntax, declaration.InputType, declaration.NarrowedType);
+                    else if (boxesContainers && declaration.DeclaredSymbol is not null)
+                        Report(Rules.OpaqueBoxingOfContainers, declaration.Syntax, declaration.InputType, declaration.NarrowedType);
 
                     break;
 
@@ -215,17 +225,22 @@ public sealed partial class DoNotCopyValueAnalyzer
                         if (variableIsReported || looksIntoValue)
                             inputIsNew = true;
                     }
-                    else if (boxesCopy || hidesTypeParameter || boxesUncheckedStruct || boxesBindingNotTaken)
+                    else if (boxesCopy || hidesTypeParameter || boxesUncheckedStruct || boxesBindingNotTaken || boxesContainers)
                     {
                         // A bare test of the type boxes nothing that can be used.
                         if (recursive.DeclaredSymbol is not null || looksIntoValue)
                         {
-                            if (boxesUncheckedStruct)
+                            if (boxesCopy)
+                                Report(Rules.Boxing, recursive.Syntax, recursive.InputType, recursive.NarrowedType);
+
+                            if (hidesTypeParameter)
+                                Report(Rules.OpaqueTypeParameterConversion, recursive.Syntax, recursive.InputType, recursive.NarrowedType);
+                            else if (boxesUncheckedStruct)
                                 ReportOpaqueBoxing(recursive);
                             else if (boxesBindingNotTaken)
                                 CheckBoxOfBindingNotTaken(recursive.Syntax, recursive.InputType, recursive.NarrowedType);
-                            else
-                                Report(boxesCopy ? Rules.Boxing : Rules.OpaqueTypeParameterConversion, recursive.Syntax, recursive.InputType, recursive.NarrowedType);
+                            else if (boxesContainers)
+                                Report(Rules.OpaqueBoxingOfContainers, recursive.Syntax, recursive.InputType, recursive.NarrowedType);
 
                             inputIsNew = true;
                         }
@@ -312,7 +327,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                                 var use = types.GetUse(property);
 
                                 // The visit of the property reference reports the use of the property. What it reads from is only known here.
-                                CheckHandedOutValue(member.Syntax, use, property.Type, inputIsNewForMembers);
+                                CheckHandedOutValue(member.Syntax, property, use, property.Type, inputIsNewForMembers);
                                 memberIsNew = !types.IsContainer(property.Type) &&
                                     (use.ListedKind is not MemberUseKind.Listed || inputIsNewForMembers || types.IsNonCopyableType(property.Type));
                                 break;

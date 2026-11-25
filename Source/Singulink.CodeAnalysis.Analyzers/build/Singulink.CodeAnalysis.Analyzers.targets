@@ -49,6 +49,18 @@
   </Target>
 
   <!--
+    A project that restores with packages.config has no NuGet properties and no assets file, and its packages are in the folder that holds
+    the folder of this package. A library's symbol list file in such a package is a file of the package, as one in the global packages
+    folder or in a fallback folder is: see the props file. This runs as a target, where the properties of NuGet are known, before the
+    compiler-visible properties are written for the compiler.
+  -->
+  <Target Name="_NonCopyableFindPackagesFolder" BeforeTargets="GenerateMSBuildEditorConfigFileCore" Condition="'$(NuGetPackageRoot)' == ''">
+    <PropertyGroup>
+      <_NonCopyablePackagesFolder>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..'))</_NonCopyablePackagesFolder>
+    </PropertyGroup>
+  </Target>
+
+  <!--
     Whether the project references one of the two packages itself, or only gets the analyzer through a library, is worked out here into
     _NonCopyableReferencesPackage, always and whatever else the project sets. Two things depend on it. The built-in non-copyable types
     are on in a project that references a package, and off in one that does not: a library that marks its guards brings the analyzer to

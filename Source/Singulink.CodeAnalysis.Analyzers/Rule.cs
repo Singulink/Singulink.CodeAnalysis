@@ -18,7 +18,9 @@ internal sealed class Rule
         DiagnosticDescriptor? error = null,
         DiagnosticDescriptor? unsafeWarning = null,
         DiagnosticDescriptor? message = null,
-        About about = default)
+        About about = default,
+        DiagnosticDescriptor? errorAtBound = null,
+        DiagnosticDescriptor? unsafeWarningAtBound = null)
     {
         Group = group;
         Main = main;
@@ -26,6 +28,8 @@ internal sealed class Rule
         UnsafeWarning = unsafeWarning;
         Message = message;
         About = about;
+        ErrorAtBound = errorAtBound;
+        UnsafeWarningAtBound = unsafeWarningAtBound;
     }
 
     /// <summary>
@@ -73,6 +77,19 @@ internal sealed class Rule
     public DiagnosticDescriptor? Message { get; }
 
     /// <summary>
+    /// Gets the error of <see cref="Error"/> for a report that is strict only because a walk over types reached its bound: a type has
+    /// more parts than the analyzer looks at, and is taken as if it could hold a value that is unsafe to copy. Its message says so. Null
+    /// for a rule of the other groups.
+    /// </summary>
+    public DiagnosticDescriptor? ErrorAtBound { get; }
+
+    /// <summary>
+    /// Gets the warning of <see cref="UnsafeWarning"/> for a report that is strict only because a walk over types reached its bound, with
+    /// a message that says so (see <see cref="ErrorAtBound"/>). Null for a rule of the other groups.
+    /// </summary>
+    public DiagnosticDescriptor? UnsafeWarningAtBound { get; }
+
+    /// <summary>
     /// Gets every descriptor of the rule.
     /// </summary>
     public IEnumerable<DiagnosticDescriptor> Descriptors
@@ -89,21 +106,36 @@ internal sealed class Rule
 
             if (Message is not null)
                 yield return Message;
+
+            if (ErrorAtBound is not null)
+                yield return ErrorAtBound;
+
+            if (UnsafeWarningAtBound is not null)
+                yield return UnsafeWarningAtBound;
         }
     }
 }
 
 /// <summary>
 /// What the reports of an enforced rule are about: the types that decide, under the updated memory safety rules, whether a report is
-/// the error of the updated rules or the ordinary warning of the current rules. A report is the error where any type that it is about
-/// is unsafe to copy, or holds a value that is, and where it cannot be tied to a type at all. The default value is no statement, which
-/// an enforced rule cannot be created with.
+/// the error of the updated rules or the ordinary warning of the current rules, and what of a type counts. A report is the error where
+/// what counts of any type that it is about is unsafe to copy, and where it cannot be tied to a type at all. The default value is no
+/// statement, which an enforced rule cannot be created with.
 /// </summary>
+/// <remarks>
+/// What counts of a type depends on what the rule is about. A report that a value was copied is about the values that the copy
+/// duplicates: the value itself and what it holds inline, through tuples, nullable types and structs by their type arguments
+/// (<see cref="IsCopy"/>). A reference that rides along, to a list, a delegate or any class, is not duplicated, so what is behind it does
+/// not count. A report that other code can get at a value or a container, as a member that is not on a list, a conversion that hides it,
+/// a method that keeps it or a box, is about everything that code can reach: the value, what it holds inline, and the values of the
+/// containers that it carries.
+/// </remarks>
 internal readonly struct About
 {
-    private About(ImmutableArray<int> arguments, bool whatItHolds, bool isGiven)
+    private About(ImmutableArray<int> arguments, bool isCopy, bool whatItHolds, bool isGiven)
     {
         Arguments = arguments;
+        IsCopy = isCopy;
         WhatItHolds = whatItHolds;
         IsGiven = isGiven;
     }
@@ -112,13 +144,19 @@ internal readonly struct About
     /// Gets what a report is about where it cannot be tied to a type, such as a call of <c>RuntimeHelpers.GetObjectValue</c>, or a
     /// generic whose type parameter stands for whatever a caller binds: every report is the error under the updated rules.
     /// </summary>
-    public static About NoType { get; } = new([], whatItHolds: false, isGiven: false);
+    public static About NoType { get; } = new([], isCopy: false, whatItHolds: false, isGiven: false);
 
     /// <summary>
-    /// Gets what a report is about where its message does not name the type: the code that reports it gives the type as a
-    /// <see cref="Subject"/>. A report that is given none is the error under the updated rules.
+    /// Gets what a report that a value was copied is about where its message does not name the type: the code that reports it gives the
+    /// type as a <see cref="Subject"/>. A report that is given none is the error under the updated rules.
     /// </summary>
-    public static About Given { get; } = new([], whatItHolds: false, isGiven: true);
+    public static About GivenCopy { get; } = new([], isCopy: true, whatItHolds: false, isGiven: true);
+
+    /// <summary>
+    /// Gets what a report that other code can get at a value or a container is about where its message does not name the type: the code
+    /// that reports it gives the type as a <see cref="Subject"/>. A report that is given none is the error under the updated rules.
+    /// </summary>
+    public static About GivenReach { get; } = new([], isCopy: false, whatItHolds: false, isGiven: true);
 
     /// <summary>
     /// Gets a value indicating whether the value says anything: the default value does not.
@@ -126,10 +164,18 @@ internal readonly struct About
     public bool IsSpecified => !Arguments.IsDefault;
 
     /// <summary>
-    /// Gets the indexes of the arguments of the message that are the types a report is about. A type of a value counts where it is
-    /// unsafe to copy, and a container where a value that it holds is. An argument that is not a type makes the report the error.
+    /// Gets the indexes of the arguments of the message that are the types a report is about. An argument that is not a type makes the
+    /// report the error.
     /// </summary>
     public ImmutableArray<int> Arguments { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether a report is about a copy: what counts of a type is what a copy of a value of it duplicates, which
+    /// is the value and what it holds inline. A container that such a report names is about the container left in two places, where other
+    /// code can reach it, so it counts by what it holds. Otherwise a report is about everything that code which gets at the value or the
+    /// container can reach.
+    /// </summary>
+    public bool IsCopy { get; }
 
     /// <summary>
     /// Gets a value indicating whether a type that a report is about counts by what it holds, its type arguments, rather than by itself:
@@ -143,26 +189,37 @@ internal readonly struct About
     public bool IsGiven { get; }
 
     /// <summary>
-    /// Gets what a report is about where the given arguments of its message are the types.
+    /// Gets what a report that a value was copied is about where the given arguments of its message are the types.
     /// </summary>
-    public static About Argument(params int[] indexes) => new([.. indexes], whatItHolds: false, isGiven: false);
+    public static About Copy(params int[] indexes) => new([.. indexes], isCopy: true, whatItHolds: false, isGiven: false);
 
     /// <summary>
-    /// Gets what a report is about where the given argument of its message is a type that counts by what it holds.
+    /// Gets what a report that other code can get at a value or a container is about where the given arguments of its message are the
+    /// types.
     /// </summary>
-    public static About WhatArgumentHolds(int index) => new([index], whatItHolds: true, isGiven: false);
+    public static About Reach(params int[] indexes) => new([.. indexes], isCopy: false, whatItHolds: false, isGiven: false);
+
+    /// <summary>
+    /// Gets what a report is about where the given argument of its message is a type that counts by what it holds: a box hides what the
+    /// value of a generic struct holds from other code, which reaches it through the interfaces of the box.
+    /// </summary>
+    public static About WhatArgumentHolds(int index) => new([index], isCopy: false, whatItHolds: true, isGiven: false);
 }
 
 /// <summary>
-/// The types that a report is about, given by the code that reports it where the message does not name them (<see cref="About.Given"/>).
+/// The types that a report is about, given by the code that reports it where the message does not name them (<see cref="About.GivenCopy"/>,
+/// <see cref="About.GivenReach"/>).
 /// </summary>
 internal readonly struct Subject
 {
-    private Subject(ImmutableArray<ITypeSymbol?> types, bool isDeclared, bool involvesNoUnsafeToCopy = false)
+    private Subject(
+        ImmutableArray<ITypeSymbol?> types, bool isDeclared, bool involvesNoUnsafeToCopy = false, ITypeSymbol? alsoReached = null, bool isTooLarge = false)
     {
         Types = types;
         IsDeclared = isDeclared;
         InvolvesNoUnsafeToCopy = involvesNoUnsafeToCopy;
+        AlsoReached = alsoReached;
+        IsTooLarge = isTooLarge;
     }
 
     /// <summary>
@@ -172,9 +229,22 @@ internal readonly struct Subject
     public static Subject NoUnsafeToCopy { get; } = new([], isDeclared: false, involvesNoUnsafeToCopy: true);
 
     /// <summary>
-    /// Gets the types. A null type stands for a report that cannot be tied to one, which is the error under the updated rules.
+    /// Gets the subject of a report about a declaration that was not checked because a type of it has more parts than a walk looks at:
+    /// it cannot be tied to a type, and is strict under the updated rules because of that bound, which its message says.
+    /// </summary>
+    public static Subject TooLarge { get; } = new([], isDeclared: false, isTooLarge: true);
+
+    /// <summary>
+    /// Gets the types, which count as the rule says (<see cref="About.IsCopy"/>). A null type stands for a report that cannot be tied to
+    /// one, which is the error under the updated rules.
     /// </summary>
     public ImmutableArray<ITypeSymbol?> Types { get; }
+
+    /// <summary>
+    /// Gets a type of a report that stands for a second one, about what other code can reach, which counts by what that code can reach
+    /// whatever the rule says. Null if there is none.
+    /// </summary>
+    public ITypeSymbol? AlsoReached { get; }
 
     /// <summary>
     /// Gets a value indicating whether the types are those of a declaration whose mark the report is about, such as a [MovedFrom]
@@ -189,6 +259,12 @@ internal readonly struct Subject
     public bool InvolvesNoUnsafeToCopy { get; }
 
     /// <summary>
+    /// Gets a value indicating whether the report is about a declaration with a type that has more parts than a walk looks at
+    /// (<see cref="TooLarge"/>).
+    /// </summary>
+    public bool IsTooLarge { get; }
+
+    /// <summary>
     /// Gets a value indicating whether the code that reports gave a subject: the default value is none.
     /// </summary>
     public bool IsSpecified => !Types.IsDefault;
@@ -197,6 +273,13 @@ internal readonly struct Subject
     /// Gets the subject of a report about values or containers of the given types.
     /// </summary>
     public static Subject Of(params ITypeSymbol?[] types) => new([.. types], isDeclared: false);
+
+    /// <summary>
+    /// Gets the subject of a report about a copy that stands for the report of a conversion as well: a use of an object that hands it to
+    /// code that can clone it, which copies the binding that the report names, and hides what the converted value holds, which that code
+    /// can reach.
+    /// </summary>
+    public static Subject OfCopyAndReach(ITypeSymbol? copied, ITypeSymbol? reached) => new([copied], isDeclared: false, alsoReached: reached);
 
     /// <summary>
     /// Gets the subject of a report about the mark of a parameter or of a return value of the given type. A type that mentions a type

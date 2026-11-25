@@ -320,7 +320,7 @@ public class SafeListTests
         Verify.SafeListLine(12, 1, 18, "unknown marker 'safe'; the markers are 'new', 'borrows', 'drains', 'owned', 'borrowswhen', 'view', 'noncopyable', 'unsafetocopy', 'copyable', 'erasable' and 'clones', and 'trusted' for an assembly"),
         Verify.SafeListLine(13, 1, 21, "an entry has one marker, which 'for=' can follow"),
         Verify.SafeListLine(14, 1, 14, "a documentation comment ID has no white space"),
-        Verify.SafeListLine(16, 1, 27, "'for=' is for a member"),
+        Verify.SafeListLine(16, 1, 27, "'for=' is for a member, or for a type marked 'erasable'"),
         Verify.SafeListLine(17, 1, 18, "'for=' takes one or more type parameter names, separated by commas"),
         Verify.SafeListLine(18, 1, 22, "'for=' takes one or more type parameter names, separated by commas"),
         Verify.SafeListLine(19, 1, 23, "'for=' is the last part of an entry"),
@@ -477,12 +477,179 @@ public class SafeListTests
                 unresolved.Add(id);
         }
 
-        Assert.AreEqual(905, count);
+        Assert.AreEqual(936, count);
         Assert.AreEqual(14, netFrameworkCount);
         Assert.IsEmpty(unresolved, "Entries that do not name one public symbol of their framework: " + string.Join(", ", unresolved));
         Assert.IsEmpty(onNet, "Entries marked \"# netfx\" that name a symbol of .NET 10 or .NET 11: " + string.Join(", ", onNet));
 
         static bool IsNetFrameworkLine(string line) => line.TrimEnd().EndsWith("# netfx", StringComparison.Ordinal);
+    }
+
+    // The key collection of a dictionary hands out keys, and its code reads keys only: the built-in framework symbol list marks it
+    // erasable for the value type, so converting it to a collection of keys, as LINQ does, hides nothing, and the value collection is
+    // erasable for the key type in the same way. So is the metadata of a Lazy<T, TMetadata>. The key and value collections of the other
+    // dictionaries read both halves of an entry, or wrap any dictionary, and stay reported, as does what hands out a value.
+    [TestMethod]
+    public Task ErasableFor_TheKeysAndTheValuesOfADictionaryHideNothingOfTheOtherType() => Verify.AnalyzerAsync(
+        """
+        using System;
+        using System.Collections.Generic;
+        using System.Collections.ObjectModel;
+        using System.Linq;
+
+        class C
+        {
+            Dictionary<int, Guard> _map = new();
+
+            void Keys(
+                SortedDictionary<int, Guard>.KeyCollection sorted,
+                ReadOnlyDictionary<int, Guard>.KeyCollection readOnly,
+                OrderedDictionary<int, Guard>.KeyCollection ordered)
+            {
+                List<int> list = _map.Keys.ToList();
+                int[] array = _map.Keys.ToArray();
+                IEnumerable<int> a = {|#0:sorted|};
+                IReadOnlyCollection<int> b = {|#1:readOnly|};
+                ICollection<int> c = {|#2:ordered|};
+                object d = {|#3:_map.Values|};
+            }
+
+            void Values(Dictionary<Guard, int>.ValueCollection plain, SortedDictionary<Guard, int>.ValueCollection sorted)
+            {
+                IEnumerable<int> a = plain;
+                IEnumerable<int> b = {|#4:sorted|};
+            }
+
+            void Metadata(Lazy<int, Guard> lazy)
+            {
+                Lazy<int> plain = lazy;
+                object boxed = lazy;
+            }
+        }
+        """ + System.Environment.NewLine + Sources.Guard,
+        Verify.OpaqueConversion(0, "System.Collections.Generic.SortedDictionary<int, Guard>.KeyCollection", "System.Collections.Generic.IEnumerable<int>"),
+        Verify.OpaqueConversion(1, "System.Collections.ObjectModel.ReadOnlyDictionary<int, Guard>.KeyCollection", "System.Collections.Generic.IReadOnlyCollection<int>"),
+        Verify.OpaqueConversion(2, "System.Collections.Generic.OrderedDictionary<int, Guard>.KeyCollection", "System.Collections.Generic.ICollection<int>"),
+        Verify.OpaqueConversion(3, "System.Collections.Generic.Dictionary<int, Guard>.ValueCollection", "object"),
+        Verify.OpaqueConversion(4, "System.Collections.Generic.SortedDictionary<Guard, int>.ValueCollection", "System.Collections.Generic.IEnumerable<int>"));
+
+    // The erasure applies whatever the other type is: with a key that is non-copyable itself, converting the key collection to a
+    // collection of keys still hides nothing of the values, and what is left to judge is the key alone. A conversion to an untyped
+    // collection hides the key, and is about the key only: the ordinary warning for a plain key, though the values are unsafe to copy.
+    // The value collection is the mirror. The member uses that the key itself gets are left out with NoWarn, which leaves an error.
+    [TestMethod]
+    public Task ErasableFor_AppliesWhateverTheOtherTypeIs()
+    {
+        if (!Verify.CompilerHasUpdatedRules)
+            Assert.Inconclusive("The compiler of this target does not apply the updated memory safety rules.");
+
+        return new Verify.Test {
+            TestCode = """
+                using System.Collections;
+                using System.Collections.Generic;
+                using System.Linq;
+                using Singulink.CodeAnalysis;
+
+                [NonCopyable]
+                public struct PG { }
+
+                [NonCopyable(UnsafeToCopy = true)]
+                public struct UG { }
+
+                class C
+                {
+                    Dictionary<PG, UG> _byKey = null!;
+                    Dictionary<PG, List<UG>> _lists = null!;
+                    Dictionary<UG, PG> _byValue = null!;
+
+                    void M()
+                    {
+                        List<PG> list = _byKey.Keys.ToList();
+                        IEnumerable<PG> keys = _byKey.Keys;
+                        IEnumerable<PG> ofLists = _lists.Keys;
+                        object untyped = (IEnumerable){|#0:_byKey.Keys|};
+                        IEnumerable<PG> values = {|#1:_byValue.Values|};
+                        object untypedValues = (IEnumerable){|#3:{|#2:_byValue.Values|}|};
+                    }
+                }
+                """,
+            LanguageVersion = LanguageVersion.Preview,
+            Features = [Verify.UpdatedRulesFeature],
+            NoWarn = [DiagnosticIds.UnlistedMember],
+            ExpectedDiagnostics = {
+                Verify.UntypedCollectionConversion(0, "System.Collections.Generic.Dictionary<PG, UG>.KeyCollection", "System.Collections.IEnumerable"),
+                Verify.MemberListedForOtherTypeParameter(1, "Dictionary<TKey, TValue>.Values", "UG", "TKey", "TValue").AsError(),
+                Verify.MemberListedForOtherTypeParameter(2, "Dictionary<TKey, TValue>.Values", "UG", "TKey", "TValue").AsError(),
+                Verify.UntypedCollectionConversion(3, "System.Collections.Generic.Dictionary<UG, PG>.ValueCollection", "System.Collections.IEnumerable"),
+            },
+        }.RunAsync();
+    }
+
+    // A line of a file says the same of a type of the project, for the type parameters that it names after 'for=', which can be those of
+    // the type or of a type that contains it. A name that the type does not have, and 'for=' after a marker other than 'erasable', are
+    // reported. Two lines for one type merge to the type parameters that both name. A line that would widen the 'for=' of the built-in
+    // framework symbol list has no effect, and is reported.
+    [TestMethod]
+    public Task ErasableFor_ALineOfAFileNamesTheTypeParametersThatAConversionHidesNothingOf()
+    {
+        var test = new Verify.Test {
+            TestCode = """
+                using System.Collections;
+                using System.Collections.Generic;
+
+                public class Pairs<TLeft, TRight> : IEnumerable<TLeft>
+                {
+                    public IEnumerator<TLeft> GetEnumerator() => null!;
+
+                    IEnumerator IEnumerable.GetEnumerator() => null!;
+                }
+
+                public class Outer<TOuter>
+                {
+                    public class Lefts<TLeft> : IEnumerable<TLeft>
+                    {
+                        public IEnumerator<TLeft> GetEnumerator() => null!;
+
+                        IEnumerator IEnumerable.GetEnumerator() => null!;
+                    }
+                }
+
+                public class Both<TLeft, TRight> : IEnumerable<TLeft>
+                {
+                    public IEnumerator<TLeft> GetEnumerator() => null!;
+
+                    IEnumerator IEnumerable.GetEnumerator() => null!;
+                }
+
+                class C
+                {
+                    void M(Pairs<int, Guard> pairs, Pairs<Guard, int> reversed, Outer<Guard>.Lefts<int> lefts, Both<int, Guard> both)
+                    {
+                        IEnumerable<int> a = pairs;
+                        object b = {|#0:reversed|};
+                        IEnumerable<int> c = lefts;
+                        IEnumerable<int> d = {|#1:both|};
+                    }
+                }
+                """ + System.Environment.NewLine + Sources.Guard,
+        };
+
+        test.TestState.AdditionalFiles.Add((Verify.ListFileName, string.Join("\n", [
+            "T:Pairs`2;erasable;for=TRight",
+            "T:Outer`1.Lefts`1;erasable;for=TOuter",
+            "T:Pairs`2;erasable;for=TMissing",
+            "T:Both`2;erasable;for=TLeft,TRight",
+            "T:System.Collections.Generic.Dictionary`2.KeyCollection;erasable",
+            "T:Guard;noncopyable;for=T",
+        ])));
+
+        test.TestState.AdditionalFiles.Add(("NonCopyableSymbols.More.txt", "T:Both`2;erasable;for=TLeft"));
+        test.ExpectedDiagnostics.Add(Verify.OpaqueConversion(0, "Pairs<Guard, int>", "object"));
+        test.ExpectedDiagnostics.Add(Verify.OpaqueConversion(1, "Both<int, Guard>", "System.Collections.Generic.IEnumerable<int>"));
+        test.ExpectedDiagnostics.Add(Verify.SafeListLine(3, 1, 32, "'TMissing' is not a type parameter of the type or of a type that contains it"));
+        test.ExpectedDiagnostics.Add(Verify.SafeListWidensBuiltIn(5, 65, "T:System.Collections.Generic.Dictionary`2.KeyCollection", "every type parameter", "TValue"));
+        test.ExpectedDiagnostics.Add(Verify.SafeListLine(6, 1, 26, "'for=' is for a member, or for a type marked 'erasable'"));
+        return test.RunAsync();
     }
 
     // A member that the list names for other type parameters than the one that a non-copyable type or a container is bound to gets a
@@ -555,6 +722,56 @@ public class SafeListTests
             test.ExpectedDiagnostics.Add(Verify.SafeListWidensBuiltIn(1, Line.Length + 1, Line, "every type parameter", "TValue"));
 
         await test.RunAsync();
+    }
+
+    // An 'erasable' line says of a type that no base type and no interface of it hands out a value of the type arguments that it is for:
+    // every type parameter, or those that 'for=' names. On the reference packs of the frameworks that the list is checked against, no base
+    // type and no interface of such a type mentions one of those type parameters. The rest of the claim, that no code behind those
+    // interfaces copies such a value, is read in the source and recorded in the evidence file.
+    [TestMethod]
+    [DataRow("10.0.0")]
+    [DataRow("11.0.0")]
+    public async Task ErasableLines_NameTypesWhoseBaseTypesAndInterfacesMentionNoTypeParameterThatTheyAreFor(string version)
+    {
+        var compilation = await CreateFrameworkCompilationAsync(version);
+        var lines = ReadBuiltInList().Split('\n').Select(l => l.Split('#')[0].Trim()).Where(l => l.Contains(";erasable", StringComparison.Ordinal)).ToList();
+        var wrong = new List<string>();
+
+        foreach (string line in lines)
+        {
+            string[] parts = line.Split(';');
+            var type = DocumentationCommentId.GetSymbolsForDeclarationId(parts[0], compilation).OfType<INamedTypeSymbol>().Single();
+            string? forPart = parts.Select(p => p.Trim()).FirstOrDefault(p => p.StartsWith("for=", StringComparison.Ordinal));
+            var names = forPart?["for=".Length..].Split(',').Select(n => n.Trim()).ToHashSet(StringComparer.Ordinal);
+
+            var typeParameters = new List<ITypeParameterSymbol>();
+
+            for (var current = type; current is not null; current = current.ContainingType)
+                typeParameters.AddRange(current.TypeParameters.Where(p => names is null || names.Contains(p.Name)));
+
+            if (typeParameters.Count != (names?.Count ?? typeParameters.Count))
+                wrong.Add(line + " (a name is not a type parameter of the type)");
+
+            var inherited = new List<INamedTypeSymbol>();
+
+            for (var current = type.BaseType; current is not null; current = current.BaseType)
+                inherited.Add(current);
+
+            inherited.AddRange(type.AllInterfaces);
+
+            foreach (var mentioning in inherited.Where(i => typeParameters.Any(p => Mentions(i, p))))
+                wrong.Add($"{line} ({mentioning.ToDisplayString()})");
+        }
+
+        Assert.IsGreaterThanOrEqualTo(2, lines.Count);
+        Assert.IsEmpty(wrong, "Erasable lines whose type has a base type or an interface that mentions a type parameter that the line is for: " + string.Join(", ", wrong));
+
+        static bool Mentions(ITypeSymbol type, ITypeParameterSymbol typeParameter) => type switch {
+            ITypeParameterSymbol other => SymbolEqualityComparer.Default.Equals(other, typeParameter),
+            IArrayTypeSymbol array => Mentions(array.ElementType, typeParameter),
+            INamedTypeSymbol named => named.TypeArguments.Any(a => Mentions(a, typeParameter)) || (named.ContainingType is { } containing && Mentions(containing, typeParameter)),
+            _ => false,
+        };
     }
 
     // The lines that say 'clones=complete' for a class that derives from a class that clones itself name, on the reference packs that a
@@ -1417,8 +1634,8 @@ public class SafeListTests
 
         {{Sources.Guard}}
         """,
-        Verify.ReadFromStoredContainer(0, "'TaskAsyncEnumerableExtensions.ConfigureAwait<T>(IAsyncEnumerable<T>, bool)'", Configured),
-        Verify.ReadFromStoredContainer(1, "'TaskAsyncEnumerableExtensions.WithCancellation<T>(IAsyncEnumerable<T>, CancellationToken)'", Configured));
+        Verify.MadeFromStoredContainer(0, "'TaskAsyncEnumerableExtensions.ConfigureAwait<T>(IAsyncEnumerable<T>, bool)'", Configured),
+        Verify.MadeFromStoredContainer(1, "'TaskAsyncEnumerableExtensions.WithCancellation<T>(IAsyncEnumerable<T>, CancellationToken)'", Configured));
 
     private const string Configured = "System.Runtime.CompilerServices.ConfiguredCancelableAsyncEnumerable<Guard>";
 
@@ -2085,6 +2302,136 @@ public class SafeListTests
         test.TestState.AdditionalFiles.Add((Verify.ListFileName, "T:Lib.Guard;noncopyable"));
         test.ExpectedDiagnostics.Add(Verify.CopyByAssignment(0, "Lib.Guard"));
         test.ExpectedDiagnostics.Add(Verify.SafeListNonCopyableHasNoEffect(1, 24, "T:Lib.Guard", "non-copyable", "its attribute marks it non-copyable already"));
+        await test.RunAsync();
+    }
+
+    // Everyday uses of the values of a dictionary, the default comparers, an empty sequence and an immutable array make no copy, in
+    // checked code and in a generic that marks its type parameter: the built-in framework symbol list names them. What hands out a copy
+    // of a stored value gets one report, as a 'foreach' over a stored List<T> does. The conversion of the keys to a sequence hides
+    // nothing: the key collection is erasable for the value type.
+    [TestMethod]
+    public Task BuiltInList_CoversEverydayUsesOfValuesComparersAndImmutableArrays() => Verify.AnalyzerAsync(
+        $$"""
+        using System.Collections.Generic;
+        using System.Collections.Immutable;
+        using System.Linq;
+        using Singulink.CodeAnalysis;
+
+        class C
+        {
+            Dictionary<string, Guard> _byName = new();
+            ImmutableArray<Guard> _array = ImmutableArray<Guard>.Empty;
+
+            void Values()
+            {
+                foreach (var name in _byName.Keys)
+                {
+                }
+
+                int count = _byName.Values.Count;
+
+                foreach (var guard in {|#0:_byName.Values|})
+                {
+                }
+            }
+
+            void Statics()
+            {
+                var equality = EqualityComparer<Guard>.Default;
+                var comparer = Comparer<Guard>.Default;
+                var empty = Enumerable.Empty<Guard>();
+                var none = ImmutableArray.Create<Guard>();
+            }
+
+            void Immutable(RwLock rwLock)
+            {
+                int length = _array.Length;
+                bool empty = _array.IsEmpty || _array.IsDefault || _array.IsDefaultOrEmpty;
+                ref readonly var first = ref _array.ItemRef(0);
+                var span = _array.AsSpan();
+                var builder = ImmutableArray.CreateBuilder<Guard>(1);
+                builder.Add(rwLock.Enter());
+                var built = builder.MoveToImmutable();
+                var one = ImmutableArray.Create(rwLock.Enter());
+                int counts = builder.Count + ImmutableList<Guard>.Empty.Count + ImmutableDictionary<int, Guard>.Empty.Count;
+
+                foreach (var guard in {|#1:_array|})
+                {
+                }
+
+                var copy = {|#2:_array[0]|};
+            }
+
+            void KeysToList()
+            {
+                foreach (var name in _byName.Keys.ToList())
+                {
+                }
+            }
+        }
+
+        class Marked<[NonCopyable] T>
+        {
+            Dictionary<int, T> _byId = new();
+
+            void M()
+            {
+                var equality = EqualityComparer<T>.Default;
+                var empty = Enumerable.Empty<T>();
+
+                foreach (var key in _byId.Keys)
+                {
+                }
+
+                int count = _byId.Values.Count;
+            }
+        }
+
+        {{Sources.Guard}}
+        """,
+        Verify.ReadFromStoredContainer(0, "'foreach'", "Guard"),
+        Verify.ReadFromStoredContainer(1, "'foreach'", "Guard"),
+        Verify.ReadFromStoredContainer(2, "'ImmutableArray<T>.this[int]'", "Guard"));
+
+    // A file is a package's wherever NuGet put the package: in the global packages folder or in a fallback folder, both of which the
+    // assets file of the project names, and in the packages folder of a project that restores with packages.config, which is where the
+    // analyzer's own package is. Its 'copyable' line takes nothing out. A file outside every such folder is the project's own, and its
+    // 'copyable' line takes the type out.
+    [TestMethod]
+    [DataRow(null, "/fallback/lib/1.0.0/build/NonCopyableSymbols.Lib.txt", true)]
+    [DataRow(null, "/packages/lib/1.0.0/build/NonCopyableSymbols.Lib.txt", true)]
+    [DataRow("/solution/packages/", "/solution/packages/Lib.1.0.0/build/NonCopyableSymbols.Lib.txt", true)]
+    [DataRow(null, "/project/Lists/NonCopyableSymbols.Lib.txt", false)]
+    [DataRow(null, "/fallbacks/NonCopyableSymbols.Lib.txt", false)]
+    public async Task ListFile_OfAPackageInAnyFolderOfNuGetIsAPackagesFile(string? packagesConfigFolder, string path, bool isOfAPackage)
+    {
+        var library = await Verify.CompileLibraryAsync(
+            Verify.Test.NetReferenceAssemblies, "namespace Lib { [Singulink.CodeAnalysis.NonCopyable] public struct Guard { } }", analyzed: true, "Lib");
+
+        var test = new Verify.Test {
+            TestCode = """
+                class C
+                {
+                    Lib.Guard _guard;
+
+                    void M()
+                    {
+                        var guard = {|#0:_guard|};
+                    }
+                }
+                """,
+        }.WithBuildProperty("_NonCopyablePackagesFolder", packagesConfigFolder);
+
+        test.TestState.AdditionalReferences.Add(library);
+        test.TestState.AdditionalFiles.Add((path, "T:Lib.Guard;copyable"));
+
+        // A project that restores with packages.config has no assets file.
+        if (packagesConfigFolder is null)
+            test.TestState.AdditionalFiles.Add(("/project/obj/project.assets.json", """{ "version": 3, "targets": { }, "packageFolders": { "/packages/": { }, "/fallback/": { } } }"""));
+
+        if (isOfAPackage)
+            test.ExpectedDiagnostics.Add(Verify.CopyByAssignment(0, "Lib.Guard"));
+
         await test.RunAsync();
     }
 }

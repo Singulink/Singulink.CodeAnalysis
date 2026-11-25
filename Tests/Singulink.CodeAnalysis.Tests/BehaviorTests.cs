@@ -218,7 +218,7 @@ public class BehaviorTests
 
         {{Guard}}
         """,
-        Verify.UsedAfterHandOff(1, "local", "Guard", "\'using\' disposed its value", 0));
+        Verify.UsedAfterUsing(1, "local", "Guard", 0));
 
     [TestMethod]
     public Task AsyncMethodsAndLambdas() => Verify.AnalyzerAsync(

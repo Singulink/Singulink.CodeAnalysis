@@ -128,6 +128,19 @@ T:System.Threading.Tasks.Task`1;erasable
 # TaskCompletionSource`1: no base class, no interface, no override of a member of object.
 T:System.Threading.Tasks.TaskCompletionSource`1;erasable
 
+# Erasable for some type parameters only: no base type and no interface hands out a value of the type parameters after 'for=', and
+# no code behind those interfaces copies one.
+# Dictionary`2.KeyCollection: its generic interfaces hand out keys, and its members read keys only, by reference (Dictionary.cs
+# 1886-2079). ICollection.SyncRoot hands out the dictionary's own, which on .NET is the dictionary itself (Dictionary.cs 1634, 2009):
+# a cast of that lock object back to the dictionary reaches the values, a use against its documentation that the analyzer does not
+# follow (What Is Not Covered).
+T:System.Collections.Generic.Dictionary`2.KeyCollection;erasable;for=TValue
+# Dictionary`2.ValueCollection: its generic interfaces hand out values, and its members read values only, by reference (Dictionary.cs
+# 2081-2272). ICollection.SyncRoot hands out the dictionary itself, as for the keys (Dictionary.cs 2203).
+T:System.Collections.Generic.Dictionary`2.ValueCollection;erasable;for=TKey
+# Lazy`2: its base Lazy`1 has no interface and never sees the metadata, which only Metadata hands out (LazyOfTTMetadata.cs).
+T:System.Lazy`2;erasable;for=TMetadata
+
 # ============================================================================
 # Awaiting
 # ============================================================================
@@ -668,14 +681,26 @@ M:System.Collections.Generic.Dictionary`2.Enumerator.Dispose;for=TValue
 
 # The keys of a dictionary: the collection and its enumerator read keys only, so no value is copied. It is how the values of
 # a dictionary are released one by one: snapshot the keys with a spread, '[.. map.Keys]', and take each value out with Remove.
+# new: GetEnumerator makes an enumerator that holds the dictionary and a key, and no value (Dictionary.cs 1900, 2008-2024).
 P:System.Collections.Generic.Dictionary`2.Keys;for=TValue
-M:System.Collections.Generic.Dictionary`2.KeyCollection.GetEnumerator;for=TValue
+M:System.Collections.Generic.Dictionary`2.KeyCollection.GetEnumerator;new;for=TValue
 P:System.Collections.Generic.Dictionary`2.KeyCollection.Count;for=TValue
 M:System.Collections.Generic.Dictionary`2.KeyCollection.Contains(`0);for=TValue
 M:System.Collections.Generic.Dictionary`2.KeyCollection.CopyTo(`0[],System.Int32);for=TValue
 M:System.Collections.Generic.Dictionary`2.KeyCollection.Enumerator.MoveNext;for=TValue
 P:System.Collections.Generic.Dictionary`2.KeyCollection.Enumerator.Current;for=TValue
 M:System.Collections.Generic.Dictionary`2.KeyCollection.Enumerator.Dispose;for=TValue
+
+# The values of a dictionary: the collection holds the dictionary, and its enumerator copies each value into the copy that Current
+# hands out, as the enumerator of List`1 does, with no key read (Dictionary.cs 222, 2081-2244). CopyTo copies every value into an
+# array, and is not here.
+P:System.Collections.Generic.Dictionary`2.Values;for=TValue
+M:System.Collections.Generic.Dictionary`2.ValueCollection.GetEnumerator;for=TValue
+P:System.Collections.Generic.Dictionary`2.ValueCollection.Count;for=TValue
+M:System.Collections.Generic.Dictionary`2.ValueCollection.Enumerator.MoveNext;for=TValue
+P:System.Collections.Generic.Dictionary`2.ValueCollection.Enumerator.Current;for=TValue
+M:System.Collections.Generic.Dictionary`2.ValueCollection.Enumerator.Dispose;for=TValue
+
 M:System.Collections.Generic.Dictionary`2.#ctor(System.Collections.Generic.IEqualityComparer{`0});for=TValue
 M:System.Collections.Generic.Dictionary`2.#ctor(System.Int32,System.Collections.Generic.IEqualityComparer{`0});for=TValue
 P:System.Collections.Generic.Dictionary`2.Comparer;for=TValue
@@ -695,6 +720,41 @@ M:System.Collections.Generic.Dictionary`2.AlternateLookup`1.TryGetValue(`2,`1@);
 M:System.Collections.Generic.Dictionary`2.AlternateLookup`1.TryGetValue(`2,`0@,`1@);for=TValue
 M:System.Collections.Generic.Dictionary`2.AlternateLookup`1.Remove(`2);for=TValue
 M:System.Collections.Generic.Dictionary`2.AlternateLookup`1.Remove(`2,`0@,`1@);new;for=TValue
+
+# The default comparers: the static initializer makes the comparer of the type by reflection, with no value
+# (EqualityComparer.CoreCLR.cs 13, Comparer.CoreCLR.cs 12). What a comparer is given is judged where it is called.
+P:System.Collections.Generic.EqualityComparer`1.Default
+P:System.Collections.Generic.Comparer`1.Default
+
+# System.Linq.Enumerable.Empty: Array.Empty<TResult>(), which holds no value (Enumerable.cs 19-20).
+M:System.Linq.Enumerable.Empty``1
+
+# System.Collections.Immutable.ImmutableArray`1: the members that read its length, hand out a reference, a view or an element, and
+# build one. The indexer and the enumerator hand out a copy of an element, as those of List`1 do. Create with one element and the
+# builder's Add take the value that they are given into the array; the builder's Count and its growth move the elements into a new
+# array, which the builder alone holds, and MoveToImmutable hands that array out (ImmutableArray.cs 26-41, 408-422;
+# ImmutableArray_1.Minimal.cs 121-198, 263-286; ImmutableArray_1.Enumerator.cs 38-65; ImmutableArray_1.Builder.cs 34-130, 203-214, 326-332).
+M:System.Collections.Immutable.ImmutableArray.Create``1
+M:System.Collections.Immutable.ImmutableArray.Create``1(``0)
+M:System.Collections.Immutable.ImmutableArray.CreateBuilder``1
+M:System.Collections.Immutable.ImmutableArray.CreateBuilder``1(System.Int32)
+P:System.Collections.Immutable.ImmutableArray`1.Length
+P:System.Collections.Immutable.ImmutableArray`1.IsEmpty
+P:System.Collections.Immutable.ImmutableArray`1.IsDefault
+P:System.Collections.Immutable.ImmutableArray`1.IsDefaultOrEmpty
+P:System.Collections.Immutable.ImmutableArray`1.Item(System.Int32)
+M:System.Collections.Immutable.ImmutableArray`1.ItemRef(System.Int32)
+M:System.Collections.Immutable.ImmutableArray`1.AsSpan
+M:System.Collections.Immutable.ImmutableArray`1.GetEnumerator
+M:System.Collections.Immutable.ImmutableArray`1.Enumerator.MoveNext
+P:System.Collections.Immutable.ImmutableArray`1.Enumerator.Current
+M:System.Collections.Immutable.ImmutableArray`1.Builder.Add(`0)
+P:System.Collections.Immutable.ImmutableArray`1.Builder.Count
+M:System.Collections.Immutable.ImmutableArray`1.Builder.MoveToImmutable
+
+# The counts of the other immutable collections read a field (ImmutableList_1.cs 142, ImmutableDictionary_2.cs 133-136).
+P:System.Collections.Immutable.ImmutableList`1.Count
+P:System.Collections.Immutable.ImmutableDictionary`2.Count
 
 # System.Collections.Generic.PriorityQueue`2 (safe for a non-copyable TElement only: the comparer is given priorities). The heap
 # moves elements within its array; what is dequeued is taken out.

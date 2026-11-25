@@ -1095,4 +1095,113 @@ public class UnsafeToCopyTests
         """,
         Verify.UnsafeToCopySetInOwnCode(0, "NonCopyableAttribute"),
         Verify.CopyByAssignment(1, "App.Handle"));
+
+    // A public field named UnsafeToCopy is set by a named argument as the property is, so code of the attribute class that writes it, in
+    // a constructor or in its initializer, gets the warning as well. Setting it from the constructor's own 'unsafeToCopy' parameter is what
+    // the analyzer reads, and gets nothing, and a named argument for the field counts where the attribute is applied.
+    [TestMethod]
+    public Task OwnAttribute_WithAFieldThatItsOwnCodeSetsGetsAWarning() => Verify.UpdatedRulesAsync(
+        """
+        namespace Singulink.CodeAnalysis
+        {
+            [System.AttributeUsage(System.AttributeTargets.Struct | System.AttributeTargets.GenericParameter)]
+            internal class NonCopyableAttribute : System.Attribute
+            {
+                public bool UnsafeToCopy;
+
+                public NonCopyableAttribute() { }
+
+                public NonCopyableAttribute(bool unsafeToCopy) => UnsafeToCopy = unsafeToCopy;
+            }
+
+            internal sealed class AssignedAttribute : NonCopyableAttribute
+            {
+                public AssignedAttribute() { {|#0:UnsafeToCopy = true|}; }
+            }
+
+            internal sealed class AssignedThroughThisAttribute : NonCopyableAttribute
+            {
+                public AssignedThroughThisAttribute() { {|#1:this.UnsafeToCopy = true|}; }
+            }
+
+            internal sealed class AssignedThroughBaseAttribute : NonCopyableAttribute
+            {
+                public AssignedThroughBaseAttribute() { {|#2:base.UnsafeToCopy = true|}; }
+            }
+        }
+
+        namespace Other
+        {
+            [System.AttributeUsage(System.AttributeTargets.Struct)]
+            internal sealed class InitializedAttribute : Singulink.CodeAnalysis.NonCopyableAttribute
+            {
+                public new bool UnsafeToCopy {|#6:= true|};
+            }
+        }
+
+        namespace App
+        {
+            [Singulink.CodeAnalysis.Assigned]
+            struct Assigned { }
+
+            [Singulink.CodeAnalysis.NonCopyable(UnsafeToCopy = true)]
+            struct Named { }
+
+            [Singulink.CodeAnalysis.NonCopyable(unsafeToCopy: true)]
+            struct ByParameter { }
+
+            class C
+            {
+                Assigned _assigned;
+                Named _named;
+                ByParameter _byParameter;
+
+                void M()
+                {
+                    var assigned = {|#3:_assigned|};
+                    var named = {|#4:_named|};
+                    var byParameter = {|#5:_byParameter|};
+                }
+            }
+        }
+        """,
+        Verify.UnsafeToCopySetInOwnCode(0, "AssignedAttribute"),
+        Verify.UnsafeToCopySetInOwnCode(1, "AssignedThroughThisAttribute"),
+        Verify.UnsafeToCopySetInOwnCode(2, "AssignedThroughBaseAttribute"),
+        Verify.UnsafeToCopySetInOwnCode(6, "InitializedAttribute"),
+        Verify.CopyByAssignment(3, "App.Assigned"),
+        Verify.CopyByAssignment(4, "App.Named").AsError(),
+        Verify.CopyByAssignment(5, "App.ByParameter").AsError());
+
+    // The initializer of the field is code of the attribute class too.
+    [TestMethod]
+    public Task OwnAttribute_WithAnInitializedFieldGetsAWarning() => Verify.UpdatedRulesAsync(
+        """
+        namespace Singulink.CodeAnalysis
+        {
+            [System.AttributeUsage(System.AttributeTargets.Struct | System.AttributeTargets.GenericParameter)]
+            internal sealed class NonCopyableAttribute : System.Attribute
+            {
+                public bool UnsafeToCopy {|#0:= true|};
+            }
+        }
+
+        namespace App
+        {
+            [Singulink.CodeAnalysis.NonCopyable]
+            struct Handle { }
+
+            class C
+            {
+                Handle _handle;
+
+                void M()
+                {
+                    var handle = {|#1:_handle|};
+                }
+            }
+        }
+        """,
+        Verify.UnsafeToCopySetInOwnCode(0, "NonCopyableAttribute"),
+        Verify.CopyByAssignment(1, "App.Handle"));
 }

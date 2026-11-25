@@ -49,6 +49,7 @@ Probe11.cs(56,20): SCA1022
 Probe11.cs(57,20): SCA1023
 Probe11.cs(58,51): SCA1032
 Probe12.cs(10,29): SCA1004
+Probe12.cs(10,29): SCA1023
 Probe12.cs(9,28): SCA1023
 Probe13.cs(14,25): SCA1023
 Probe13.cs(16,20): SCA1023
@@ -114,6 +115,7 @@ Probe5.cs(13,26): SCA1023
 Probe5.cs(14,26): SCA1023
 Probe6.cs(3,19): SCA1010
 Probe7.cs(24,30): SCA1004
+Probe7.cs(24,30): SCA1023
 Probe7.cs(25,48): SCA1022
 Probe7.cs(42,26): SCA1023
 Probe7.cs(44,22): SCA1001
@@ -125,6 +127,7 @@ Probe8.cs(31,43): SCA1031
 Probe8.cs(32,29): SCA1022
 Probe8.cs(32,46): SCA1031
 Probe8.cs(41,28): SCA1004
+Probe8.cs(41,28): SCA1023
 Probe8.cs(42,33): SCA1023
 Probe8.cs(65,27): SCA1023
 Probe8.cs(67,27): SCA1023

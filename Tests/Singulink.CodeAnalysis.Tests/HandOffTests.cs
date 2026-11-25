@@ -42,6 +42,38 @@ public class HandOffTests
         Verify.UsedAfterHandOff(0, "guard", "Guard", "'C.TryTake(Guard)' received its value", 1));
 
     // A use after the first one on a path is not reported.
+    // A 'using' statement over a variable takes a copy of its value, which it disposes at its end. A use of the variable inside the
+    // statement, or after it, is a use after that hand-off, and the message says what the 'using' did, and how to write it instead.
+    [TestMethod]
+    public Task HandOff_ToAUsingStatementSaysThatItTookACopy() => Verify.AnalyzerAsync(
+        $$"""
+        class C
+        {
+            {{Members}}
+
+            void Inside()
+            {
+                var guard = new Guard();
+
+                using ({|#1:guard|})
+                    _ = {|#0:guard|}.Value;
+            }
+
+            void After(Guard guard)
+            {
+                using ({|#3:guard|})
+                {
+                }
+
+                _ = {|#2:guard|}.Value;
+            }
+        }
+
+        {{Sources.Guard}}
+        """,
+        Verify.UsedAfterUsing(0, "guard", "Guard", 1),
+        Verify.UsedAfterUsing(2, "guard", "Guard", 3));
+
     [TestMethod]
     public Task HandOff_IsReportedAtTheFirstUseOnAPathOnly() => Verify.AnalyzerAsync(
         $$"""

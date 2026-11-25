@@ -997,6 +997,7 @@ public class LanguageConstructTests
         """,
         Verify.Boxing(0, "Guard", "System.IDisposable"),
         Verify.Boxing(1, "T", "System.IDisposable"),
+        Verify.OpaqueTypeParameterConversion(1, "T", "System.IDisposable"),
         Verify.Boxing(2, "Guard", "object"),
         Verify.Boxing(3, "Held", "IHeld"),
         Verify.Boxing(4, "Guard", "System.IDisposable"),
@@ -1436,6 +1437,30 @@ public class LanguageConstructTests
         Verify.MemberOnReadOnlyReference(6, "Buffer", "Buffer.Touch()"),
         Verify.MemberOnReadOnlyReference(7, "Buffer", "Buffer.Touch()"),
         Verify.MemberOnReadOnlyReference(8, "Buffer", "Buffer.Touch()"));
+
+    // Taking the address of a variable makes no copy: the pointer refers to the variable itself, a local, a parameter or a field.
+    [TestMethod]
+    public Task AddressOf_MakesNoCopy() => Verify.AnalyzerAsync(
+        $$"""
+        class C
+        {
+            Guard _field;
+
+            unsafe void M(Guard parameter)
+            {
+                var local = new Guard();
+                Guard* a = &local;
+                Guard* b = &parameter;
+                a->Dispose();
+                b->Dispose();
+
+                fixed (Guard* c = &_field)
+                    c->Dispose();
+            }
+        }
+
+        {{Sources.Guard}}
+        """);
 
     [TestMethod]
     public Task Deconstruct_IsCalledOnWhatIsDeconstructed() => Verify.AnalyzerAsync(

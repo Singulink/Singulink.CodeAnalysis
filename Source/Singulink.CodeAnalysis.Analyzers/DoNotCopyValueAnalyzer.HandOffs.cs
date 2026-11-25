@@ -32,9 +32,10 @@ public sealed partial class DoNotCopyValueAnalyzer
     {
         var walker = new NonCopyableWalker(context, severities, types, moves, allowsImplicitMoves);
 
-        // Every recursion of the analyzer stops with this exception before the stack runs out. The rest of the member is then not
+        // Every recursion of the analyzer stops with this exception before the stack runs out, and a walk over types that reaches its
+        // bound where its answer has to name what it found stops with a TypeTooLargeException. The rest of the member is then not
         // checked, which is reported at the member, and the next member is checked as usual. No other exception is caught.
-        bool isTooDeep = false;
+        Rule? notChecked = null;
 
         try
         {
@@ -42,11 +43,15 @@ public sealed partial class DoNotCopyValueAnalyzer
         }
         catch (InsufficientExecutionStackException)
         {
-            isTooDeep = true;
+            notChecked = Rules.NestedTooDeeply;
+        }
+        catch (TypeTooLargeException)
+        {
+            notChecked = Rules.TypeTooLarge;
         }
 
         // A catch block runs on top of the frames that ran out of stack, so the member is reported once the handler has left them.
-        if (isTooDeep)
+        if (notChecked is not null)
         {
             foreach (var diagnostic in walker.Diagnostics)
                 context.ReportDiagnostic(diagnostic);
@@ -57,7 +62,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                 { Type: var type } => Subject.Of(type),
             };
 
-            context.ReportDiagnostic(severities.CreateAbout(Rules.NestedTooDeeply, subject, GetMemberLocation(context), Display(context.OwningSymbol)));
+            context.ReportDiagnostic(severities.CreateAbout(notChecked, subject, GetMemberLocation(context), Display(context.OwningSymbol)));
             return;
         }
 
@@ -76,20 +81,27 @@ public sealed partial class DoNotCopyValueAnalyzer
     /// What a rule with no type would report is found as well, with no type, since the value that it is about can be of any type: a call
     /// of MemberwiseClone, which copies the fields of a class below, and of RuntimeHelpers.GetObjectValue, a call of a member that a
     /// 'clones' line names, a value of a type parameter converted to a type that hides what is bound to it, a delegate made from a function
-    /// over a marked type parameter or with a [MovedFrom] parameter, and the code of a generic move.
+    /// over a marked type parameter or with a [MovedFrom] parameter, and the code of a generic move. A type parameter that says
+    /// UnsafeToCopy = false takes no container of a type that is unsafe to copy, so its value hidden and a delegate over it count as
+    /// it does.
     /// </remarks>
     /// <returns>
-    /// Whether such a value was found, with its type, or found as true with no type where the walk could not give an answer.
+    /// Whether such a value was found, with its type, or found as true with no type where the walk could not give an answer. A type that
+    /// is taken to hold one only because a walk over it reached its bound is found where nothing else is, and the report then says so.
     /// </returns>
     private static (bool Found, ITypeSymbol? Type) FindValueUnsafeToCopy(OperationBlockAnalysisContext context, NonCopyableTypes types)
     {
+        // A type that is taken to hold such a value only because a walk over it reached its bound, which the report then says, unless a
+        // type that holds one is found as well.
+        ITypeSymbol? atBound = null;
+
         try
         {
             // The class of the member is no value that its code holds: what it reads of its own object is an operation of the walk.
             if (FindInSignature(context.OwningSymbol) is { } ofMember)
                 return (true, ofMember);
 
-            if (context.OwningSymbol is { IsStatic: false, ContainingType: { TypeKind: TypeKind.Struct } owner } && types.IsAboutUnsafeToCopy(owner))
+            if (context.OwningSymbol is { IsStatic: false, ContainingType: { TypeKind: TypeKind.Struct } owner } && IsAbout(owner))
                 return (true, owner);
 
             if (context.OwningSymbol is IMethodSymbol owningMethod && NonCopyableTypes.IsGenericPureMove(owningMethod.OriginalDefinition))
@@ -102,13 +114,13 @@ public sealed partial class DoNotCopyValueAnalyzer
                 context.CancellationToken.ThrowIfCancellationRequested();
                 var operation = pending.Pop();
 
-                if (types.IsAboutUnsafeToCopy(operation.Type))
+                if (IsAbout(operation.Type))
                     return (true, operation.Type);
 
                 if (GetSymbolOf(operation) is { } symbol && FindInSymbol(symbol) is { } ofSymbol)
                     return (true, ofSymbol);
 
-                if (operation is IPatternOperation pattern && types.IsAboutUnsafeToCopy(pattern.NarrowedType))
+                if (operation is IPatternOperation pattern && IsAbout(pattern.NarrowedType))
                     return (true, pattern.NarrowedType);
 
                 if (IsAboutAnyType(operation))
@@ -118,7 +130,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                     pending.Push(child);
             }
 
-            return (false, null);
+            return (atBound is not null, atBound);
         }
 
         // Whatever stops the walk leaves the report strict. Only a cancellation of the build goes on.
@@ -127,38 +139,48 @@ public sealed partial class DoNotCopyValueAnalyzer
             return (true, null);
         }
 
+        bool IsAbout(ITypeSymbol? type)
+        {
+            var answer = types.AnswerAboutUnsafeToCopy(type);
+
+            if (answer is WalkAnswer.AtBound)
+                atBound ??= type;
+
+            return answer is WalkAnswer.Yes;
+        }
+
         // A symbol that the code uses: its signature, and the type that declares it, since a generic type over a type that is unsafe to
         // copy holds one.
         ITypeSymbol? FindInSymbol(ISymbol symbol) =>
-            FindInSignature(symbol) ?? (types.IsAboutUnsafeToCopy(symbol.ContainingType) ? symbol.ContainingType : null);
+            FindInSignature(symbol) ?? (IsAbout(symbol.ContainingType) ? symbol.ContainingType : null);
 
         ITypeSymbol? FindInSignature(ISymbol symbol)
         {
             switch (symbol)
             {
                 case IMethodSymbol method:
-                    if (types.IsAboutUnsafeToCopy(method.ReturnType))
+                    if (IsAbout(method.ReturnType))
                         return method.ReturnType;
 
                     foreach (var typeArgument in method.TypeArguments)
                     {
-                        if (types.IsAboutUnsafeToCopy(typeArgument))
+                        if (IsAbout(typeArgument))
                             return typeArgument;
                     }
 
                     return FindInParameters(method.Parameters);
 
                 case IPropertySymbol property:
-                    return types.IsAboutUnsafeToCopy(property.Type) ? property.Type : FindInParameters(property.Parameters);
+                    return IsAbout(property.Type) ? property.Type : FindInParameters(property.Parameters);
 
                 case IFieldSymbol field:
-                    return types.IsAboutUnsafeToCopy(field.Type) ? field.Type : null;
+                    return IsAbout(field.Type) ? field.Type : null;
 
                 case IEventSymbol @event:
-                    return types.IsAboutUnsafeToCopy(@event.Type) ? @event.Type : null;
+                    return IsAbout(@event.Type) ? @event.Type : null;
 
                 case ILocalSymbol local:
-                    return types.IsAboutUnsafeToCopy(local.Type) ? local.Type : null;
+                    return IsAbout(local.Type) ? local.Type : null;
 
                 default:
                     return null;
@@ -169,7 +191,7 @@ public sealed partial class DoNotCopyValueAnalyzer
         {
             foreach (var parameter in parameters)
             {
-                if (types.IsAboutUnsafeToCopy(parameter.Type))
+                if (IsAbout(parameter.Type))
                     return parameter.Type;
             }
 
@@ -182,12 +204,18 @@ public sealed partial class DoNotCopyValueAnalyzer
             IMethodReferenceOperation { Method: var method } => NonCopyableWalker.IsMemberwiseClone(method) || NonCopyableWalker.IsGetObjectValue(method) || types.IsCloningMember(method),
             IPropertyReferenceOperation { Property: var property } => types.IsCloningMember(property),
             IEventReferenceOperation { Event: var @event } => types.IsCloningMember(@event),
-            IConversionOperation conversion => types.HidesTypeParameter(conversion.Operand.Type, conversion.Type),
-            IPatternOperation pattern => types.HidesTypeParameter(pattern.InputType, pattern.NarrowedType),
+            IConversionOperation conversion => HidesTypeParameterThatTakesUnsafeToCopy(conversion.Operand.Type, conversion.Type),
+            IPatternOperation pattern => HidesTypeParameterThatTakesUnsafeToCopy(pattern.InputType, pattern.NarrowedType),
             IDelegateCreationOperation { Target: var target } => GetFunctionOf(target) is { } function &&
-                (NonCopyableTypes.MentionsMarkedTypeParameter(function.ReturnType, out _) || function.Parameters.Any(NonCopyableTypes.IsMovedFrom)),
+                ((types.ReachesUnsafeToCopy(function.ReturnType) && NonCopyableTypes.MentionsMarkedTypeParameter(function.ReturnType, out _)) ||
+                function.Parameters.Any(NonCopyableTypes.IsMovedFrom)),
             _ => false,
         };
+
+        // A value of a type parameter that can stand for a container of a type that is unsafe to copy, used as a type that hides it. One
+        // that says UnsafeToCopy = false takes no such container.
+        bool HidesTypeParameterThatTakesUnsafeToCopy(ITypeSymbol? source, ITypeSymbol? target) =>
+            types.HidesTypeParameter(source, target) && types.ReachesUnsafeToCopy(source);
 
         static IMethodSymbol? GetFunctionOf(IOperation target) => target switch {
             IMethodReferenceOperation reference => reference.Method,
@@ -243,7 +271,7 @@ public sealed partial class DoNotCopyValueAnalyzer
         {
             second.Walk();
         }
-        catch (InsufficientExecutionStackException)
+        catch (Exception exception) when (exception is InsufficientExecutionStackException or TypeTooLargeException)
         {
             return diagnostics;
         }
@@ -300,11 +328,22 @@ public sealed partial class DoNotCopyValueAnalyzer
             var variable = first.Variable;
             var type = variable is ILocalSymbol local ? local.Type : ((IParameterSymbol)variable).Type;
             var additionalLocations = reaching.Select(handOff => handOff.Reference.Syntax.GetLocation()).ToList();
+            var location = use.Syntax.GetLocation();
+
+            // A 'using' statement over the variable takes a copy that it disposes at its end, which the use can come before. Its
+            // message says that, and how to write the statement instead.
+            if (NonCopyableWalker.GetHandedTo(first.Reference).Parent is IUsingOperation)
+            {
+                object?[] taken = [variable.Name, type];
+                WithoutNullableAnnotations(taken);
+                result.Add(severities.Create(Rules.UsedAfterUsing, location, additionalLocations, taken));
+                continue;
+            }
+
             object?[] arguments = [variable.Name, type, walker.DescribeHandOff(first.Reference)];
             WithoutNullableAnnotations(arguments);
 
             var flow = walker.Flow;
-            var location = use.Syntax.GetLocation();
 
             // Where only a handler uses the variable after the hand-off, the message says so, since the code does not show why the
             // handler runs after it. Where the hand-off stores the value at the end of a 'try' block and only a reference that can be
@@ -341,21 +380,7 @@ public sealed partial class DoNotCopyValueAnalyzer
         /// </summary>
         public string DescribeHandOff(IOperation reference)
         {
-            var current = reference;
-
-            // A branch of a conditional, an arm of a 'switch' expression and an operand of '??' hand the value on to what uses the
-            // result, as a conversion that wraps it does.
-            while (true)
-            {
-                if (current.Parent is IParenthesizedOperation or IConversionOperation { OperatorMethod: null, Type.IsValueType: true } or ICoalesceOperation)
-                    current = current.Parent;
-                else if (current.Parent is IConditionalOperation conditional && !ReferenceEquals(conditional.Condition, current))
-                    current = conditional;
-                else if (current.Parent is ISwitchExpressionArmOperation { Parent: ISwitchExpressionOperation switchExpression } arm && ReferenceEquals(arm.Value, current))
-                    current = switchExpression;
-                else
-                    break;
-            }
+            var current = GetHandedTo(reference);
 
             return current.Parent switch {
                 IVariableInitializerOperation { Parent: IVariableDeclaratorOperation declarator } => $"its value was assigned to '{declarator.Symbol.Name}'",
@@ -367,7 +392,6 @@ public sealed partial class DoNotCopyValueAnalyzer
                 IDeconstructionAssignmentOperation deconstruction when ReferenceEquals(deconstruction.Value, current) => "its value was deconstructed",
                 IReturnOperation => "its value was returned",
                 IConversionOperation { Type: { IsValueType: false } boxType } => $"its value was converted to '{Display(boxType)}'",
-                IUsingOperation => "'using' disposed its value",
                 IWithOperation => "'with' copied its value",
                 IFieldReferenceOperation field when ReferenceEquals(field.Instance, current) => $"its field '{field.Field.Name}' was read",
                 IPropertyReferenceOperation { Property.ContainingType.IsExtension: false } property when ReferenceEquals(property.Instance, current) => $"'{Display(property.Property)}' read its value",
@@ -385,6 +409,28 @@ public sealed partial class DoNotCopyValueAnalyzer
                 _ when what.EndsWith(" captures", StringComparison.Ordinal) => what[..^"captures".Length] + "captured",
                 _ => what,
             };
+        }
+
+        /// <summary>
+        /// Gets the operation that a hand-off gives the value to, as its operand: the read itself, or what wraps it and hands the value
+        /// on to what uses the result. A branch of a conditional, an arm of a 'switch' expression and an operand of '??' do, as a
+        /// conversion that wraps it does.
+        /// </summary>
+        public static IOperation GetHandedTo(IOperation reference)
+        {
+            var current = reference;
+
+            while (true)
+            {
+                if (current.Parent is IParenthesizedOperation or IConversionOperation { OperatorMethod: null, Type.IsValueType: true } or ICoalesceOperation)
+                    current = current.Parent;
+                else if (current.Parent is IConditionalOperation conditional && !ReferenceEquals(conditional.Condition, current))
+                    current = conditional;
+                else if (current.Parent is ISwitchExpressionArmOperation { Parent: ISwitchExpressionOperation switchExpression } arm && ReferenceEquals(arm.Value, current))
+                    current = switchExpression;
+                else
+                    return current;
+            }
         }
     }
 }

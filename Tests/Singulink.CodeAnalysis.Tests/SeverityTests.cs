@@ -1412,8 +1412,9 @@ public class SeverityTests
     }
 
     // Each ID has the descriptors of its group: for a copy in code and a wrong declaration the ordinary warning of the current rules, and
-    // under the updated rules an error that is not configurable and a warning, both with the tag that keeps [SuppressMessage] off them; a
-    // warning and a message for SCA1025; a plain warning for the rest.
+    // under the updated rules an error that is not configurable and a warning, both with the tag that keeps [SuppressMessage] off them,
+    // each once with the message of the rule and once with that message and what it says where a walk reached its bound; a warning and a
+    // message for SCA1025; a plain warning for the rest.
     [TestMethod]
     public void Descriptors_HaveTheSeveritiesOfTheirGroup()
     {
@@ -1429,8 +1430,10 @@ public class SeverityTests
 
                 Assert.IsNotEmpty(errors, id);
                 Assert.HasCount(errors.Count, unsafeWarnings, id);
-                Assert.HasCount(errors.Count, ordinary, id);
-                Assert.AreEqual(group.Count(), errors.Count * 3, id);
+                Assert.AreEqual(errors.Count, ordinary.Count * 2, id);
+                Assert.AreEqual(group.Count(), ordinary.Count * 5, id);
+                Assert.AreEqual(ordinary.Count, errors.Count(d => d.MessageFormat.ToString().EndsWith(Verify.AtBoundClause, StringComparison.Ordinal)), id);
+                Assert.AreEqual(ordinary.Count, unsafeWarnings.Count(d => d.MessageFormat.ToString().EndsWith(Verify.AtBoundClause, StringComparison.Ordinal)), id);
 
                 foreach (var error in errors)
                     CollectionAssert.IsSubsetOf(new[] { WellKnownDiagnosticTags.NotConfigurable, WellKnownDiagnosticTags.Compiler }, error.CustomTags.ToArray(), id);

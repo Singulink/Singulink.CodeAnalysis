@@ -6,8 +6,12 @@
     makes the analyzer report as under the current memory safety rules: an ordinary warning, which every kind of suppression and of
     severity configuration applies to. _NonCopyableReferencesPackage, which the targets file sets, says whether the project references
     a package of the analyzer itself: SCA1025 is a message in a project that does not. The package has this file under build and under
-    buildTransitive, so that the properties also work in a project that gets the analyzer through another package. NuGetPackageRoot
-    tells a symbol list file that came in a package from the project's own.
+    buildTransitive, so that the properties also work in a project that gets the analyzer through another package.
+
+    The folders that NuGet restores packages to and from tell a symbol list file that came in a package from the project's own: a
+    library's props file adds its file from the folder of its package, wherever NuGet put it. The assets file of the project names them
+    all, the fallback folders included; NuGetPackageRoot is the global packages folder, and _NonCopyablePackagesFolder, which the targets
+    file sets, is the packages folder of a project that restores with packages.config, which has neither.
   -->
   <ItemGroup>
     <CompilerVisibleProperty Include="NonCopyableIncludeBuiltInTypes" />
@@ -15,5 +19,6 @@
     <CompilerVisibleProperty Include="NonCopyableErrorsAsWarnings" />
     <CompilerVisibleProperty Include="_NonCopyableReferencesPackage" />
     <CompilerVisibleProperty Include="NuGetPackageRoot" />
+    <CompilerVisibleProperty Include="_NonCopyablePackagesFolder" />
   </ItemGroup>
 </Project>

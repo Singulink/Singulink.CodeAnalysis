@@ -49,11 +49,14 @@ nothing gets a warning.
 The rules that could have been lists of what is forbidden are in [Alternatives That Were Given Up](#alternatives-that-were-given-up).
 
 **A member that was not checked never looks clean.** The analyzer walks expressions by recursion. Where the stack would run out, it
-stops and gives the member one warning, SCA1048, instead of skipping it or failing with an exception. An exception of the analyzer is a
-test failure, in every test and for every generated input.
+stops and gives the member one warning, SCA1048, instead of skipping it or failing with an exception. The same holds for a walk over
+types that reaches its bound where its answer has to name what it found, in a member or at a declaration (see
+[Walks Over Types](#walks-over-types)). An exception of the analyzer is a test failure, in every test and for every generated input.
 
 One exception goes the other way: **code that does not compile is allowed.** The analyzer runs while code is typed, and a half-written
-line would otherwise get a warning next to the compiler's error.
+line would otherwise get a warning next to the compiler's error. An operation that the compiler marked invalid, or whose type is or
+mentions an error type, cannot run, and neither can a use of a value inside one within its statement: none of them is reported as a
+use that the analyzer has no rule for (`CannotRun`), while the code of the member that compiles is checked as usual.
 
 ## Values and Moves
 
@@ -88,7 +91,10 @@ on each path (SCA1016), with the read as an additional location: that is where t
 `queue.Enqueue(lease); lease.Dispose();`, where `Enqueue` was given the value and `Dispose` runs on the variable that still holds it.
 The message leads with what happened, "'lease' is used after 'Queue<Lease>.Enqueue(Lease)' received its value, so that hand-off was a
 copy", with the words of the hand-off in the past tense (`NonCopyableWalker.DescribeHandOff`), and its variants for a handler keep their
-second halves after the same opening.
+second halves after the same opening. A `using` statement over the variable is the one hand-off whose use can come before what the
+statement does with the value: it takes a copy at its start and disposes the copy at its end, so a use in its body comes after the
+hand-off and before the dispose. Its report has a message of its own (`Rules.UsedAfterUsing`), which says that, and advises a
+declaration in the statement or a `using` declaration with a new value, since passing by reference or a move does not apply there.
 A later use is every use that a path from the read reaches without passing another use; an assignment of the whole variable ends a
 path, and an exception that can leave a block leads to its handlers (`MemberFlow.FindFirstLaterUses`). Only the place and the ID of
 the report change, never what is accepted, and that is made sure of by how the report is moved: a second walk of the member takes
@@ -211,17 +217,25 @@ Under the updated rules a report about a marked type parameter is strict, since 
 that is meant for plain non-copyable types, such as lock guards, would then answer for every copy of its type parameter with an unsafe
 context. So the mark has three forms ([Types That Are Unsafe to Copy](Docs/articles/rules/marked-type-parameters.md#types-that-are-unsafe-to-copy)):
 `UnsafeToCopy` not written or `true`, where the type parameter is unsafe to copy inside the generic and the generic takes any
-non-copyable type; and `UnsafeToCopy = false`, where it is a plain non-copyable type inside and the generic takes only types that are not
-unsafe to copy. "Not written" and `false` differ, so the analyzer reads whether the argument is there, the named one or one for a
+non-copyable type; and `UnsafeToCopy = false`, where it is a plain non-copyable type inside and the generic takes no type through which
+a value that is unsafe to copy can be reached. "Not written" and `false` differ, so the analyzer reads whether the argument is there, the named one or one for a
 constructor parameter named `unsafeToCopy` of a mark of the project's own, in source and in metadata
 (`NonCopyableTypes.GetUnsafeToCopyArgument`), and never the property. The property stays a `bool`, since an attribute argument cannot be
 nullable, and its getter throws where it was not set, with `GetUnsafeToCopy()` returning `bool?`, as
 `System.ComponentModel.DataAnnotations.DisplayAttribute` does for `AutoGenerateField`, so that reading it never passes "not set" off as
 `false`.
 
-A type argument that is unsafe to copy, for a type parameter that says `false`, is SCA1026. A type parameter of the generic around the
-use counts as unsafe to copy there unless it says `false` itself; one that is not marked is copyable there, and is judged where its own
-generic is used. The check is the one of an unmarked type parameter one level up, and goes through the same machinery: `GetUse`
+A type argument through which a value that is unsafe to copy can be reached, for a type parameter that says `false`, is SCA1026
+(`NonCopyableTypes.LetsReachUnsafeToCopy`). What counts is what other code can reach (see [What a Report Is About](#what-a-report-is-about)),
+and not only what a copy duplicates: a type that is unsafe to copy, a container of one at any depth, a tuple or a struct that carries
+one, and a delegate or another generic class over one. Inside the generic every report about the type parameter is the ordinary
+warning, which its author may suppress, and that holds for a value of it that other code is given as much as for a copy: a
+`Box<List<UG>>` would hand the list to an unlisted member, or hide it behind `object`, with warnings only, and its caller would get no
+report at all. So the boundary is drawn by reach, and the generic is given nothing that a report inside it would have to be strict about.
+A type parameter of the generic around the use counts as unsafe to copy there unless it says `false` itself, and a type over it counts as
+a container of such a type; one that is not marked is copyable there, and is judged where its own generic is used. The reports name the
+type as unsafe to copy where it is one, and say that a value that is unsafe to copy can be reached through it where it is not
+(`ChooseBindingNotTaken`). The check is the one of an unmarked type parameter one level up, and goes through the same machinery: `GetUse`
 attaches a `BindingNotTaken` to the classification of a member use (`FindUseBindingNotTaken`), and `CheckMemberUse` reports it besides
 whatever else the use is. It changes nothing else, since the generic is checked code. So every member use that SCA1020 sees is covered:
 a type named in code, a static member, a nested type, type arguments written or inferred, an extension, the members that the compiler
@@ -232,11 +246,11 @@ Code of the generic can also run with no member use that shows the binding, and 
 
 | Route | Where it is reported |
 |---|---|
-| A base type or an interface: the inherited code runs through overrides that are called through a base class that is not generic, and through interface members that the type inherits | The entry of the base list (`AnalyzeBaseListBindings`) |
+| A base type or an interface: the inherited code runs through overrides that are called through a base class that is not generic, and through interface members that the type inherits. The binding can be of the base type itself, or of a type that it is given at any depth of its type arguments, as in `Runner<SS<UG>>`, whose members that code can run | The entry of the base list (`AnalyzeBaseListBindings`, through `FindBindingNotTakenWithin`, as a member use) |
 | A type that the `new()` constraint lets a generic create: its parameterless constructor and the base constructors that it calls with nothing written. The constructor that the compiler gives a struct runs nothing | The use of the generic with the `new()` constraint |
 | A struct over the type that is boxed, by a conversion, a pattern or a `foreach`, whose interface members then run on the box | The box (`FindStructBindingNotTaken`, through struct type arguments at any depth), as `IsStructOfUncheckedCode` does for a struct of unchecked code |
 | A type with the binding given to other generic code, as the type argument of a member that is used or at any depth inside one (`List<SS<UG>>`, `Dictionary<int, SS<UG>>`), to a type parameter that is marked or not: that code can run its members with nothing that shows them, `ToString`, `Equals` and `GetHashCode` through any type parameter, a static abstract or virtual member and an interface member through a constraint, and the members of the elements of a collection, as `List<T>.Contains` runs `Equals` | The use of that generic (`FindUseBindingNotTaken`, `FindBindingNotTakenWithin`), unless the use is reported for that type parameter already (SCA1020, SCA1021, SCA1022, SCA1023), which is strict for such a type. One report per binding at one place: a `foreach` runs `GetEnumerator`, `Current` and a box at the same place |
-| A struct over the type held inline in a field of a struct that does not override both `Equals` and `GetHashCode`: the ones that it inherits from `ValueType` run the members of the fields | The field (`AnalyzeFieldBindingsNotTaken`). A record is left out: its fields of a non-copyable type are reported as such |
+| A struct over the type held inline in a field of a struct that does not override both `Equals` and `GetHashCode`: the ones that it inherits from `ValueType` run the members of the fields | The field (`AnalyzeFieldBindingsNotTaken`). A record is left out: its fields of a non-copyable type are reported as such. A ref struct is left out too: the compiler lets no code call the `Equals` and `GetHashCode` that it inherits |
 
 A class over the type is always created through a constructor, which is a member use. A delegate type has no code of its own, and its
 target is judged where the delegate is created.
@@ -283,6 +297,12 @@ on and with. Tasks and value tasks get no special case.
 
 The `new` marker is about a value of a non-copyable type, which leaves no second instance behind when it is taken out. A container that
 such a member hands out, as from a `Stack<Task<Guard>>`, is a reference that whoever put it in may still hold.
+
+What SCA1030 says depends on what the member hands out. A value of a type that is bound to the member, as from an indexer, `Current`
+or `Result`, is a copy of what the stored container holds (`ReadFromStoredContainer`). Any other value is new and reads what the
+container still holds, as the enumerator that `GetEnumerator` makes of a stored list does (`MadeFromStoredContainer`), and a
+constructor makes one as well (`CreatedFromStoredContainer`). The rule and its severity are the same; only the words differ, so that
+neither calls a new enumerator a copy.
 
 The `owned` marker is accepted only on an instance property of a class whose type is `Task<TResult>`:
 
@@ -349,10 +369,38 @@ can duplicate the reference and hand it back, typed, as the result of a call, wh
 A type that derives from an erasable type must stay erasable. A conversion sees only the type that it is written with, and the object
 behind it may be of a subclass that hands out more.
 
+**Erasable for some type parameters.** The key collection of a dictionary hands out keys and never a value, and its type still names
+the value type, so `map.Keys.ToList()` hid the value type of a dictionary of guards. `erasable` takes `for=` with type parameter names,
+of the type or of a type that contains it: no base type and no interface hands out a value of those type arguments, so a conversion to
+one of them hides nothing of them (`SafeMemberList.IsErasableFor`). `ExposesNonCopyableType` skips what is bound to those type
+parameters and goes on with the rest, and a type that derives from such a type is held to SCA1043 as for an erasable one
+(`IsPartlyErasable`). Two lines merge to the type parameters that both name, and a line of a file that would widen a built-in `for=`
+is left out with a warning, as for a member. Such a line claims more than the signatures show: the code behind those interfaces must
+not copy such a value either, since the conversion hands the object to it. So every line of the built-in framework symbol list was
+read in the source as well as checked against the reference packs (`ErasableLines_...` in `SafeListTests`). The key and value
+collections of `Dictionary<,>` read their own half of an entry only; those of `SortedDictionary<,>` and `OrderedDictionary<,>` copy
+whole entries, and those of `ReadOnlyDictionary<,>` wrap any dictionary, so they have no line.
+
+The erasure applies whatever the other type parameters hold. A conversion is judged by what the source exposes
+(`GetExposedNonCopyableTypes`): what it mentions, with what an erasable type holds through the type parameters that it is erasable for
+left out, at any depth. The question whether the conversion hides a non-copyable type and the severity of its report both read that, so
+the key collection of a `Dictionary<PG, UG>` converted to `IEnumerable<PG>` hides nothing, and converted to `IEnumerable` hides the keys
+only, which is the ordinary warning about `PG`. The erasure is about the base types and the interfaces and nothing more: what the type's
+own members hand out still counts where other code holds the type itself, as `Lazy<int, UG>.Metadata` hands out the metadata, so what
+other code reaches through a type (`ReachesUnsafeToCopy`) still counts every type argument.
+
 [Boxing a new value](Docs/articles/rules/boxes.md) is a move into the box: nobody else holds the value, and inside the box it is one
 object that every holder of the reference shares. A generic struct that is non-copyable only through its type arguments is different.
 Its box runs unchecked code: `ITuple` and `IEnumerator` hand out a boxed copy of the element at every read. So boxing one is a hiding
 conversion. `Nullable<T>` is the exception: its box holds the value itself.
+
+The box of any other generic struct hides what its type arguments make reachable as well, also where its own code is checked: a boxed
+`Mk<List<UG>>` lets other code reach the list with a later cast or reflection, as `List<UG>` converted to `object` does. So a box of a
+generic struct whose type arguments carry a container, at any depth, is SCA1023 (`OpaqueBoxingOfContainers`, through
+`HidesContainersOfTypeArguments`), for a new value and a stored one, by a conversion, a conversion with no node, a pattern and a `foreach`
+alike, and counts by what the struct is made of, as the box of a tuple does. A struct whose type arguments carry no container hides
+nothing that its box does not show: its value moves into the box. A binding that a type parameter does not take (SCA1026) is the report
+of such a box where there is one, since its fix, another type argument, answers both.
 
 ## Attributes and Marks
 
@@ -380,16 +428,16 @@ An attribute declared `[Conditional]` gets SCA1044: the compiler leaves it out o
 library and be gone for everyone who uses it.
 
 The analyzer reads the named argument `UnsafeToCopy` of the attribute and never calls it, so a project's own `NonCopyableAttribute`
-needs only a settable `bool` property of that name for the argument to count. It also reads an argument for a `bool` parameter of the
+needs only a settable `bool` property or a public `bool` field of that name for the argument to count. It also reads an argument for a `bool` parameter of the
 constructor named `unsafeToCopy`, in any case (`NonCopyableTypes.GetUnsafeToCopyArgument`), with the named argument first, as the
 property setter runs after the constructor. Both are what metadata shows where the attribute is applied, in source and in a referenced
 assembly alike.
 
 What it cannot read is the code of the attribute class. A derived mark whose constructor sets `UnsafeToCopy = true` gives a struct
 that is plain non-copyable to the analyzer, which fails in the dangerous direction and in silence. So code of a recognized mark of the
-compilation that sets the value gets SCA1049, a plain warning, in the project that declares it: an assignment of the property, its
-initializer, and an argument for a parameter named `unsafeToCopy` of another constructor (`AnalyzeUnsafeToCopySetInOwnCode`). Setting
-the property from the constructor's own `unsafeToCopy` parameter, or passing that parameter on, is exactly what the analyzer reads, and
+compilation that sets the value gets SCA1049, a plain warning, in the project that declares it: an assignment of the property or of
+the field of that name, the initializer of either, and an argument for a parameter named `unsafeToCopy` of another constructor
+(`AnalyzeUnsafeToCopySetInOwnCode`). Setting the property or the field from the constructor's own `unsafeToCopy` parameter, or passing that parameter on, is exactly what the analyzer reads, and
 gets nothing. A property whose getter returns something other than what its setter stores is not followed. The constructor parameter
 is what makes a mark that cannot work either way, `[UnsafeHandle(true)]` with a constructor that sets the property or
 `: base(unsafeToCopy: true)`, expressible at all: `[UnsafeHandle(unsafeToCopy: true)]`.
@@ -574,8 +622,14 @@ the first, as the analyzer once did, asked the author to take out a line that th
 exception, against the built-in framework symbol list: taking a type out is what the marker is for. `clones=complete` is the other: it counts wherever a line says it, against a plain line of a file or of the built-in list (see
 [Classes That Clone Themselves](#classes-that-clone-themselves)).
 
-A `copyable` line counts only in a file of the project being built, and never in one that came in a package (`IsFileOfAPackage`, by the
-folder of the NuGet packages). It says that the project copies the type on purpose, which is the decision of one project: a library's
+A `copyable` line counts only in a file of the project being built, and never in one that came in a package (`IsFileOfAPackage`). A
+library's props file adds its file from the folder of its package, so a file is a package's where it is under a folder that NuGet
+restores packages to or from: the global packages folder (`NuGetPackageRoot`), every folder that the assets file of the project names
+under `packageFolders`, the fallback folders included, and for a project that restores with `packages.config`, which has neither, the
+folder that holds the folder of the analyzer's own package (`_NonCopyablePackagesFolder`, which the targets file works out). The list of
+folders is read from the assets file and not from `NuGetPackageFolders`: the compiler reads a `;` in the value of a build property as the
+start of a comment, so only the first folder would arrive. A path that has a `#` or a `;` in it is cut short in the same way; the assets
+file names the global packages folder as well, in full. A build that gives none of the folders counts every file as the project's own. It says that the project copies the type on purpose, which is the decision of one project: a library's
 line would take the type, even one that is unsafe to copy, out for every project that uses the library, with nothing to show it. A
 library's own build reads its file as a file of the project and honors the line. A `copyable` line of a package's file gets no SCA1042
 in the project that uses the package, which has nothing to fix, and gives no `noncopyable` line an effect there.
@@ -993,7 +1047,9 @@ rule reported both in code and at a declaration, the declaration got a rule of i
 
 An enforced rule has three descriptors with the same ID: the ordinary warning of the current rules, with no tag of its own; the error of
 the updated rules, with the custom tags `NotConfigurable` and `Compiler`; and the warning of an unsafe context, with the tag `Compiler`,
-which is the descriptor of a report at a marked declaration as well. SCA1025 has a warning and an Info message, and a plain warning has one warning. All of them are in `SupportedDiagnostics`.
+which is the descriptor of a report at a marked declaration as well. The error and the warning of an unsafe context each have a second
+descriptor, with the same tags, whose message says after the rule's own that a type there is larger than the analyzer looks into and is
+treated as if it could hold a value that is unsafe to copy (`Rule.ErrorAtBound`, `Rule.UnsafeWarningAtBound`, `Rules.AtBoundClause`). SCA1025 has a warning and an Info message, and a plain warning has one warning. All of them are in `SupportedDiagnostics`.
 `NotConfigurable` keeps NoWarn, `.editorconfig` and rule sets off the error, and the compiler does not apply `#pragma` to an error.
 `NotConfigurable` alone still lets `[SuppressMessage]` through: the `Compiler` tag is what makes Roslyn ignore that attribute, for the
 error and for the warning of an unsafe context alike. A tag is read from the descriptor of the reported diagnostic, so the ordinary
@@ -1027,11 +1083,12 @@ A non-copyable type is unsafe to copy by what can be read from its own declarati
    [Type Parameters That Take No Type That Is Unsafe to Copy](#type-parameters-that-take-no-type-that-is-unsafe-to-copy)). Inside the
    generic it can stand for any non-copyable type.
 
-A struct that a `copyable` line takes out is never unsafe to copy. Types are finite trees of type arguments, so the answer is worked
-out each time it is asked for, with no bound and no cache, and only when a report is made under the updated rules. What a container
-holds is a different walk: it follows base types and interfaces as well, and those can mention the type itself, as
-`ImmutableArray<T> : IEquatable<ImmutableArray<T>>` does, or two generics can mention each other. That walk keeps a stack of its own
-and looks at each type once (`NonCopyableTypes.HoldsUnsafeToCopyInParts`), so it ends for every type and cannot run out of stack.
+A struct that a `copyable` line takes out is never unsafe to copy. The answer is worked out from the type arguments alone, and
+remembered for the type as the answers of the other walks are (see [Walks Over Types](#walks-over-types)). What a container holds is a different walk: it
+follows base types and interfaces as well, and those can mention the type itself, as `ImmutableArray<T> : IEquatable<ImmutableArray<T>>`
+does, two generics can mention each other, and a generic can mention a deeper construction of itself, as
+`C<T> : IEquatable<C<C<T>>>` does. That walk keeps a stack of its own, looks at each type once and stops at its bound with a strict
+answer (`NonCopyableTypes.HoldsUnsafeToCopyInParts`; see [Walks Over Types](#walks-over-types)).
 
 Working out a severity never stops a check. Where it fails for any reason, the report is strict (`Severities.IsAboutUnsafeToCopy`):
 an exception that reached the code which reports would end the walk of the member, be taken for code nested too deeply (SCA1048), and
@@ -1072,24 +1129,49 @@ pooled array twice, which shares data but reaches no invalid memory. The reading
 
 #### What a Report Is About
 
-Each enforced rule says what its reports are about (`Rule.About`), next to its message in `Rules.cs`, and `Severities` reads it:
+Each enforced rule says what its reports are about (`Rule.About`), next to its message in `Rules.cs`, and `Severities` reads it. What
+of a type counts depends on what the rule is about, and each rule says which of two it is (`About.IsCopy`):
 
-- **The arguments of the message** that are the types (`About.Argument`): most reports name the non-copyable type. A type of a value
-  counts where it is unsafe to copy, a container where a value that it holds is (`NonCopyableTypes.IsAboutUnsafeToCopy`). The box of a
-  generic struct counts by what the struct is made of, its type arguments (`About.WhatArgumentHolds`), since its interfaces hand out
-  boxed copies of those.
-- **A type that the code which reports gives** (`About.Given` and a `Subject`), where the message names no type or names it as text:
-  a pattern part, a container in a text that names the container behind it, a mark of a parameter or a return value.
+- **A report that a value was copied** (`About.Copy`, `About.GivenCopy`) is about the values that the copy duplicates: the value
+  itself and what it holds inline, through tuples, nullable types and struct fields by their type arguments, at any depth
+  (`NonCopyableTypes.DuplicatesUnsafeToCopy`, which is `IsUnsafeToCopy` for a value). A reference that rides along, to a list, a
+  delegate or any class, is not duplicated, so what is behind it does not count: a copy of `(PG, Func<UG>)` or of `(PG, List<UG>)` is
+  the ordinary warning, as a copy of a `[NonCopyable]` struct with those two fields is. Copying a container is no copy of a value, so a
+  container that such a rule names, as the rules of `[MovedFrom]` can, is about the container left in two places, where other code
+  reaches it, and counts as for the second meaning.
+- **A report that other code can get at a value or a container** (`About.Reach`, `About.GivenReach`): a member that is not on a list
+  receives it, a conversion hides it, a method keeps it, a box hides what is inside. It is about everything that code can reach: the
+  value, what it holds inline, and the values of the containers that it carries, at any depth (`NonCopyableTypes.ReachesUnsafeToCopy`,
+  through `IsAboutUnsafeToCopy`). Passing `(PG, List<UG>)` to a member that is not on a list is strict. The box of a generic struct
+  counts by what the struct is made of, its type arguments (`About.WhatArgumentHolds`), since its interfaces hand out boxed copies of
+  those.
+
+A severity reads a type in these two places only, so every rule follows one of them. The types are:
+
+- **The arguments of the message** that are the types (the indexes of `About.Copy` and `About.Reach`): most reports name the
+  non-copyable type.
+- **A type that the code which reports gives** (`About.GivenCopy`, `About.GivenReach` and a `Subject`), where the message names no
+  type or names it as text: a pattern part, a container in a text that names the container behind it, a mark of a parameter or a
+  return value. A use of an object that hands it to code that can clone it (SCA1009) stands for the report of the conversion as well,
+  so its subject is the binding that the clone copies and the converted value, which counts by what other code can reach of it
+  (`Subject.OfCopyAndReach`).
 - **No type** (`About.NoType`): the report is an error for any type.
+
+| Meaning | IDs and rules |
+|---|---|
+| A copy | SCA1001, SCA1002, SCA1003 (a copy of a stored value, a value passed twice, combined delegates, a part used twice in a pattern, a `switch` that matches a copy, a use that is not known to make no copy), SCA1004 (the copy into a box), SCA1005, SCA1006, SCA1009 (the clone copies the binding), SCA1010 to SCA1017, SCA1021, SCA1030, and the rules of SCA1040 and SCA1041 about `[MovedFrom]` |
+| Other code gets at it | SCA1020, SCA1022, SCA1023 (the box of a generic struct by what it holds), SCA1024, SCA1026 (generic code that takes only plain types copies the value or hands it to other code), SCA1031, SCA1032, SCA1033, SCA1043, SCA1048, the rules of SCA1040 about `[Kept]`, `[return: Borrowed]` and an inherited implementation that is not checked, and the rules of SCA1041 about a container moved out of a `[MovedFrom]` parameter |
+| No type | SCA1007, SCA1008, SCA1044, SCA1046, and the rules of SCA1033, SCA1040 and SCA1041 about a type parameter that a caller binds |
 
 A type parameter in the place of the type, an argument that is not a type, and a `Given` rule that was given no type all make the report
 an error, so that a report that cannot be tied to a type stays strict. The exception is a type parameter whose mark says
-`UnsafeToCopy = false`, which a caller binds only to a type that is not unsafe to copy: a report about it, or about a declared type that
+`UnsafeToCopy = false`, which a caller binds only to a type through which no value that is unsafe to copy can be reached: a report about it, or about a declared type that
 mentions only such type parameters, is the ordinary warning (`NonCopyableTypes.MentionsTypeParameterThatTakesUnsafeToCopy`).
 
 **A report that involves several types** is strict where any of them is unsafe to copy, and where its message names one, it names
-one that is unsafe to copy (`NonCopyableTypes.IsLessUnsafe`). Otherwise whichever came first in the source would decide, and a plain
-type ahead of the other would make the report a warning that a `#pragma` removes. The places that choose one of several:
+one that is unsafe to copy, by the meaning of the rule (`NonCopyableTypes.IsLessUnsafeToDuplicate` for a copy,
+`IsLessUnsafeToReach` for the rest). Otherwise whichever came first in the source would decide, and a plain type ahead of the other
+would make the report a warning that a `#pragma` removes. The places that choose one of several:
 
 - The type argument of a member use (`ClassifyUse`), for each rule, and between a value and a container that the member is not
   vouched for, which are one rule that one line answers: `Pair<PG, List<UG>>` gets SCA1023 about `List<UG>`, not SCA1020 about `PG`.
@@ -1099,10 +1181,13 @@ type ahead of the other would make the report a warning that a `#pragma` removes
   combined delegates, the container that variance hides, the holder that variance loses, the erasable base of SCA1043 and the
   awaitable of an `await foreach`.
 - The binding of a class that clones itself, within one class and along its chain up to the class that clones itself
-  (`PreferUnsafeToCopy`). A use that SCA1009 reports in place of SCA1023 is about the value that it converts as well as about the
-  binding that it names, so `Holder<Tagged<PG>, UG>` converted to `object` is strict.
+  (`PreferUnsafeToCopy`). A use that SCA1009 reports in place of SCA1023 is about what other code can reach of the value that it
+  converts as well as about the binding that it names, so `Holder<Tagged<PG>, UG>` converted to `object` is strict.
 
-**One report does not hide another.** A member use can break rules of different IDs for different type parameters, as SCA1020 for one
+**One report does not hide another.** Boxing a stored value copies it (SCA1004, about what the copy duplicates), and the box can also hide what the value holds, as
+the box of a tuple, a struct of unchecked code or a value of a marked type parameter does (SCA1023, or SCA1026 for a binding that a type
+parameter does not take). The two have different fixes, so both are reported, by a conversion, a conversion with no node, a pattern and a
+`foreach` alike (`CheckWhatTheBoxHides`). A member use can break rules of different IDs for different type parameters, as SCA1020 for one
 and SCA1022 for the constraint of another, and each is reported (`MemberUse.AlsoBroken`), once per type parameter: a later rule for a
 type parameter that an earlier report names adds nothing that the fix of the first misses. And a member that the symbol list names
 for some type parameters hands out values by its line also where the use breaks a rule for another (`MemberUse.ListedKind`): a
@@ -1118,29 +1203,32 @@ class of another assembly, so each report has a fix of its own, and an author wh
 
 These were not obvious, or stay strict for lack of a type:
 
-| Rule | About |
-|---|---|
-| A part used twice in a pattern (SCA1003) | The types of both parts: that of each variable, or of the receiver of each member that runs on a part. The outer part holds the inner one inline, so it is unsafe to copy where the inner one is |
-| The containers of SCA1022, SCA1023, SCA1031, SCA1032 and SCA1033 whose message names the container with the container behind it | The container, given by the code that reports |
-| The variance rules, SCA1022 and SCA1023 | The container that the conversion hides |
-| `HolderLostByVariance` (SCA1031) | The holder and the container |
-| SCA1009, all its texts | The non-copyable type that is bound to the class that clones itself, or that its field holds |
-| `MemberwiseCloneOfTypeParameterThroughListedBase` (SCA1009) | The type of the field, which mentions a marked type parameter, so it is strict unless the type parameter says `UnsafeToCopy = false` |
-| `ErasableBaseNotKept` (SCA1043) | The erasable type, as a container |
-| SCA1024 | The type of the parameter through which the member gets at the value |
-| `[MovedFrom]`, `[Kept]` and `[return: Borrowed]` on a parameter or a return value (SCA1040, SCA1041) | The type of the parameter or the return value; strict where it mentions a type parameter, marked or not, since a caller binds what that stands for, unless the type parameter says `UnsafeToCopy = false` |
-| SCA1017 | The type of the field |
-| SCA1026 | The type argument; a type parameter there counts as unsafe to copy, since the report is only made for one that does not say `UnsafeToCopy = false` |
-| `KeepingNotOnInterfaceMember` and `KeepingNotOnDelegate` (SCA1040) | The type of the parameter of the interface member or the delegate, which is the container; the inherited member's own is a type parameter |
-| `[MovedFrom]` on something that is not a parameter (SCA1041) | The type of the field, the property, the event or the return value that carries it |
-| `OpaqueTypeParameterConversion` (SCA1023), `DelegateOverTypeParameter` (SCA1031), `SlotGivenToOwner` (SCA1033), the generic moves (SCA1041) | No type: whatever a caller binds |
-| The marks of type parameters, `UnsafeToCopy = false` on an override or an implementation, and `[RequiresCopyable]` (SCA1040) | No type: whatever a caller binds |
-| `MemberwiseCloneOfOpenClass` and `MemberClonesWithoutLine` (SCA1008) | No type: what another assembly derives or binds |
-| `GetObjectValueCall` (SCA1007) | No type: every call of `RuntimeHelpers.GetObjectValue` |
-| SCA1044, SCA1046 | No type: a conditional attribute of the analyzer, a `[NotNullRef]` that does not count |
-| SCA1048 | A value of the member's code that is unsafe to copy, given by a walk over the member (`FindValueUnsafeToCopy`); strict where the walk finds one or gives no answer |
+| Rule | About | Meaning |
+|---|---|---|
+| A part used twice in a pattern (SCA1003) | The types of both parts: that of each variable, or of the receiver of each member that runs on a part. The outer part holds the inner one inline, so it is unsafe to copy where the inner one is | A copy |
+| The containers of SCA1022, SCA1023, SCA1031, SCA1032 and SCA1033 whose message names the container with the container behind it | The container, given by the code that reports | Other code gets at it |
+| The variance rules, SCA1022 and SCA1023 | The container that the conversion hides | Other code gets at it |
+| `HolderLostByVariance` (SCA1031) | The holder and the container | Other code gets at it |
+| SCA1009, all its texts | The non-copyable type that is bound to the class that clones itself, or that its field holds | A copy; the converted value of a use, by what other code reaches |
+| `MemberwiseCloneOfTypeParameterThroughListedBase` (SCA1009) | The type of the field, which mentions a marked type parameter, so it is strict unless the type parameter says `UnsafeToCopy = false` | A copy |
+| `ErasableBaseNotKept` (SCA1043) | The erasable type, as a container | Other code gets at it |
+| SCA1024 | The type of the parameter through which the member gets at the value | Other code gets at it |
+| `[MovedFrom]`, `[Kept]` and `[return: Borrowed]` on a parameter or a return value (SCA1040, SCA1041) | The type of the parameter or the return value; strict where it mentions a type parameter, marked or not, since a caller binds what that stands for, unless the type parameter says `UnsafeToCopy = false` | A copy for `[MovedFrom]`, where a container counts by what other code reaches; other code gets at it for `[Kept]` and `[return: Borrowed]` |
+| SCA1017 | The type of the field | A copy |
+| SCA1026 | The type argument; a type parameter there counts as unsafe to copy, since the report is only made for one that does not say `UnsafeToCopy = false` | Other code gets at it |
+| `KeepingNotOnInterfaceMember` and `KeepingNotOnDelegate` (SCA1040) | The type of the parameter of the interface member or the delegate, which is the container; the inherited member's own is a type parameter | Other code gets at it |
+| `[MovedFrom]` on something that is not a parameter (SCA1041) | The type of the field, the property, the event or the return value that carries it | A copy, where a container counts by what other code reaches |
+| `OpaqueTypeParameterConversion` (SCA1023), `DelegateOverTypeParameter` (SCA1031) | The type parameter, and the return type that mentions it: strict unless the type parameter says `UnsafeToCopy = false`, since a caller binds what it stands for, a container of a type that is unsafe to copy included, and a type parameter that says `false` takes no such container | Other code gets at it |
+| `SlotGivenToOwner` (SCA1033), the generic moves (SCA1041) | No type: whatever a caller binds | No type |
+| The marks of type parameters, `UnsafeToCopy = false` on an override or an implementation, and `[RequiresCopyable]` (SCA1040) | No type: whatever a caller binds | No type |
+| `MemberwiseCloneOfOpenClass` and `MemberClonesWithoutLine` (SCA1008) | No type: what another assembly derives or binds | No type |
+| `GetObjectValueCall` (SCA1007) | No type: every call of `RuntimeHelpers.GetObjectValue` | No type |
+| SCA1044, SCA1046 | No type: a conditional attribute of the analyzer, a `[NotNullRef]` that does not count | No type |
+| SCA1048 | A value of the member's code that is unsafe to copy, given by a walk over the member (`FindValueUnsafeToCopy`); strict where the walk finds one or gives no answer | Other code gets at it: the member was not checked for any rule |
 
-**A member nested too deeply.** SCA1048 says that a member was not checked, so it has no type of its own. Strict for every such member, it
+**A member nested too deeply.** SCA1048 says that a member was not checked, so it has no type of its own. It has two texts: one for
+an expression that is nested too deeply, and one for a type with more parts than a walk looks at (`Rules.TypeTooLarge`), which a
+declaration can get as well. At a declaration it is strict, as a report that cannot be tied to a type. Strict for every such member, it
 would be an error at a long chain of string concatenations with no non-copyable type in sight, and in generated code where nobody can add
 an unsafe context: the person who sees it could not answer for it. So it is strict only where the member's code involves a value that is
 unsafe to copy, by the analyzer's own definition, a container that holds one and a marked type parameter that does not say
@@ -1150,9 +1238,9 @@ local, a lambda, a local function, an operator) and at the type that declares a 
 the member, and at the struct of an instance member of one. It also counts what a rule with no type would report, since the value that
 such a rule is about can be of any type (`IsAboutAnyType`): a call of `MemberwiseClone`, which copies the fields of a class below the
 one that the walk sees, a call of `RuntimeHelpers.GetObjectValue`, a call of a member that a `clones` line names, a value of a marked
-type parameter converted to a type that hides what is bound to it, which can be a container of a type that is unsafe to copy also where
-the type parameter says `UnsafeToCopy = false`, a delegate made from a function over a marked type parameter or with a `[MovedFrom]`
-parameter, and the body of a generic move. It runs after the handler of the exception that stopped the check has left the frames that
+type parameter converted to a type that hides what is bound to it, which can be a container of a type that is unsafe to copy, a delegate
+made from a function over a marked type parameter or with a `[MovedFrom]` parameter, and the body of a generic move. A type parameter that
+says `UnsafeToCopy = false` takes no such container, so its value hidden and a delegate over it count as what they are. It runs after the handler of the exception that stopped the check has left the frames that
 ran out of stack: a catch block runs on top of them. Where the walk stops for any reason it gives no answer, and the report stays
 strict. Under the current rules nothing changes.
 
@@ -1333,7 +1421,7 @@ gets a warning. These were accepted:
 | A `switch` statement over a stored local, in an optimized build | The compiler copies the local only in a build that is not optimized, or with a `when`; the analyzer does not follow the configuration | [Read-only References and Temporary Copies](Docs/articles/rules/read-only-references.md) |
 | An `in` argument that is not a variable, over a stored value | The callee holds a second instance for the call | [Read-only References and Temporary Copies](Docs/articles/rules/read-only-references.md) |
 | A union written by hand with `[Union]`, matched through `TryGetValue` | Judged as a box like every union: strict, and safe, since such a union is rare and its `Value` boxes a copy anyway | [Boxes and Unions](Docs/articles/rules/boxes.md) |
-| `map.Keys.ToList()` on a dictionary of guards (SCA1023) | `erasable` cannot say "for `TValue` only". The clean form is `[.. map.Keys]` | [Dictionary Keys](Docs/articles/rules/framework-symbol-list.md#dictionary-keys) |
+| A generic that names a deeper construction of itself in its base list, or two that do it through each other (`C<T> : IEquatable<C<C<T>>>`) | The walks over its base types reach their bound and take the answer that leads to a report: a conversion of `C<PG>` to its own interface gets SCA1023, and under the updated rules a report about `C<PG>` is strict | [Generic That Expands Itself](Docs/articles/guides/correct-code-with-warnings.md#generic-that-expands-itself) |
 | `[NotNullRef]` on every method that a project declares (SCA1047) | The claim is not checked, and nothing else shows that someone looked | [Null References](Docs/articles/rules/null-references.md) |
 | `MemberwiseClone` in a class that another assembly can derive from (SCA1008) | A derived class there can hold a non-copyable value that the call cannot see. It has its own ID so that turning it down keeps SCA1005 | [SCA1008](Docs/articles/diagnostics/sca1008.md) |
 | `await foreach` over a type whose `MoveNextAsync` returns something other than a framework task | The compiler that the analyzer is built against does not give the members of that awaiting, so the loop is a use that is not known to be safe | Not in the Rules articles; see `AnalyzeForEach` in `DoNotCopyValueAnalyzer.Members.cs` |
@@ -1353,6 +1441,10 @@ leaving one open, it is here.
   are the exception: they follow a null reference.
 - **A handle rebuilt from its value.** The analyzer cannot follow an `IntPtr`.
 - **Interceptors.** They replace the method that a call binds to after the analyzer has looked at the call.
+- **The lock object of a key or a value collection of `Dictionary<,>`.** On .NET, `ICollection.SyncRoot` of both is the dictionary
+  itself, so a cast of it back to the dictionary reaches the other half of every entry. The `erasable;for=` lines stay: the route takes a
+  cast to a legacy interface and a property that is documented as an object to lock on, which is an API used against its documentation.
+  The evidence file says exactly what the interfaces hand out.
 - **Code that runs where the language shows none,** such as a remoting proxy of .NET Framework that answers a type test with code of its
   own. The rules that ask what can throw take a type test for a class to run nothing.
 
@@ -1409,6 +1501,121 @@ The rules for values come from Roslyn's `RS0042` rule (`DoNotCopyValue`), and `A
 returns `RefKind.None` for a new value, and any other `RefKind` for a stored one. How this analyzer differs from RS0042 is in
 [Differences From Roslyn's Rule](Docs/articles/rules/roslyn-differences.md).
 
+#### Walks Over Types
+
+Every walk over types must end, and quickly, for every type that the compiler accepts. A visited set is not enough. A generic can name a
+deeper construction of itself in its base list, as `class C<T> : IEquatable<C<C<T>>>` does, or two can expand each other, as
+`A<T> : I<B<A<T>>>` and `B<T> : I<A<B<T>>>` do, so a walk that follows base types and interfaces into their type arguments meets a new
+type at every step. A delegate can take a deeper construction of itself, as `delegate void D<T>(D<D<T>> d)` does. A type that the
+compiler infers through a chain of calls can be nested thousands of levels deep, and a tuple of tuples of the same tuple has more paths
+through its parts than parts. Such shapes once ran the compiler for ever, or ended its process with a stack overflow.
+
+**A count of the steps does not bound the work.** With `class X<T> : IEquatable<X<(T, T)>>`, or `X<Func<T, T>>`, or
+`X<T, U> : IEquatable<X<U, X<T, U>>>`, each step of the base list has twice the parts of the one before. The compiler shares the parts
+that repeat, so making such a type is cheap, and the compiler alone builds such code in two seconds. Comparing two of them that are equal
+and were made apart is not cheap: the compiler compares them part by part along every path (`NamedTypeSymbol.EqualsComplicatedCases`), so
+the fortieth costs 2^40 steps. A visited set and a cache compare what they hold, and a walk that counted only its steps, 512 of them, let
+such types in and ran for more than ten minutes: the source and the target of `IEnumerable<X<PG>> e = new List<X<PG>>()` each make their own chain of
+equal types, and every lookup of one in a set or a cache that holds the other compares them in full.
+
+So every walk has one budget, a `TypeWalk`, and looks at each type through it (`LookAt`), the type that it starts from, each part and each
+base type, interface, constraint or type of a signature that it takes up alike. The budget counts the types that the walk looks at, at most
+`TypeWalk.MaxTypes` (512), and counts the parts of each type before the walk looks at it, with a count that stops at
+`TypeWalk.MaxPartsPerType` (512), so it never costs more than that. A part is the type itself, a type argument of it or of a type that
+contains it, an element type, what a pointer points at and the types of a function pointer's signature, each time that it is met: a type
+nested 513 levels deep has too many parts, and so has a type that doubles its parts nine times. A type within the limit is compared with
+any other type in no more steps than its parts, so one walk costs at most 512 times 512 counted parts and a bounded number of comparisons,
+whatever the shape of the types. A walk that only follows constructors or the constraints of type parameters counts its steps (`Step`).
+One class holds both limits and the count, and a walk cannot look at a type in any other way, so a new walk cannot leave the budget out.
+
+**A cache keys a type by its identity** (`TypeIdentities`, `TypeCache`): the classification of types, the erasable types, the bindings of
+cloning classes, the classes that derive from a listed container, and the answers of the walks below. The compiler makes a type anew
+wherever it is written or substituted, hashes every construction of a generic as its definition, and compares two that are equal and
+were made apart part by part. So a cache keyed by the type puts every construction of one generic in one bucket, and compares a type
+nested hundreds of levels deep with the copy that another field left, at each level that a walk asks about: a cost that grew with the
+square of the depth at every use. The identity of a type is made from that of its definition and the identities of its parts, from the
+innermost out, and kept for the instance of the type, so each instance is looked at once, and each lookup after that compares nothing.
+Nullable annotations and the names of tuple elements play no part, as in `SymbolEqualityComparer.Default`. A type with more parts than a
+walk looks at is its own identity, by its instance, so that making an identity never goes deeper than a walk counts. The count and a
+hash of the parts of each instance are kept as well (`TypeWalk.Measure`, in a table that holds the symbols weakly), so counting the
+parts of a type nested 400 levels deep costs one step per level once, and not once for each of its levels at each look of a walk. The
+sets of a walk hash a type by its parts for the same reason (`TypeWalk.Comparer`), and the uses of members by the parts of the types
+that they are constructed with (`TypeWalk.MemberComparer`).
+
+**A walk that starts from a type is the same walk each time,** and the checks of a member ask the same questions at every use of a type:
+whether a conversion loses sight of a non-copyable type (`GetMentionedNonCopyableTypes`), whether a type exposes one, whether it is
+unsafe to copy, whether its parts hold such a value, and the binding of a cloning class within it. Each answer is remembered by the type
+that the walk started from (`NonCopyableTypes.Remember`), the answer that the walk reached its bound included (`WalkAnswer.AtBound`), so a
+type that expands itself or has hundreds of parts costs its walk once per compilation and not once per use. Five thousand conversions of
+`List<C<PG>>` to `IEnumerable<C<PG>>`, with `C<T> : IEquatable<C<C<T>>>`, and a thousand fields of dictionaries of lists nested 505 levels
+deep, three uses each, build within about twice the time of the compiler alone under both rule sets.
+
+A dictionary of lists of tasks of tuples comes to about fifty types, and a walk that reaches its bound ends in a few milliseconds. Every
+generic of the shapes above, whether it grows by a tuple, a delegate, two type parameters, a base class, a constraint, a nested type or a
+field, builds within a fraction of a second of the compiler alone, under both rule sets. What a walk answers at its bound depends on what
+it is for:
+
+- **A walk that follows base types, interfaces or delegate signatures** is the one that the shapes above reach. At its bound it takes the
+  answer that leads to a report: a severity is strict, and a type carries a non-copyable value. A conversion of `C<PG>` to its own
+  interface then gets SCA1023, and a report about `C<PG>` is strict under the updated rules, where the walk would have found only `PG`.
+  The shapes are rare, and a report on them is the price of an answer.
+- **A walk over the parts of a type alone** ends by itself, and reaches the bound only with a type of more than 512 parts. Where its
+  answer is a yes or a no, it takes the one that leads to a report. Where its answer has to name what it found, such as the binding that
+  SCA1026 names, it gives up with a `TypeTooLargeException`, and the member or the declaration gets SCA1048 with the text of a type that
+  is too large (`Rules.TypeTooLarge`), as a recursion that runs out of stack gives up. In the code that works out a severity it makes the
+  report strict. Each walk over the type of a field is made by one check of that field: the field's own (`AnalyzeField`), or for a
+  field that the compiler declares, behind an auto-property or for a parameter of a primary constructor, a check of its own inside the
+  check of its struct (`AnalyzeFieldDeclaredByCompiler`). So a field of a type that is too large gets SCA1048 once, where the field is
+  shown, and the rest of its struct is checked.
+- **`GetKind`** follows base types and interfaces only for a definition, so it looks only at the parts of a type and at the base lists
+  of the definitions that it meets, and ends for every type. Its walk has the same budget: a type that the walk does not look at carries
+  something as far as the analyzer can tell, so a struct there is non-copyable and anything else a container, and that answer is not
+  cached, for the type or for one that it is a part of.
+
+| Walk | What it follows | At the bound |
+|---|---|---|
+| `CollectNonCopyableTypes`, for `LosesNonCopyableType` | Parts, base types, interfaces | The conversion loses sight of a non-copyable type |
+| `ExposesNonCopyableType` | Parts, base types, interfaces | The type exposes a non-copyable type |
+| `HoldsUnsafeToCopyInParts` | Parts, and the base types and interfaces of a container | The type holds a value that is unsafe to copy: strict |
+| `HoldsContainers`, `MentionsContainer` | Parts, base types, interfaces | The type holds containers, so a local of it is held to the list of what is allowed |
+| `IsElementTypeOf` | Parts, base types, interfaces | No element: what a member hands out is the container under another name |
+| `FindHiddenByVariance`, `FindHolderLostByVariance` | Variant type arguments, and the interfaces of the source | The conversion itself hides a container, or loses a holder |
+| `FindHandBackType` | The types of a signature, delegate signatures, constraints, each part once each way: a type argument of a class goes both ways, and without a record of what it saw the walk doubled its work at each level of a dictionary of dictionaries | The member can hand its object on |
+| `LetsOut`, for SCA1025 | Pointers, arrays, the signatures of delegates and function pointers | The member lets a value out |
+| `MentionsBoundContainer` | Parts | A bound container: what the member hands out is stored |
+| `FindVariance` | Variant type arguments of an interface | An obstacle at the type argument that the walk got to: the type is not erasable |
+| `CoversEveryTypeParameter` | Parts of a declared type | Not covered: the value counts as taken |
+| `HasContainerConstraint`, `GetClassOf`, `GetConstraintClass` | Constraints to type parameters, counted by step | Nothing found: only a circle reaches the bound, and that is a declaration that does not compile |
+| `IsUnsafeToCopy`, `FindBindingNotTakenWithin`, `FindStructBindingNotTaken`, `FindCloningBindingWithin`, `MentionsTypeParameter`, `MentionsMarkedTypeParameter`, `MentionsUnmarkedTypeParameter`, `Substitute`, `FindConstructorBindingNotTaken`, `FindRequiresCopyableConstructorUse` | Parts, or the constructors of the classes above, counted by step | `TypeTooLargeException`: SCA1048, or a strict severity |
+| `GetKind` | Parts, and the base lists of definitions | A struct is non-copyable, anything else a container, and nothing is cached |
+
+**A report that a bound made strict says so.** The walks that decide a severity give a third answer besides yes and no, that they
+reached their bound (`WalkAnswer.AtBound`): `HoldsUnsafeToCopyInParts` and `IsUnsafeToCopy`, and through them `AnswerReachesUnsafeToCopy`,
+`AnswerDuplicatesUnsafeToCopy` and `AnswerHoldsUnsafeToCopy`, which `Severities` reads, a `TypeTooLargeException` there included. A
+report that is strict only by that answer gets the descriptor whose message says so; one that a type which holds a value that is unsafe
+to copy makes strict needs no such words, whatever else reached the bound. A list of lists twenty levels deep over a plain guard meets
+more than 512 types along its interfaces, and a tuple of 520 elements has more than 512 parts: both make a report strict that way. The
+member that SCA1048 reports and a declaration that was not checked for a type that is too large say it as well: the walk that looks for a
+value that is unsafe to copy in the member takes a type that reached the bound where it finds nothing else, and a declaration stopped by
+a `TypeTooLargeException` gets `Subject.TooLarge`. Under the current rules the severity reads no type, and nothing is added.
+
+What is not carried to a message is a report that the bound decided, as opposed to its severity: a conversion that counts as hiding a
+non-copyable type because `CollectNonCopyableTypes`, `ExposesNonCopyableType` or `FindHiddenByVariance` reached the bound, as for `C<PG>`
+converted to its own interface, and a member use whose classification met the bound in `GetKind`. Those answers are yes or no to
+`HidesNonCopyableType`, which seventeen places read and turn into a dozen rules, and to `GetKind`, which more than two hundred read;
+carrying a third answer through them would touch most checks, and each rule would need a second text under the current rules as well,
+where no severity is chosen by a type. Under the updated rules the severity of such a report reaches the same bound in
+most cases, and then its message says so; under the current rules it says nothing of the bound.
+
+A walk that once stopped at a depth of 8 or 16 with no answer, as the one of SCA1026 through the type arguments of a struct did, counts
+types now: a binding nine structs deep is reported.
+
+**What a message shows.** The compiler formats a type by recursion over its type arguments, with no guard, so formatting a type nested
+thousands of levels deep ends the process. Every symbol that the analyzer shows goes through `SymbolText`: the text of a member, the
+symbols among the arguments of a message (`Severities` replaces them), and the texts that the analyzer builds. A type nested more than
+32 levels deep, or with more than 256 parts, is shown with four levels and `...` for the rest, and a member that mentions one is shown
+as it is declared.
+
 #### Messages
 
 Every message is a `Rule` in `Rules.cs`, made by `Create(id, title, message, description)`. The title, the message and the description
@@ -1451,6 +1658,7 @@ messages that say why: what made a local not the method's own, what makes a clas
 | `FrameworkScanTests` | The built-in framework symbol list against the shared frameworks, and against the .NET Framework 4.8.1 where it is installed (see [Symbol List](#symbol-list)) |
 | `MessageTests` | The parts of messages that say why, and the fixes that the README and the guides give |
 | `DeepCodeTests`, `EdgeCaseTests` | Deep and long code, on a stack of a fixed size, and the paths that only unusual code reaches |
+| `TypeWalkBoundTests` | The bound of the walks over types: generics and delegates that expand themselves or each other, or whose type doubles at each step, under both rule sets and with a timeout, a signature of dictionaries of dictionaries nine levels deep, a type inferred through two thousand calls, a type written hundreds of levels deep in a declaration, a type shown in short, and a report that a bound made strict, whose message says so, for a deep and for a wide type |
 | `StaticFieldTests` | A read or a write of a static field of a generic type as a member use, its `F:` line, and the framework's lines |
 | `ProbeTests` | The probe projects under `Probes`, each with a `baseline.txt` of every warning by file, line, column and ID |
 

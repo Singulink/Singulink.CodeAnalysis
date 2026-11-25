@@ -341,6 +341,15 @@ internal static class Verify
             $"the hand-off, pass it by reference, or hand over NonCopyable.Move(ref {variable})."),
         handOffs);
 
+    public static DiagnosticResult UsedAfterUsing(int location, string variable, string type, params int[] handOffs) => WithLocations(
+        Diagnostic(
+            DiagnosticIds.UsedAfterHandOff,
+            location,
+            $"'{variable}' is used after a 'using' statement took a copy of its value of non-copyable type '{type}', which the statement " +
+            $"disposes at its end while '{variable}' still holds the value. Declare the variable in the statement, as in " +
+            $"'using (var {variable} = ...)', or use a 'using' declaration with a new value, as in 'using var {variable} = ...'."),
+        handOffs);
+
     /// <summary>
     /// A use of a variable after its value was handed over by value, where only a handler uses the variable after the hand-off.
     /// </summary>
@@ -675,8 +684,8 @@ internal static class Verify
     public static DiagnosticResult OpaqueMemberThatClones(int location, string container, string declaringType, string member) => Diagnostic(
         DiagnosticIds.OpaqueType,
         location,
-        $"'{member}' uses container '{container}' as '{declaringType}', which hides its non-copyable elements from the analyzer, and " +
-        $"'{member}' clones its object field by field with MemberwiseClone, so no line of a symbol list file can vouch for it. Avoid the " +
+        $"'{member}' uses container '{container}' as '{declaringType}', which hides the non-copyable type that it mentions from the " +
+        $"analyzer, and '{member}' clones its object field by field with MemberwiseClone, so no line of a symbol list file can vouch for it. Avoid the " +
         $"use, or hold the values in an object of a class that '{container}' refers to.");
 
     public static DiagnosticResult GetObjectValueCall(int location) => Diagnostic(
@@ -770,13 +779,55 @@ internal static class Verify
             $"and does not take '{argument}', since it is unsafe to copy. Use a type that is not unsafe to copy, or override Equals and " +
             $"GetHashCode in '{type}'.");
 
+    /// <summary>
+    /// What the message of a report says where it is strict under the updated rules only because a walk over types reached its bound.
+    /// </summary>
+    public const string AtBoundClause =
+        "A type here is larger than the analyzer looks into, with its type arguments and what it derives from, so it is treated as if " +
+        "it could hold a value that is unsafe to copy.";
+
+    public static DiagnosticResult UnsafeToCopyReachedNotTaken(int location, string generic, string type, string typeParameter) => Diagnostic(
+        DiagnosticIds.UnsafeToCopyNotTaken,
+        location,
+        $"'{generic}' does not take '{type}' for type parameter '{typeParameter}', which is marked [NonCopyable(UnsafeToCopy = false)]: " +
+        $"through '{type}' other code can reach a value that is unsafe to copy. Use a type through which no such value can be reached, or " +
+        "a generic whose type parameter takes any non-copyable type.");
+
+    public static DiagnosticResult UnsafeToCopyReachedNotTakenBehindBox(
+        int location, string type, string boxType, string generic, string argument, string typeParameter) =>
+        Diagnostic(
+            DiagnosticIds.UnsafeToCopyNotTaken,
+            location,
+            $"Boxing '{type}' as '{boxType}' lets other code run the members of '{generic}' on the box with '{argument}' for type parameter " +
+            $"'{typeParameter}', which is marked [NonCopyable(UnsafeToCopy = false)] and does not take '{argument}', since a value that is " +
+            $"unsafe to copy can be reached through it. Keep the value as '{type}'.");
+
+    public static DiagnosticResult UnsafeToCopyReachedNotTakenBehindTypeParameter(
+        int location, string member, string given, string through, string generic, string argument, string typeParameter) =>
+        Diagnostic(
+            DiagnosticIds.UnsafeToCopyNotTaken,
+            location,
+            $"'{given}' is bound to type parameter '{through}' of '{member}', so the generic can run the members of '{generic}' with " +
+            $"'{argument}' for type parameter '{typeParameter}', which is marked [NonCopyable(UnsafeToCopy = false)] and does not take " +
+            $"'{argument}', since a value that is unsafe to copy can be reached through it. Keep the value out of '{through}'.");
+
+    public static DiagnosticResult UnsafeToCopyReachedNotTakenInField(
+        int location, string field, string type, string fieldType, string generic, string argument, string typeParameter) =>
+        Diagnostic(
+            DiagnosticIds.UnsafeToCopyNotTaken,
+            location,
+            $"The field '{field}' of struct '{type}' holds '{fieldType}': the Equals and GetHashCode that '{type}' inherits from ValueType run " +
+            $"the members of '{generic}' with '{argument}' for type parameter '{typeParameter}', which is marked [NonCopyable(UnsafeToCopy = false)] " +
+            $"and does not take '{argument}', since a value that is unsafe to copy can be reached through it. Use a type through which no " +
+            $"such value can be reached, or override Equals and GetHashCode in '{type}'.");
+
     public static DiagnosticResult UnsafeToCopySetInOwnCode(int location, string attribute) => Diagnostic(
         DiagnosticIds.UnsafeToCopySetInOwnCode,
         location,
         $"'{attribute}' sets UnsafeToCopy in its own code, which the analyzer does not read: it reads the value only where the attribute is " +
         "applied, from the named argument UnsafeToCopy or from an argument for a 'bool' parameter named 'unsafeToCopy'. A struct marked " +
         "with it counts as what it says there. Write the value where the attribute is applied, or take it as a 'bool' parameter named " +
-        "'unsafeToCopy' and set the property from it.");
+        "'unsafeToCopy' and set the property or field from it.");
 
     public static DiagnosticResult MovedFromOnPrimaryConstructor(int location, string parameter, string type) => Diagnostic(
         DiagnosticIds.MovedFromMisuse,
@@ -907,7 +958,7 @@ internal static class Verify
             .WithSpan(ListFileName, line, 1, line, endColumn)
             .WithMessage(
                 $"This line of the symbol list file names '{id}' for {added}, where the built-in framework symbol list names it for '{builtIn}' " +
-                "only. It has no effect, because a line of a file can claim less of a member than the built-in list, not more.");
+                "only. It has no effect, because a line of a file can claim less than the built-in list, not more.");
 
     /// <summary>
     /// A 'borrowswhen' line of a file that lists outcomes which the built-in framework symbol list does not list for the member.
@@ -997,47 +1048,48 @@ internal static class Verify
     public static DiagnosticResult OpaqueConversion(int location, string container, string targetType, string? through = null) => Diagnostic(
         DiagnosticIds.OpaqueType,
         location,
-        $"Container {Container(container, through)} is converted to '{targetType}', which hides its non-copyable elements from the analyzer. " +
-        "Keep the element type visible, or pass the container only to a member that the symbol list marks 'borrows'.");
+        $"Container {Container(container, through)} is converted to '{targetType}', which hides the non-copyable type that it mentions from the " +
+        "analyzer. Keep that type visible, or pass the container only to a member that the symbol list marks 'borrows'.");
 
     public static DiagnosticResult OpaqueVariance(int location, string container, string hidingType, string sourceType, string targetType) => Diagnostic(
         DiagnosticIds.OpaqueType,
         location,
         $"The conversion of '{sourceType}' to '{targetType}' turns container '{container}' into '{hidingType}' for the code behind the reference, " +
-        "which hides its non-copyable elements from the analyzer. Variance converts a type argument with no conversion written. Keep the type " +
+        "which hides the non-copyable type that it mentions from the analyzer. Variance converts a type argument with no conversion written. Keep the type " +
         "arguments the same.");
 
     public static DiagnosticResult OpaqueMember(int location, string container, string declaringType, string member, string id) => Diagnostic(
         DiagnosticIds.OpaqueType,
         location,
-        $"'{member}' uses container '{container}' as '{declaringType}', which hides its non-copyable elements from the analyzer, and is not on the " +
-        $"symbol list. Add '{id}' to {ListFileAdvice}");
+        $"'{member}' uses container '{container}' as '{declaringType}', which hides the non-copyable type that it mentions from the " +
+        $"analyzer, and is not on the symbol list. Add '{id}' to {ListFileAdvice}");
 
     public static DiagnosticResult OpaqueReturn(int location, string container, string targetType, string member, string overridden) => Diagnostic(
         DiagnosticIds.OpaqueType,
         location,
         $"'{member}' returns container '{container}' where '{overridden}', which it overrides, returns '{targetType}': a caller of the base member " +
-        "gets the container as a type that hides its non-copyable elements from the analyzer. Return the type of the base member, or keep the " +
-        "element type visible in both.");
+        "gets the container as a type that hides the non-copyable type that it mentions from the analyzer. Return the type of the base member, " +
+        "or keep that type visible in both.");
 
     public static DiagnosticResult OpaqueMethodGroup(int location, string container, string targetType, string method, string delegateType) => Diagnostic(
         DiagnosticIds.OpaqueType,
         location,
-        $"The conversion of '{method}' to delegate '{delegateType}' turns container '{container}' into '{targetType}', which hides its " +
-        "non-copyable elements from the analyzer. Use a delegate type that keeps the element type visible.");
+        $"The conversion of '{method}' to delegate '{delegateType}' turns container '{container}' into '{targetType}', which hides the " +
+        "non-copyable type that it mentions from the analyzer. Use a delegate type that keeps that type visible.");
 
     public static DiagnosticResult OpaqueTypeParameterConversion(int location, string typeParameter, string targetType) => Diagnostic(
         DiagnosticIds.OpaqueType,
         location,
         $"A value of type parameter '{typeParameter}' is converted to '{targetType}'. With a container bound to '{typeParameter}' that hands " +
-        "out the container as a type that hides its non-copyable elements from the analyzer, and nothing in the generic can tell. Keep the " +
+        "out the container as a type that hides the non-copyable type that it mentions from the analyzer, and nothing in the generic can " +
+        "tell. Keep the " +
         $"value as '{typeParameter}'.");
 
     public static DiagnosticResult OpaqueConstraint(int location, string member, string container, string typeParameter, string constraint) => Diagnostic(
         DiagnosticIds.OpaqueType,
         location,
         $"'{container}' is bound to type parameter '{typeParameter}' of '{member}', which is constrained to '{constraint}': the generic can use " +
-        "it as that type, which hides the non-copyable type that it holds from the analyzer. Use a type parameter that is constrained to a type " +
+        "it as that type, which hides the non-copyable type that it mentions from the analyzer. Use a type parameter that is constrained to a type " +
         "which keeps that type visible.");
 
     public static DiagnosticResult OpaqueBoxing(int location, string type, string targetType, string definition) => Diagnostic(
@@ -1045,6 +1097,12 @@ internal static class Verify
         location,
         $"Boxing '{type}' as '{targetType}' hides the non-copyable type that it holds. The code of '{definition}' is not checked, and what its " +
         $"interfaces give on the box are boxed copies. Keep the value as '{type}'.");
+
+    public static DiagnosticResult OpaqueBoxingOfContainers(int location, string type, string targetType) => Diagnostic(
+        DiagnosticIds.OpaqueType,
+        location,
+        $"Boxing '{type}' as '{targetType}' hides the containers that its type arguments carry from the analyzer: other code can reach " +
+        $"them through the box, with a later cast or reflection. Keep the value as '{type}'.");
 
     public static DiagnosticResult OpaqueLambdaBoxing(int location, string type, string targetType, string definition) => Diagnostic(
         DiagnosticIds.OpaqueType,
@@ -1106,12 +1164,26 @@ internal static class Verify
             : $". What '{handsOut}' hands out stays with what holds it and cannot be moved out of: make the value in this method and hand it " +
                 "to the object, as a completion source is made in the method that returns its 'Task'."));
 
+    /// <summary>
+    /// The finding for a listed member that makes a value out of a stored container, other than one of the type that is bound to it: an
+    /// enumerator or an awaiter that reads what the container still holds.
+    /// </summary>
+    /// <param name="location">The number of the marked location.</param>
+    /// <param name="source">The member, in quotes.</param>
+    /// <param name="type">The non-copyable type of the new value.</param>
+    /// <param name="because">What the message says of a local that is not the method's own: its name in quotes and why.</param>
+    public static DiagnosticResult MadeFromStoredContainer(int location, string source, string type, string? because = null) => Diagnostic(
+        DiagnosticIds.ReadFromStoredContainer,
+        location,
+        $"{source} makes a value of non-copyable type '{type}' out of a stored value{Because(because)}, which still holds what the new value " +
+        "reads. Call it on a new value, or move the stored value out first with NonCopyable.Move.");
+
     public static DiagnosticResult OpaqueLambdaResult(int location, string container, string targetType, string? through = null) => Diagnostic(
         DiagnosticIds.OpaqueType,
         location,
-        $"The result of this lambda, a container of type {Container(container, through)}, is converted to '{targetType}', which hides its " +
-        "non-copyable elements from the analyzer. If the result is not meant to be returned, give the lambda a statement body, as in " +
-        "'() => { Call(); }'. Otherwise keep the element type visible.");
+        $"The result of this lambda, a container of type {Container(container, through)}, is converted to '{targetType}', which hides the " +
+        "non-copyable type that it mentions from the analyzer. If the result is not meant to be returned, give the lambda a statement body, " +
+        "as in '() => { Call(); }'. Otherwise keep that type visible.");
 
     public static DiagnosticResult UncheckedMember(int location, string member, string parameter, string type, string id) => Diagnostic(
         DiagnosticIds.UncheckedMember,
@@ -1399,6 +1471,12 @@ internal static class Verify
         $"'{member}' is nested too deeply for the analyzer and was not checked: a copy in it goes unseen. Break up the expression that " +
         "is nested this deeply, with locals or with methods of its own.");
 
+    public static DiagnosticResult TypeTooLarge(int location, string member) => Diagnostic(
+        DiagnosticIds.NestedTooDeeply,
+        location,
+        $"'{member}' uses a type with more parts than the analyzer looks at, and was not checked: a copy in it goes unseen. Use a type with " +
+        "fewer parts, nested less deeply or with fewer type arguments, for example with a type of its own for part of it.");
+
     public static DiagnosticResult NotNullRefNotChecked(int location, string parameter, string member) => Diagnostic(
         DiagnosticIds.NotNullRefNotChecked,
         location,
@@ -1612,6 +1690,13 @@ internal static class Verify
     /// helpers give the warning, which it is everywhere under the current rules and in an unsafe context under the updated ones.
     /// </summary>
     public static DiagnosticResult AsError(this DiagnosticResult result) => result.WithSeverity(DiagnosticSeverity.Error);
+
+    /// <summary>
+    /// Expects the error of the updated rules for a report that is strict only because a walk over types reached its bound, whose message
+    /// says so after the message of the rule.
+    /// </summary>
+    public static DiagnosticResult AsErrorAtBound(this DiagnosticResult result) =>
+        result.WithSeverity(DiagnosticSeverity.Error).WithMessage(result.Message + (result.Message!.EndsWith('.') ? " " : ". ") + AtBoundClause);
 
     /// <summary>
     /// Makes a result the error of the updated memory safety rules where <paramref name="isError"/> is true, for a test that runs under

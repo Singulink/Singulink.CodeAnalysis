@@ -242,6 +242,8 @@ public class RoslynTests
         Verify.MemberOnReadOnlyReference(0, "Handle", "Handle.AddrOfPinnedObject()"),
         Verify.MemberOnReadOnlyReference(1, "Handle", "Handle.AddrOfPinnedObject()"));
 
+    // Differs from Roslyn's rule, which reports the first two failure cases as well: they do not compile, so they cannot run, and get the
+    // compiler's error alone.
     [TestMethod]
     public Task PassToExtensionMethod() => Verify.AnalyzerAsync(
         """
@@ -274,8 +276,8 @@ public class RoslynTests
                 local.XIn();
 
                 // Failure cases.
-                {|#0:{|CS0192:readonlyfield|}|}.XRef();
-                {|#1:{|CS1510:refreadonlylocal|}|}.XRef();
+                {|CS0192:readonlyfield|}.XRef();
+                {|CS1510:refreadonlylocal|}.XRef();
                 {|#2:field|}.X();
                 {|#3:readonlyfield|}.X();
                 {|#4:local|}.X();
@@ -291,8 +293,6 @@ public class RoslynTests
             public static void XIn(this in GCHandle handle) { }
         }
         """,
-        Verify.UnsupportedUse(0, GCHandle, "FieldReference"),
-        Verify.UnsupportedUse(1, GCHandle, "LocalReference"),
         Verify.CopyOfStoredValue(2, "'E.X(GCHandle)' receives", GCHandle),
         Verify.CopyOfStoredValue(3, "'E.X(GCHandle)' receives", GCHandle),
         Verify.CopyOfStoredValue(4, "'E.X(GCHandle)' receives", GCHandle),

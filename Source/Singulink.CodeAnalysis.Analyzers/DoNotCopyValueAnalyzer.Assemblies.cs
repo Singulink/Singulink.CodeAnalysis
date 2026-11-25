@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Diagnostics;
 using Microsoft.CodeAnalysis.Text;
@@ -258,6 +259,7 @@ public sealed partial class DoNotCopyValueAnalyzer
     private static ISymbol? FindExposedValue(IAssemblySymbol assembly, NonCopyableTypes types)
     {
         (ISymbol Member, string Display)? best = null;
+        var walk = new TypeWalk();
         Visit(assembly.GlobalNamespace);
 
         foreach (var forwarded in assembly.GetForwardedTypes())
@@ -312,17 +314,17 @@ public sealed partial class DoNotCopyValueAnalyzer
                 switch (member)
                 {
                     // A field is read where it is, so the value itself counts too.
-                    case IFieldSymbol { IsConst: false } field when types.IsNonCopyableType(field.Type) || LetsOut(field.Type, byReference: false, 0):
+                    case IFieldSymbol { IsConst: false } field when types.IsNonCopyableType(field.Type) || LetsOut(field.Type, byReference: false):
                         Add(field);
                         break;
 
                     // The handler of an event is the code of whoever subscribed.
-                    case IEventSymbol @event when LetsOut(@event.Type, byReference: false, 0):
+                    case IEventSymbol @event when LetsOut(@event.Type, byReference: false):
                         Add(@event);
                         break;
 
                     case IPropertySymbol property:
-                        if (LetsOut(property.Type, property.ReturnsByRef || property.ReturnsByRefReadonly, 0) ||
+                        if (LetsOut(property.Type, property.ReturnsByRef || property.ReturnsByRefReadonly) ||
                             ((property.GetMethod ?? property.SetMethod) is { } accessor && IsGivenOrCalledBack(accessor, property.Parameters)))
                         {
                             Add(property);
@@ -331,7 +333,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                         break;
 
                     case IMethodSymbol { MethodKind: MethodKind.Ordinary or MethodKind.UserDefinedOperator or MethodKind.Conversion or MethodKind.Constructor } method:
-                        if ((method.MethodKind is not MethodKind.Constructor && LetsOut(method.ReturnType, method.ReturnsByRef || method.ReturnsByRefReadonly, 0)) ||
+                        if ((method.MethodKind is not MethodKind.Constructor && LetsOut(method.ReturnType, method.ReturnsByRef || method.ReturnsByRefReadonly)) ||
                             IsGivenOrCalledBack(method, method.Parameters))
                         {
                             Add(method);
@@ -344,25 +346,35 @@ public sealed partial class DoNotCopyValueAnalyzer
 
         // What other code gets at through something of a type that it reads, is returned or is given: a reference to a value, or by
         // value something that carries one and is not itself the value. A delegate and a function pointer carry nothing themselves:
-        // they are judged by what the code behind them is given and returns.
-        bool LetsOut(ITypeSymbol type, bool byReference, int depth)
+        // they are judged by what the code behind them is given and returns. A delegate can take a deeper construction of itself, as
+        // 'delegate void D<T>(D<D<T>> d)' does, which is a new type at every step, so the walk counts the types that it looks at, and
+        // one that reaches its bound takes the type to let a value out.
+        bool LetsOut(ITypeSymbol type, bool byReference)
         {
-            if (depth > 8)
-                return false;
+            walk = new TypeWalk();
+            return LetsOutWithin(type, byReference);
+        }
+
+        bool LetsOutWithin(ITypeSymbol type, bool byReference)
+        {
+            RuntimeHelpers.EnsureSufficientExecutionStack();
+
+            if (!walk.LookAt(type))
+                return true;
 
             switch (type)
             {
                 case IPointerTypeSymbol pointer:
-                    return types.Carries(pointer.PointedAtType) || LetsOut(pointer.PointedAtType, byReference: true, depth + 1);
+                    return types.Carries(pointer.PointedAtType) || LetsOutWithin(pointer.PointedAtType, byReference: true);
 
                 case IFunctionPointerTypeSymbol functionPointer:
-                    return IsGivenAt(functionPointer.Signature, depth + 1);
+                    return IsGivenAt(functionPointer.Signature);
 
                 case INamedTypeSymbol { DelegateInvokeMethod: { } invoke }:
-                    return IsGivenAt(invoke, depth + 1);
+                    return IsGivenAt(invoke);
 
                 case IArrayTypeSymbol { ElementType: IPointerTypeSymbol or IFunctionPointerTypeSymbol or INamedTypeSymbol { TypeKind: TypeKind.Delegate } } array:
-                    return LetsOut(array.ElementType, byReference: false, depth + 1);
+                    return LetsOutWithin(array.ElementType, byReference: false);
 
                 default:
                     return types.Carries(type) && (byReference || !types.IsNonCopyableType(type));
@@ -371,17 +383,21 @@ public sealed partial class DoNotCopyValueAnalyzer
 
         // What the code behind a method is given, and what it returns to its caller: a reference to a value, or a container. A value by
         // value is a move.
-        bool IsGiven(IMethodSymbol method) => IsGivenAt(method, 0);
+        bool IsGiven(IMethodSymbol method)
+        {
+            walk = new TypeWalk();
+            return IsGivenAt(method);
+        }
 
-        bool IsGivenAt(IMethodSymbol method, int depth)
+        bool IsGivenAt(IMethodSymbol method)
         {
             foreach (var parameter in method.Parameters)
             {
-                if (LetsOut(parameter.Type, parameter.RefKind is not RefKind.None, depth))
+                if (LetsOutWithin(parameter.Type, parameter.RefKind is not RefKind.None))
                     return true;
             }
 
-            return !method.ReturnsVoid && LetsOut(method.ReturnType, method.ReturnsByRef || method.ReturnsByRefReadonly, depth);
+            return !method.ReturnsVoid && LetsOutWithin(method.ReturnType, method.ReturnsByRef || method.ReturnsByRefReadonly);
         }
 
         // The parameters of a member that other code can implement are what its code is given. Of a member that other code can only
@@ -395,11 +411,11 @@ public sealed partial class DoNotCopyValueAnalyzer
             {
                 if (implementable)
                 {
-                    if (LetsOut(parameter.Type, parameter.RefKind is not RefKind.None, 0))
+                    if (LetsOut(parameter.Type, parameter.RefKind is not RefKind.None))
                         return true;
                 }
                 else if (parameter.Type is IFunctionPointerTypeSymbol or INamedTypeSymbol { TypeKind: TypeKind.Delegate or TypeKind.Interface } &&
-                    LetsOut(parameter.Type, byReference: false, 0))
+                    LetsOut(parameter.Type, byReference: false))
                 {
                     return true;
                 }
@@ -410,7 +426,7 @@ public sealed partial class DoNotCopyValueAnalyzer
 
         void Add(ISymbol member)
         {
-            string display = member.ToDisplayString();
+            string display = SymbolText.Of(member);
 
             if (best is null || string.CompareOrdinal(display, best.Value.Display) < 0)
                 best = (member, display);
@@ -541,7 +557,7 @@ public sealed partial class DoNotCopyValueAnalyzer
 
             // One type is named in the message, the same in every build.
             if (!result.TryGetValue(type.ContainingAssembly, out var named) ||
-                string.CompareOrdinal(type.ToDisplayString(), named.ToDisplayString()) < 0)
+                string.CompareOrdinal(SymbolText.Of(type), SymbolText.Of(named)) < 0)
             {
                 result[type.ContainingAssembly] = type;
             }
@@ -640,6 +656,6 @@ public sealed partial class DoNotCopyValueAnalyzer
     private static string GetTopLevelMetadataName(INamedTypeSymbol type)
     {
         var top = GetTopLevelType(type);
-        return top.ContainingNamespace is { IsGlobalNamespace: false } ns ? ns.ToDisplayString() + "." + top.MetadataName : top.MetadataName;
+        return top.ContainingNamespace is { IsGlobalNamespace: false } ns ? SymbolText.Of(ns) + "." + top.MetadataName : top.MetadataName;
     }
 }

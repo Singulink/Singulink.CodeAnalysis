@@ -684,6 +684,7 @@ public class TypeParameterTests
         Verify.OpaqueTypeParameterConversion(2, "T", "System.IDisposable"),
         Verify.OpaqueTypeParameterConversion(3, "T", "dynamic"),
         Verify.Boxing(4, "T", "object"),
+        Verify.OpaqueTypeParameterConversion(4, "T", "object"),
         Verify.OpaqueReturn(5, "T", "object", "OfReferences<T>.Get()", "Base.Get()"),
         Verify.OpaqueMethodGroup(6, "T", "object", "OfReferences<T>.Make()", "System.Func<object>"),
         Verify.OpaqueConstraint(7, "Holder<T>.Take()", "Guards", "T", "System.IDisposable"),

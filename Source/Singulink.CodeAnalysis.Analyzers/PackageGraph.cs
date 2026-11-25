@@ -6,8 +6,8 @@ namespace Singulink.CodeAnalysis.Analyzers;
 
 /// <summary>
 /// What the packages of a build depend on, read from the assets file that NuGet writes for the project (project.assets.json), which the
-/// targets file of the package gives the compiler as an additional file. It answers one question: whether the code of an assembly that
-/// came in a package can use another assembly of the build.
+/// targets file of the package gives the compiler as an additional file. It answers two questions: whether the code of an assembly that
+/// came in a package can use another assembly of the build, and in which folders NuGet put the packages of the build.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -33,10 +33,17 @@ internal sealed class PackageGraph
 
     private readonly List<Dictionary<string, Library>> _targets;
 
-    private PackageGraph(List<Dictionary<string, Library>> targets)
+    private PackageGraph(List<Dictionary<string, Library>> targets, List<string> packageFolders)
     {
         _targets = targets;
+        PackageFolders = packageFolders;
     }
+
+    /// <summary>
+    /// Gets the folders that NuGet restores the packages of the build to and from: the global packages folder and every fallback folder.
+    /// A package's files are in one of them.
+    /// </summary>
+    public IReadOnlyList<string> PackageFolders { get; }
 
     /// <summary>
     /// Gets the graph of an assets file, or null if the text is not one that can be read.
@@ -108,12 +115,19 @@ internal sealed class PackageGraph
         {
             var reader = new JsonReader(text.ToString());
             var targets = new List<Dictionary<string, Library>>();
+            var packageFolders = new List<string>();
 
             if (!reader.EnterObject())
                 return null;
 
             while (reader.NextKey(out string key))
             {
+                if (key is "packageFolders")
+                {
+                    ReadKeys(ref reader, packageFolders, isPath: false);
+                    continue;
+                }
+
                 if (key is not "targets" || !reader.EnterObject())
                 {
                     reader.Skip();
@@ -124,7 +138,7 @@ internal sealed class PackageGraph
                     targets.Add(ReadTarget(ref reader));
             }
 
-            return targets.Count > 0 ? new PackageGraph(targets) : null;
+            return targets.Count > 0 || packageFolders.Count > 0 ? new PackageGraph(targets, packageFolders) : null;
         }
         catch (FormatException)
         {

@@ -11,6 +11,28 @@ namespace Singulink.CodeAnalysis.Tests;
 [PrefixTestClass]
 public class ConversionTests
 {
+    // A container with no elements, a delegate or an expression tree over a non-copyable type, is converted to a type that hides that
+    // type as a list is: the message speaks of the type that it mentions, which is true of both.
+    [TestMethod]
+    public Task Conversion_OfAContainerWithNoElementsNamesTheTypeThatItMentions() => Verify.AnalyzerAsync(
+        $$"""
+        using System;
+        using System.Linq.Expressions;
+
+        class C
+        {
+            void M(Func<Guard> make, Expression<Func<Guard>> tree)
+            {
+                object a = {|#0:make|};
+                object b = {|#1:tree|};
+            }
+        }
+
+        {{Sources.Guard}}
+        """,
+        Verify.OpaqueConversion(0, "System.Func<Guard>", "object"),
+        Verify.OpaqueConversion(1, "System.Linq.Expressions.Expression<System.Func<Guard>>", "object"));
+
     [TestMethod]
     public Task ContainerConvertedToATypeThatLosesTheNonCopyableType_IsReported() => Verify.AnalyzerAsync(
         $$"""
@@ -336,6 +358,7 @@ public class ConversionTests
         {{Sources.Guard}}
         """,
         Verify.UsedAfterHandOff(2, "guard", "Guard", "its value was converted to \'object\'", 0),
+        Verify.OpaqueBoxing(1, "System.Threading.Tasks.ValueTask<Guard>", "object", "ValueTask<TResult>"),
         Verify.UsedAfterHandOff(5, "pending", "System.Threading.Tasks.ValueTask<Guard>", "its value was converted to \'object\'", 1),
         Verify.UsedAfterHandOff(4, "guard", "Guard", "its value was converted to \'IDisposable\'", 2),
         Verify.UsedAfterHandOff(6, "maybe", "Guard?", "its value was converted to \'object\'", 3));
@@ -839,6 +862,7 @@ public class ConversionTests
         {{Sources.Guard}}
         """,
         Verify.Boxing(0, "T", "object"),
+        Verify.OpaqueTypeParameterConversion(0, "T", "object"),
         Verify.OpaqueReturn(1, "T[]", "object", "Covariant<T>.Get()", "PendingBase.Get()"),
         Verify.OpaqueConversion(2, "Covariant<Guard>", "PendingBase"),
         Verify.OpaqueConversion(3, "Holder<System.Collections.Generic.List<Guard>>", "IProducer<object>"),
@@ -986,7 +1010,7 @@ public class ConversionTests
                 object f = {|#5:rwLock.TryEnterTuple()|};
                 if (rwLock.TryEnterTuple() is {|#6:ITuple tuple|}) { }
 
-                // A stored one is a boxed copy, as before.
+                // A stored one is a boxed copy, and its box hides the guard as well: two rules.
                 object g = {|#7:_pair|};
 
                 // A target that still mentions the non-copyable type hides nothing.
@@ -1009,7 +1033,8 @@ public class ConversionTests
         Verify.OpaqueBoxing(4, "System.Collections.Generic.KeyValuePair<int, Guard>", "object", "KeyValuePair<TKey, TValue>"),
         Verify.OpaqueBoxing(5, "(Guard guard, bool ok)", "object", "(T1, T2)"),
         Verify.OpaqueBoxing(6, "(Guard guard, bool ok)", "System.Runtime.CompilerServices.ITuple", "(T1, T2)"),
-        Verify.Boxing(7, "(Guard guard, int number)", "object"));
+        Verify.Boxing(7, "(Guard guard, int number)", "object"),
+        Verify.OpaqueBoxing(7, "(Guard guard, int number)", "object", "(T1, T2)"));
 
     [TestMethod]
     public Task Variance_IsJudgedByWhatItDoes() => Verify.AnalyzerAsync(

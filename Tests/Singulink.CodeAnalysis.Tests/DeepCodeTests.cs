@@ -19,10 +19,10 @@ namespace Singulink.CodeAnalysis.Tests;
 /// The compiler makes the operations of a member before the analyzer is called, on a thread of the testing library, and it makes those of
 /// a conditional expression and of a chain of calls by recursion. So those forms stay well below the depth at which the compiler runs
 /// out of stack itself: about 1,000 conditionals or 950 calls on a thread of the thread pool on Windows, and a run on another machine
-/// has run out at 850 conditionals. On the small stack, of 192 KB, the analyzer gave up after at most 217 conditionals, 99 calls and 146
-/// terms of a sum with every method fully optimized, the most that it reaches, and after 20, 24 and 40 before the JIT optimized it, on
-/// .NET 10 and .NET 11 alike. A sum of binary operators is one form that the compiler makes without recursion, so it can be as long as
-/// a test likes.</para>
+/// has run out at 850 conditionals. On the small stack, of 192 KB, the analyzer gave up after at most 217 conditionals and 99 calls with
+/// every method fully optimized, the most that it reaches, and after 20 and 24 before the JIT optimized it, on .NET 10 and .NET 11 alike.
+/// A sum of binary operators gets further, since the visit of each of its levels keeps little on the stack, and it is one form that the
+/// compiler makes without recursion, so it can be as long as a test likes.</para>
 /// </remarks>
 [PrefixTestClass]
 public class DeepCodeTests
@@ -245,7 +245,8 @@ public class DeepCodeTests
     // A value that can be of any type counts as one that is unsafe to copy, as for the rules that have no type: a call of
     // MemberwiseClone, which copies the fields of the class and of any class below it, whatever their types, a call of
     // RuntimeHelpers.GetObjectValue, and a value of a marked type parameter converted to a type that hides what is bound to it, which can
-    // be a container of a type that is unsafe to copy also where the type parameter says UnsafeToCopy = false.
+    // be a container of a type that is unsafe to copy. A type parameter that says UnsafeToCopy = false takes no such container, so its
+    // value converted counts as what it is, a plain non-copyable type.
     [TestMethod]
     public Task TooDeep_IsStrictWhereAValueCanBeOfAnyType()
     {
@@ -282,7 +283,14 @@ public class DeepCodeTests
                     return RuntimeHelpers.GetObjectValue(boxed);
                 }
 
-                object {|#3:Converted|}<[Singulink.CodeAnalysis.NonCopyable(UnsafeToCopy = false)] T>(string a, T value)
+                object {|#3:Converted|}<[Singulink.CodeAnalysis.NonCopyable] T>(string a, T value)
+                    where T : class
+                {
+                    _ = {{sum}};
+                    return value;
+                }
+
+                object {|#5:ConvertedPlain|}<[Singulink.CodeAnalysis.NonCopyable(UnsafeToCopy = false)] T>(string a, T value)
                     where T : class
                 {
                     _ = {{sum}};
@@ -303,7 +311,8 @@ public class DeepCodeTests
             Verify.NestedTooDeeply(1, "Plain.Clone(string)").AsError(),
             Verify.NestedTooDeeply(2, "C.Boxed(string, object)").AsError(),
             Verify.NestedTooDeeply(3, "C.Converted<T>(string, T)").AsError(),
-            Verify.NestedTooDeeply(4, "C.Sum(string)"));
+            Verify.NestedTooDeeply(4, "C.Sum(string)"),
+            Verify.NestedTooDeeply(5, "C.ConvertedPlain<T>(string, T)"));
     }
 
     [TestMethod]

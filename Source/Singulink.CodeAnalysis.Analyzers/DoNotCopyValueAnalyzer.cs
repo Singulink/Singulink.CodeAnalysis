@@ -54,12 +54,13 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
             // The compilation is checked code whether its assembly carries the marker of an analyzed build or not.
             AnalyzedAssemblies.AddCompilation(context.Compilation.Assembly);
 
-            // The list is built once for the compilation. The two classifiers share it.
+            // The list is built once for the compilation. The two classifiers share it, and the identities of the types that they cache.
             var listFiles = GetListFiles(context.Options, context.CancellationToken);
             var list = SafeMemberList.Create(
-                [.. listFiles.Select(f => (f.Text, IsFileOfAPackage(f.File, context.Options)))], IncludesBuiltInNonCopyableTypes(context.Options), context.Compilation);
-            var typesInCopyingMember = new NonCopyableTypes(list, context.Compilation.Assembly, typeParametersAreCopyable: true);
-            var types = new NonCopyableTypes(list, context.Compilation.Assembly, typeParametersAreCopyable: false, definitions: typesInCopyingMember);
+                [.. listFiles.Select(f => (f.Text, IsFileOfAPackage(f.File, context.Options, context.CancellationToken)))], IncludesBuiltInNonCopyableTypes(context.Options), context.Compilation);
+            var identities = new TypeIdentities();
+            var typesInCopyingMember = new NonCopyableTypes(list, context.Compilation.Assembly, typeParametersAreCopyable: true, identities);
+            var types = new NonCopyableTypes(list, context.Compilation.Assembly, typeParametersAreCopyable: false, identities, typesInCopyingMember);
             var marks = new MarkCache();
             var moves = new MoveTrust();
             bool allowsImplicitMoves = AllowsImplicitMoves(context.Options);
@@ -75,9 +76,9 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
             var trustedForBase = new ConcurrentDictionary<IAssemblySymbol, bool>(SymbolEqualityComparer.Default);
 
             context.RegisterCompilationEndAction(context => AnalyzeUncheckedReferences(context, severities, list, types, listFiles, trustedForBase));
-            context.RegisterSymbolAction(context => AnalyzeCloningBases(context, severities, types, trustedForBase), SymbolKind.NamedType);
-            context.RegisterSyntaxNodeAction(context => AnalyzeCloningBinding(context, severities, types), SyntaxKind.ClassDeclaration);
-            context.RegisterSyntaxNodeAction(context => AnalyzeBaseListBindings(context, severities, types), SyntaxKind.BaseList);
+            context.RegisterSymbolAction(Guard(severities, context => AnalyzeCloningBases(context, severities, types, trustedForBase)), SymbolKind.NamedType);
+            context.RegisterSyntaxNodeAction(Guard(severities, context => AnalyzeCloningBinding(context, severities, types)), SyntaxKind.ClassDeclaration);
+            context.RegisterSyntaxNodeAction(Guard(severities, context => AnalyzeBaseListBindings(context, severities, types)), SyntaxKind.BaseList);
 
             context.RegisterOperationBlockAction(context => {
                 // In the body of a member marked [RequiresCopyable] the marked type parameters count as copyable.
@@ -86,9 +87,9 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
             });
 
             context.RegisterOperationBlockStartAction(context => AnalyzeUnsafeToCopySetInOwnCode(context, severities));
-            context.RegisterSymbolAction(context => AnalyzeField(context, severities, types, typesInCopyingMember), SymbolKind.Field);
-            context.RegisterSymbolAction(context => AnalyzeProperty(context, severities, types, typesInCopyingMember), SymbolKind.Property);
-            context.RegisterSymbolAction(context => AnalyzeNamedType(context, severities, types, typesInCopyingMember, marks), SymbolKind.NamedType);
+            context.RegisterSymbolAction(Guard(severities, context => AnalyzeField(context, severities, types, typesInCopyingMember)), SymbolKind.Field);
+            context.RegisterSymbolAction(Guard(severities, context => AnalyzeProperty(context, severities, types, typesInCopyingMember)), SymbolKind.Property);
+            context.RegisterSymbolAction(Guard(severities, context => AnalyzeNamedType(context, severities, types, typesInCopyingMember, marks)), SymbolKind.NamedType);
             context.RegisterSymbolAction(context => AnalyzeForeignNonCopyableMark(context, severities), SymbolKind.Method);
             context.RegisterSymbolAction(context => AnalyzeRequiresCopyableTarget(context, severities), SymbolKind.Method);
 
@@ -97,11 +98,48 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
                 context.RegisterSyntaxNodeAction(context => AnalyzeConditionalMarkerUse(context, severities, conditionalMarkers), SyntaxKind.Attribute);
 
             context.RegisterSymbolAction(
-                context => AnalyzeMovedFromTarget(context, severities, moves), SymbolKind.Method, SymbolKind.Property, SymbolKind.Field, SymbolKind.Event);
+                Guard(severities, context => AnalyzeMovedFromTarget(context, severities, moves)), SymbolKind.Method, SymbolKind.Property, SymbolKind.Field, SymbolKind.Event);
 
             context.RegisterSymbolAction(context => AnalyzeNotNullRefTarget(context, severities), SymbolKind.Method, SymbolKind.Property, SymbolKind.NamedType);
         });
     }
+
+    /// <summary>
+    /// Runs a check of a declaration. A walk over types that gives up on a type with more parts than it looks at, or a recursion that
+    /// would run out of stack, stops the check, and the declaration gets SCA1048 for it, as a member does: a declaration that is not
+    /// checked never looks clean. The report cannot be tied to a type, so it is strict under the updated rules.
+    /// </summary>
+    private static Action<SymbolAnalysisContext> Guard(Severities severities, Action<SymbolAnalysisContext> check) => context => {
+        if (Stops(() => check(context)) is { } stopped)
+            ReportNotChecked(severities, context.Symbol, context.Symbol.Locations.FirstOrDefault(static location => location.IsInSource), context.ReportDiagnostic, stopped);
+    };
+
+    /// <inheritdoc cref="Guard(Severities, Action{SymbolAnalysisContext})"/>
+    private static Action<SyntaxNodeAnalysisContext> Guard(Severities severities, Action<SyntaxNodeAnalysisContext> check) => context => {
+        if (Stops(() => check(context)) is { } stopped && context.ContainingSymbol is { } declared)
+            ReportNotChecked(severities, declared, context.Node.GetLocation(), context.ReportDiagnostic, stopped);
+    };
+
+    // Gets what stopped a check before its end, or null where it ran to its end. The report of one that stopped is made once the
+    // handler has left the frames that ran out of stack: a catch block runs on top of them.
+    private static Exception? Stops(Action check)
+    {
+        try
+        {
+            check();
+            return null;
+        }
+        catch (Exception exception) when (exception is TypeTooLargeException or InsufficientExecutionStackException)
+        {
+            return exception;
+        }
+    }
+
+    // A declaration that was not checked cannot be tied to a type, so the report is strict, and says that a walk reached its bound
+    // where that is what stopped the check.
+    private static void ReportNotChecked(Severities severities, ISymbol declared, Location? location, Action<Diagnostic> report, Exception stopped) =>
+        report(severities.CreateAbout(
+            Rules.TypeTooLarge, stopped is TypeTooLargeException ? Subject.TooLarge : Subject.Of((ITypeSymbol?)null), location, Display(declared)));
 
     /// <summary>
     /// Gets a value indicating whether an additional file is a list file: one named 'NonCopyableSymbols.txt', or
@@ -119,20 +157,42 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
     }
 
     /// <summary>
-    /// Gets a value indicating whether a list file came in a package: it is under the NuGet package root of the build, which the props
-    /// file of the package makes visible to the compiler. Its author is the library's, whose own build reads it from the project's folder,
-    /// so a warning that a line adds nothing to the built-in list is given there and not in each project that uses the library. A build
-    /// that does not pass the property counts every file as its own.
+    /// Gets a value indicating whether a list file came in a package: it is under a folder that NuGet restores packages to or from. A
+    /// library's props file adds its list file from the folder of its package, wherever NuGet put the package: the global packages folder,
+    /// a fallback folder, or the packages folder of a project that restores with packages.config. The assets file of the project, which
+    /// the targets file of the package gives the compiler, names the folders of a restore with PackageReference, the fallback folders
+    /// included, and the props and targets files make the global packages folder and the packages folder of packages.config visible to
+    /// the compiler. Its author is the library's, whose own build reads it from the project's folder, so a warning that a line adds
+    /// nothing to the built-in list is given there and not in each project that uses the library. A build that gives none of the folders
+    /// counts every file as its own.
     /// </summary>
-    private static bool IsFileOfAPackage(AdditionalText file, AnalyzerOptions options)
+    private static bool IsFileOfAPackage(AdditionalText file, AnalyzerOptions options, CancellationToken cancellationToken)
     {
-        if (!options.AnalyzerConfigOptionsProvider.GlobalOptions.TryGetValue(PackageRootOption, out string? root) || string.IsNullOrWhiteSpace(root))
-            return false;
+        var globalOptions = options.AnalyzerConfigOptionsProvider.GlobalOptions;
+        var folders = new List<string>();
+
+        foreach (string option in PackageFolderOptions)
+        {
+            if (globalOptions.TryGetValue(option, out string? value) && !string.IsNullOrWhiteSpace(value))
+                folders.Add(value);
+        }
+
+        if (FindPackageGraph(options, cancellationToken) is { } packages)
+            folders.AddRange(packages.PackageFolders);
 
         try
         {
-            string folder = Path.GetFullPath(root.Trim()).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-            return Path.GetFullPath(file.Path).StartsWith(folder, StringComparison.OrdinalIgnoreCase);
+            string path = Path.GetFullPath(file.Path);
+
+            foreach (string folder in folders)
+            {
+                string root = Path.GetFullPath(folder.Trim()).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+
+                if (path.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+
+            return false;
         }
         catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
         {
@@ -140,7 +200,11 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
         }
     }
 
-    private const string PackageRootOption = "build_property.NuGetPackageRoot";
+    // The folders that NuGet restores packages to and from that the props and targets files of the package make visible to the
+    // compiler: the global packages folder, and the packages folder of a project that restores with packages.config. The assets file
+    // names the others. A list of folders cannot be passed this way, since the compiler reads ';' in such a value as the start of a
+    // comment.
+    private static readonly string[] PackageFolderOptions = ["build_property.NuGetPackageRoot", "build_property._NonCopyablePackagesFolder"];
 
     private static IReadOnlyList<(AdditionalText File, SourceText Text)> GetListFiles(AnalyzerOptions options, CancellationToken cancellationToken)
     {
@@ -197,7 +261,7 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
         // A 'noncopyable' or 'unsafetocopy' line wins over a 'copyable' line of any file, so it has an effect where one takes the type out.
         // A 'copyable' line counts only in a file of the project, never in one that came in a package: it says that the project copies
         // the type on purpose, which is the decision of one project.
-        bool isFileOfAPackage = IsFileOfAPackage(context.AdditionalFile, context.Options);
+        bool isFileOfAPackage = IsFileOfAPackage(context.AdditionalFile, context.Options, context.CancellationToken);
         var copyableOfFiles = new HashSet<string>(isFileOfAPackage ? [] : entries.Where(IsCopyableWithEffect).Select(e => e.Id), StringComparer.Ordinal);
 
         foreach (var other in context.Options.AdditionalFiles)
@@ -209,7 +273,7 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
             SafeMemberList.Parse(otherText, otherEntries, errors: null);
             clonesOfFiles.UnionWith(otherEntries.Where(e => e.Marker is SafeListMarker.Clones).Select(e => e.Id));
 
-            if (!IsFileOfAPackage(other, context.Options))
+            if (!IsFileOfAPackage(other, context.Options, context.CancellationToken))
                 copyableOfFiles.UnionWith(otherEntries.Where(IsCopyableWithEffect).Select(e => e.Id));
         }
 
@@ -218,7 +282,7 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
             // An outcome of 'borrowswhen' that the analyzer does not know is left out of a line that is otherwise taken. Its author
             // learns of it; a project that gets the file from a library has nothing to fix.
             if (entry.UnknownOutcomes is { } unknown &&
-                !IsFileOfAPackage(context.AdditionalFile, context.Options) &&
+                !IsFileOfAPackage(context.AdditionalFile, context.Options, context.CancellationToken) &&
                 SafeMemberList.GetErrorInCompilation(entry, context.Compilation) is null)
             {
                 foreach (string outcome in unknown)
@@ -243,11 +307,11 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
                 Report(Rules.SafeListClonesHasNoEffect, entry.Line, entry.Id, "a class that never clones its objects", whyNever);
             else if (SafeMemberList.ContradictsClones(entry, clonesOfFiles))
                 Report(Rules.SafeListContradictsClones, entry.Line, entry.Id);
-            else if (SafeMemberList.FindWideningOfBuiltIn(entry) is { } widening && !IsFileOfAPackage(context.AdditionalFile, context.Options))
+            else if (SafeMemberList.FindWideningOfBuiltIn(entry) is { } widening && !IsFileOfAPackage(context.AdditionalFile, context.Options, context.CancellationToken))
                 Report(Rules.SafeListWidensBuiltIn, entry.Line, entry.Id, widening.Added, widening.BuiltIn);
-            else if (SafeMemberList.FindOutcomesBeyondBuiltIn(entry) is { } outcomes && !IsFileOfAPackage(context.AdditionalFile, context.Options))
+            else if (SafeMemberList.FindOutcomesBeyondBuiltIn(entry) is { } outcomes && !IsFileOfAPackage(context.AdditionalFile, context.Options, context.CancellationToken))
                 Report(Rules.SafeListClaimsMoreOutcomesThanBuiltIn, entry.Line, entry.Id, outcomes);
-            else if (SafeMemberList.FindBorrowsBeyondBuiltIn(entry, context.Compilation) is { } builtInClaim && !IsFileOfAPackage(context.AdditionalFile, context.Options))
+            else if (SafeMemberList.FindBorrowsBeyondBuiltIn(entry, context.Compilation) is { } builtInClaim && !IsFileOfAPackage(context.AdditionalFile, context.Options, context.CancellationToken))
                 Report(Rules.SafeListBorrowsBeyondBuiltIn, entry.Line, entry.Id, builtInClaim);
         }
 
@@ -260,7 +324,7 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
         // A 'noncopyable' or 'unsafetocopy' line for a type that already is what it says. Its author learns of it; a project that gets the
         // file from a library has nothing to fix.
         string? FindWhyNonCopyableHasNoEffect(SafeListEntry entry) =>
-            entry.Marker is SafeListMarker.NonCopyable && !copyableOfFiles.Contains(entry.Id) && !IsFileOfAPackage(context.AdditionalFile, context.Options)
+            entry.Marker is SafeListMarker.NonCopyable && !copyableOfFiles.Contains(entry.Id) && !IsFileOfAPackage(context.AdditionalFile, context.Options, context.CancellationToken)
                 ? SafeMemberList.GetWhyNonCopyableHasNoEffect(entry, context.Compilation)
                 : null;
 
@@ -282,7 +346,7 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
             Location.Create(tree, new TextSpan(context.OperationBlocks[0].Syntax.SpanStart, 0));
     }
 
-    private static string Display(ISymbol symbol) => symbol.ToDisplayString(SymbolDisplayFormat.CSharpShortErrorMessageFormat);
+    private static string Display(ISymbol symbol) => SymbolText.Of(symbol, SymbolDisplayFormat.CSharpShortErrorMessageFormat);
 
     /// <summary>
     /// Takes the nullable annotation off the reference types and type parameters among the arguments of a message, so that an unconstrained
@@ -348,7 +412,7 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
         /// </summary>
         public void NoteOwned(IMethodSymbol method, Location location, ITypeSymbol type, IParameterSymbol parameter)
         {
-            string typeName = type.WithNullableAnnotation(NullableAnnotation.None).ToDisplayString();
+            string typeName = SymbolText.Of(type.WithNullableAnnotation(NullableAnnotation.None));
             _owned.GetOrAdd(method.OriginalDefinition, static _ => new()).TryAdd(location, (typeName, parameter.Name));
         }
 
@@ -382,7 +446,7 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
             foreach (var (member, declared) in _declared.Keys)
             {
                 if (!_checked.ContainsKey((member, declared)) && declared.Locations.FirstOrDefault(static location => location.IsInSource) is { } location)
-                    context.ReportDiagnostic(severities.CreateAbout(Rules.MovedFromPathsNotChecked, Subject.OfDeclared(declared.Type), location, declared.Name, member.ToDisplayString(SymbolDisplayFormat.CSharpShortErrorMessageFormat)));
+                    context.ReportDiagnostic(severities.CreateAbout(Rules.MovedFromPathsNotChecked, Subject.OfDeclared(declared.Type), location, declared.Name, Display(member)));
             }
 
             foreach (var passed in _passedSlots)

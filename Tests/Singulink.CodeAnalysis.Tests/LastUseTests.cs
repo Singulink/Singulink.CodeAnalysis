@@ -533,7 +533,7 @@ public class LastUseTests
             void Address(RwLock rwLock)
             {
                 Guard guard = rwLock.Enter();
-                Guard* pointer = &{|#3:guard|};
+                Guard* pointer = &guard;
                 _field = {|#4:guard|};
                 pointer->Dispose();
             }
@@ -638,7 +638,6 @@ public class LastUseTests
         Verify.CopyByAssignment(0, "Guard"),
         Verify.CopyByAssignment(1, "(Guard, int)"),
         Verify.CopyByAssignment(2, "Guard"),
-        Verify.UnsupportedUse(3, "Guard", "LocalReference"),
         Verify.CopyByAssignment(4, "Guard"),
         Verify.UnsupportedUse(5, "Guard", "LocalReference"),
         Verify.CopyByAssignment(6, "Guard"),

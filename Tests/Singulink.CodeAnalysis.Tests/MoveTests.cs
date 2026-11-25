@@ -77,17 +77,16 @@ public class MoveTests
 
             void M(RwLock rwLock)
             {
-                // Something else still owns the value, and the compiler does not let either be passed by reference.
+                // Something else still owns the value, and the compiler does not let either be passed by reference. Code that does
+                // not compile cannot run, so it gets the compiler's error alone.
                 using var held = rwLock.Enter();
-                Consume(NonCopyable.Move(ref {|CS1657:{|#0:held|}|}));
-                Consume(NonCopyable.Move(ref {|CS0192:{|#1:_readOnly|}|}));
+                Consume(NonCopyable.Move(ref {|CS1657:held|}));
+                Consume(NonCopyable.Move(ref {|CS0192:_readOnly|}));
             }
         }
 
         {{Sources.Guard}}
-        """,
-        Verify.UnsupportedUse(0, "Guard", "LocalReference"),
-        Verify.UnsupportedUse(1, "Guard", "FieldReference"));
+        """);
 
     [TestMethod]
     public Task MovedFrom_AllowsReadingTheParameterByValue() => Verify.AnalyzerAsync(

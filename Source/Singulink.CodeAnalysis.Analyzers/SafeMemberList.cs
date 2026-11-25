@@ -365,12 +365,14 @@ internal sealed class SafeMemberList
 
         foreach (string name in entry.TypeParameterNames ?? [])
         {
+            string owner = entry.Id[0] is 'T' ? "type" : "member";
+
             if (!symbols.Any(s => CountTypeParameters(s, name) > 0))
-                return $"'{name}' is not a type parameter of the member or of a type that contains it";
+                return $"'{name}' is not a type parameter of the {owner} or of a type that contains it";
 
             // The entry goes by the name alone, so it would vouch for every type parameter that has it.
             if (!symbols.Any(s => CountTypeParameters(s, name) == 1))
-                return $"'{name}' names more than one type parameter of the member and of the types that contain it";
+                return $"'{name}' names more than one type parameter of the {owner} and of the types that contain it";
         }
 
         if (entry.Marker is SafeListMarker.BorrowsWhen &&
@@ -407,17 +409,27 @@ internal sealed class SafeMemberList
         _ => false,
     };
 
+    // Whether an entry covers every type parameter that a type of a member's declaration mentions. A type with more parts than a walk
+    // looks at counts as one that it does not cover, which leaves the value taken, and is reported where it is used.
     private static bool CoversEveryTypeParameter(ITypeSymbol type, SafeListEntry entry)
     {
-        RuntimeHelpers.EnsureSufficientExecutionStack();
+        var walk = new TypeWalk();
+        return Covers(type);
 
-        return type switch {
-            ITypeParameterSymbol typeParameter => entry.Covers(typeParameter),
-            IArrayTypeSymbol array => CoversEveryTypeParameter(array.ElementType, entry),
-            INamedTypeSymbol named => named.TypeArguments.All(argument => CoversEveryTypeParameter(argument, entry)) &&
-                (named.ContainingType is not { } containing || CoversEveryTypeParameter(containing, entry)),
-            _ => true,
-        };
+        bool Covers(ITypeSymbol type)
+        {
+            RuntimeHelpers.EnsureSufficientExecutionStack();
+
+            if (!walk.LookAt(type))
+                return false;
+
+            return type switch {
+                ITypeParameterSymbol typeParameter => entry.Covers(typeParameter),
+                IArrayTypeSymbol array => Covers(array.ElementType),
+                INamedTypeSymbol named => named.TypeArguments.All(Covers) && (named.ContainingType is not { } containing || Covers(containing)),
+                _ => true,
+            };
+        }
     }
 
     /// <summary>
@@ -507,7 +519,7 @@ internal sealed class SafeMemberList
                 {
                     return SymbolEqualityComparer.Default.Equals(current, type)
                         ? "a 'clones' line says that the class clones itself, and that line applies"
-                        : $"a 'clones' line says that its base class '{current.OriginalDefinition.ToDisplayString()}' clones itself, and that line applies";
+                        : $"a 'clones' line says that its base class '{SymbolText.Of(current.OriginalDefinition)}' clones itself, and that line applies";
                 }
             }
         }
@@ -725,7 +737,24 @@ internal sealed class SafeMemberList
     /// Gets a value indicating whether the list names the type as erasable by its original definition: a generic class or interface of which no
     /// base type and no interface hands out a value of its type arguments.
     /// </summary>
-    public bool IsErasable(INamedTypeSymbol definition) => CanBeErasable(definition) && GetEntry(definition)?.Marker is SafeListMarker.Erasable;
+    public bool IsErasable(INamedTypeSymbol definition) =>
+        CanBeErasable(definition) && GetEntry(definition) is { Marker: SafeListMarker.Erasable, TypeParameterNames: null };
+
+    /// <summary>
+    /// Gets a value indicating whether the list names the type as erasable for a type parameter of it or of a type that contains it, by its
+    /// original definition: no base type and no interface of it hands out a value of what is bound to that type parameter. A line that
+    /// says 'erasable' with no 'for=' says it for every type parameter.
+    /// </summary>
+    public bool IsErasableFor(INamedTypeSymbol definition, ITypeParameterSymbol typeParameter) =>
+        CanBeErasable(definition) &&
+        GetEntry(definition) is { Marker: SafeListMarker.Erasable, TypeParameterNames: var names } &&
+        (names is null || names.Contains(typeParameter.Name, StringComparer.Ordinal));
+
+    /// <summary>
+    /// Gets a value indicating whether the list names the type as erasable for some or all of its type parameters, by its original
+    /// definition.
+    /// </summary>
+    public bool HasErasableEntry(INamedTypeSymbol definition) => CanBeErasable(definition) && GetEntry(definition)?.Marker is SafeListMarker.Erasable;
 
     private static bool CanBeErasable(ISymbol symbol) => symbol is INamedTypeSymbol { IsGenericType: true, TypeKind: TypeKind.Class or TypeKind.Interface };
 
@@ -744,12 +773,16 @@ internal sealed class SafeMemberList
     }
 
     /// <summary>
-    /// Gets the number of type parameters of a member and of the types that contain it that have a name. A member and a containing
-    /// type, or two containing types, can have type parameters of the same name.
+    /// Gets the number of type parameters of a member, or of a type, and of the types that contain it that have a name. A member and a
+    /// containing type, or two containing types, can have type parameters of the same name.
     /// </summary>
     private static int CountTypeParameters(ISymbol member, string name)
     {
-        int count = member is IMethodSymbol method ? method.TypeParameters.Count(p => p.Name == name) : 0;
+        int count = member switch {
+            IMethodSymbol method => method.TypeParameters.Count(p => p.Name == name),
+            INamedTypeSymbol type => type.TypeParameters.Count(p => p.Name == name),
+            _ => 0,
+        };
 
         for (var type = member.ContainingType; type is not null; type = type.ContainingType)
             count += type.TypeParameters.Count(p => p.Name == name);
@@ -759,15 +792,19 @@ internal sealed class SafeMemberList
 
     /// <summary>
     /// Gets, for a member line of a user file that names a member which the built-in list names for some type parameters only, with
-    /// <c>for=</c>, the type parameters that the line would add: all of them for a line with no <c>for=</c>. Combined with the built-in
-    /// line it would change nothing, since a line of a file can only claim less, so it is left out and gets a warning. Null for any other
-    /// line, one that names only type parameters that the built-in line names included.
+    /// <c>for=</c>, the type parameters that the line would add: all of them for a line with no <c>for=</c>. The same goes for an
+    /// 'erasable' line of a type that the built-in list marks erasable for some type parameters only. Combined with the built-in line it
+    /// would change nothing, since a line of a file can only claim less, so it is left out and gets a warning. Null for any other line,
+    /// one that names only type parameters that the built-in line names included.
     /// </summary>
     public static (string Added, string BuiltIn)? FindWideningOfBuiltIn(SafeListEntry entry)
     {
-        if (entry.Id[0] is not ('M' or 'P' or 'E' or 'F') ||
+        bool isErasableType = entry.Id[0] is 'T' && entry.Marker is SafeListMarker.Erasable;
+
+        if ((entry.Id[0] is not ('M' or 'P' or 'E' or 'F') && !isErasableType) ||
             entry.Marker is SafeListMarker.Clones or SafeListMarker.NonCopyable or SafeListMarker.Copyable ||
             !s_builtInEntries.Value.TryGetValue(entry.Id, out var builtIn) ||
+            (isErasableType && builtIn.Marker is not SafeListMarker.Erasable) ||
             builtIn.TypeParameterNames is not { } builtInNames)
         {
             return null;
@@ -861,11 +898,14 @@ internal sealed class SafeMemberList
 
     private static IEnumerable<string> GetTypeParameterNames(ISymbol member)
     {
-        if (member is IMethodSymbol method)
-        {
-            foreach (var parameter in method.TypeParameters)
-                yield return parameter.Name;
-        }
+        var own = member switch {
+            IMethodSymbol method => method.TypeParameters,
+            INamedTypeSymbol type => type.TypeParameters,
+            _ => [],
+        };
+
+        foreach (var parameter in own)
+            yield return parameter.Name;
 
         for (var type = member.ContainingType; type is not null; type = type.ContainingType)
         {
@@ -895,6 +935,14 @@ internal sealed class SafeMemberList
             (var names, null) => names,
             (var firstNames, var secondNames) => firstNames.Intersect(secondNames).ToArray(),
         };
+
+        // A type that two lines mark erasable for different type parameters is erasable for those that both name, and for none where
+        // they name none in common.
+        if (marker is SafeListMarker.Erasable && typeParameterNames is { Length: 0 })
+        {
+            marker = SafeListMarker.None;
+            typeParameterNames = null;
+        }
 
         var borrowed = SafeListOutcomes.None;
 
@@ -973,9 +1021,10 @@ internal sealed class SafeMemberList
             // White space is allowed around every part, so also around the '=' of 'for='.
             if (part.StartsWith(ForKeyword, StringComparison.Ordinal) && part[ForKeyword.Length..].TrimStart() is ['=', .. var names])
             {
-                if (isType)
+                // A type takes it only after 'erasable', which it narrows to the type parameters that it names.
+                if (isType && marker is not SafeListMarker.Erasable)
                 {
-                    reason = "'for=' is for a member";
+                    reason = "'for=' is for a member, or for a type marked 'erasable'";
                     return false;
                 }
 

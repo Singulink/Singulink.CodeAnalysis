@@ -8,6 +8,47 @@ namespace Singulink.CodeAnalysis.Tests;
 [PrefixTestClass]
 public class EdgeCaseTests
 {
+    // Code with compile errors, as an editor shows it while someone types: an operation that the compiler marked invalid, or whose type is
+    // an error type, cannot run, and gets no report as a use that the analyzer has no rule for. The reports about valid code in the same
+    // member stay.
+    [TestMethod]
+    public Task InvalidCode_GetsNoReportAsAnUnknownUse() => new Verify.Test {
+        TestCode = """
+            using System.Collections.Generic;
+            using Missing.Namespace;
+
+            class C
+            {
+                Guard _guard;
+                List<Guard> _list = new();
+
+                void M()
+                {
+                    var copy = {|#0:_guard|};
+                    var a = Missing.Call(_guard);
+                    var b = new MissingGeneric<Guard>(_guard);
+                    MissingType m = _guard;
+                    object o = m;
+                    var t = (_guard, missingLocal);
+                    _guard.Nope();
+                    var element = {|#1:_list[0]|};
+                    if (_guard. ) { }
+                    var z = _list.Missing().First();
+                    Take(_guard, );
+                    copy.Dispose();
+                    element.Dispose();
+                }
+
+                static void Take(Guard guard, int count) { }
+            }
+            """ + System.Environment.NewLine + Sources.Guard,
+        CompilerDiagnostics = Microsoft.CodeAnalysis.Testing.CompilerDiagnostics.None,
+        ExpectedDiagnostics = {
+            Verify.CopyByAssignment(0, "Guard"),
+            Verify.ReadFromStoredContainer(1, "'List<T>.this[int]'", "Guard"),
+        },
+    }.RunAsync();
+
     // A null constant that is converted to a nullable of a non-copyable type through object is no value that is taken out of a box.
     [TestMethod]
     public Task Unboxing_ANullConstantThroughObjectIsNoCopy() => Verify.AnalyzerAsync(

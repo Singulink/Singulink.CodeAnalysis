@@ -1,6 +1,7 @@
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Testing;
 using PrefixClassName.MsTest;
+using Singulink.CodeAnalysis.Analyzers;
 
 namespace Singulink.CodeAnalysis.Tests;
 
@@ -603,7 +604,8 @@ public class UnsafeToCopyTypeParameterTests
         Verify.UnlistedMember(11, "Pair<T1, T2>.Run()", "Handle", "T1", "M:Pair`2.Run").AsError());
 
     // A struct that holds such a type inline runs its members through the Equals and GetHashCode that it inherits from ValueType, so its
-    // field is reported, unless the struct overrides both. A class field and a field of a type that holds it by reference are not.
+    // field is reported, unless the struct overrides both. A class field and a field of a type that holds it by reference are not, nor is
+    // a field of a ref struct, whose inherited Equals and GetHashCode no code can call.
     [TestMethod]
     public Task FieldOfAStruct_IsReportedWhereTheInheritedEqualityRunsItsMembers() => Verify.UpdatedRulesAsync(
         $$"""
@@ -639,10 +641,141 @@ public class UnsafeToCopyTypeParameterTests
             public Text<Handle> Inner;
         }
 
+        [NonCopyable(UnsafeToCopy = true)]
+        public ref struct InARefStruct
+        {
+            public Text<Handle> Inner;
+        }
+
         {{Types}}
         """,
         Verify.UnsafeToCopyNotTakenInField(0, "Inner", "Holds", "Text<Handle>", "Text<X>", "Handle", "X").AsError(),
         Verify.UnsafeToCopyNotTakenInField(1, "Pair", "Holds", "(int, Text<Handle>)", "Text<X>", "Handle", "X").AsError());
+
+    // An entry of a base list that gives a type with such a binding to the base type, at any depth of its type arguments, is reported
+    // at the entry: the inherited code can run the members of what it is given, through an override that is called through a base class
+    // that is not generic, or an interface member that the type inherits. The report stays an error with '#pragma', [SuppressMessage] and
+    // NoWarn. A plain type in the same place gets nothing.
+    [TestMethod]
+    public Task BaseList_ThatGivesATypeWithTheBindingToTheBaseTypeIsReportedAndStaysAnError()
+    {
+        if (!Verify.CompilerHasUpdatedRules)
+            Assert.Inconclusive("The compiler of this target does not apply the updated memory safety rules.");
+
+        return new Verify.Test {
+            TestCode = $$"""
+                using System.Collections.Generic;
+                using System.Diagnostics.CodeAnalysis;
+                using Singulink.CodeAnalysis;
+
+                [NonCopyable]
+                public struct Text<[NonCopyable(UnsafeToCopy = false)] X> { public X Value; public override string ToString() => "text"; }
+
+                public abstract class Runner { public abstract string Run(); }
+
+                public class Generic<[NonCopyable] T> : Runner
+                {
+                    T _value = default!;
+
+                    public override string Run() => _value!.ToString()!;
+                }
+
+                public interface INamed { string Name(); }
+
+                public interface IGeneric<[NonCopyable] T> : INamed { string INamed.Name() => "generic"; }
+
+                #pragma warning disable SCA1026
+                [SuppressMessage("Reliability", "SCA1026")]
+                public class Leaf : {|#0:Generic<Text<Handle>>|} { }
+
+                [SuppressMessage("Reliability", "SCA1026")]
+                public class Deeper : {|#1:Generic<List<(int, Text<Handle>)>>|} { }
+
+                [SuppressMessage("Reliability", "SCA1026")]
+                public class Implementer : {|#2:IGeneric<Text<Handle>>|} { }
+                #pragma warning restore SCA1026
+
+                public class PlainLeaf : Generic<Text<Guard>>, IGeneric<Text<Guard>> { }
+
+                {{Types}}
+                """,
+            LanguageVersion = LanguageVersion.Preview,
+            Features = [Verify.UpdatedRulesFeature],
+            NoWarn = [DiagnosticIds.UnsafeToCopyNotTaken],
+            ExpectedDiagnostics = {
+                Verify.UnsafeToCopyNotTaken(0, "Text<X>", "Handle", "X").AsError(),
+                Verify.UnsafeToCopyNotTaken(1, "Text<X>", "Handle", "X").AsError(),
+                Verify.UnsafeToCopyNotTaken(2, "Text<X>", "Handle", "X").AsError(),
+            },
+        }.RunAsync();
+    }
+
+    // A binding that a type parameter does not take is found at any depth of the type arguments of a struct, for a field whose inherited
+    // equality runs its members and for a box. The report is strict: '#pragma', [SuppressMessage] and NoWarn leave it an error.
+    [TestMethod]
+    public Task Binding_DeepInsideStructsIsFoundAtAnyDepthAndStaysAnError()
+    {
+        if (!Verify.CompilerHasUpdatedRules)
+            Assert.Inconclusive("The compiler of this target does not apply the updated memory safety rules.");
+
+        string nine = Nested(9);
+        string twelve = Nested(12);
+
+        return new Verify.Test {
+            TestCode = $$"""
+                using System.Diagnostics.CodeAnalysis;
+                using Singulink.CodeAnalysis;
+
+                [NonCopyable]
+                public struct Text<[NonCopyable(UnsafeToCopy = false)] X> { public X Value; }
+
+                [NonCopyable]
+                public struct W<[NonCopyable] T> { public T Value; }
+
+                [NonCopyable(UnsafeToCopy = true)]
+                public struct Holds
+                {
+                #pragma warning disable SCA1026
+                    [SuppressMessage("Reliability", "SCA1026")]
+                    public {{nine}} {|#0:Nine|};
+
+                    public {{twelve}} {|#1:Twelve|};
+                #pragma warning restore SCA1026
+                }
+
+                class C
+                {
+                #pragma warning disable SCA1026
+                    [SuppressMessage("Reliability", "SCA1026")]
+                    object BoxNine()
+                    {
+                        {{nine}} value = default;
+                        return {|#2:value|};
+                    }
+
+                    object BoxTwelve()
+                    {
+                        {{twelve}} value = default;
+                        return {|#3:value|};
+                    }
+                #pragma warning restore SCA1026
+                }
+
+                {{Types}}
+                """,
+            LanguageVersion = LanguageVersion.Preview,
+            Features = [Verify.UpdatedRulesFeature],
+            NoWarn = [DiagnosticIds.UnsafeToCopyNotTaken],
+            ExpectedDiagnostics = {
+                Verify.UnsafeToCopyNotTakenInField(0, "Nine", "Holds", nine, "Text<X>", "Handle", "X").AsError(),
+                Verify.UnsafeToCopyNotTakenInField(1, "Twelve", "Holds", twelve, "Text<X>", "Handle", "X").AsError(),
+                Verify.UnsafeToCopyNotTakenBehindBox(2, nine, "object", "Text<X>", "Handle", "X").AsError(),
+                Verify.UnsafeToCopyNotTakenBehindBox(3, twelve, "object", "Text<X>", "Handle", "X").AsError(),
+            },
+        }.RunAsync();
+
+        static string Nested(int depth) => string.Concat(Enumerable.Repeat("W<", depth)) + "Text<Handle>" + new string('>', depth);
+    }
 
     // Only naming the type runs none of its code: a field, a parameter, a local, an array, 'typeof', 'default' and a field read.
     [TestMethod]
@@ -672,4 +805,173 @@ public class UnsafeToCopyTypeParameterTests
 
         {{Types}}
         """);
+
+    // The generic takes nothing through which a value that is unsafe to copy can be reached, by what other code can reach: inside it
+    // every report about the type parameter is the ordinary warning, a value of it handed to other code included. A list, a dictionary,
+    // a tuple that carries a list, a delegate over such a type and a container of a type parameter of the generic around that can stand
+    // for one are reported at every place that a type that is unsafe to copy is: a member use, a static field, a base list, a type given
+    // to other generic code, a box and a field of a struct. The report stays an error with '#pragma', [SuppressMessage] and NoWarn.
+    [TestMethod]
+    public Task Container_OfATypeThatIsUnsafeToCopyIsNotTakenAtEveryPlaceAndStaysAnError()
+    {
+        if (!Verify.CompilerHasUpdatedRules)
+            Assert.Inconclusive("The compiler of this target does not apply the updated memory safety rules.");
+
+        return new Verify.Test {
+            TestCode = $$"""
+                using System;
+                using System.Collections.Generic;
+                using System.Diagnostics.CodeAnalysis;
+                using Singulink.CodeAnalysis;
+
+                [NonCopyable]
+                public struct Text<[NonCopyable(UnsafeToCopy = false)] X> { public X Value; public override string ToString() => "text"; }
+
+                public class Cache<[NonCopyable(UnsafeToCopy = false)] T> { public static int Count; }
+
+                public static class Runner
+                {
+                    public static string Show<[NonCopyable] T>(ref T value) => value.ToString()!;
+                }
+
+                [NonCopyable]
+                public struct Holds
+                {
+                #pragma warning disable SCA1026
+                    [SuppressMessage("Reliability", "SCA1026")]
+                    public Text<List<Handle>> {|#0:Inner|};
+                #pragma warning restore SCA1026
+                }
+
+                #pragma warning disable SCA1026
+                [SuppressMessage("Reliability", "SCA1026")]
+                public class Derived : {|#1:Base<List<Handle>>|} { }
+
+                [SuppressMessage("Reliability", "SCA1026")]
+                class C<[NonCopyable] A>
+                {
+                    void M(Text<List<Handle>> text)
+                    {
+                        var list = {|#2:new Cell<List<Handle>>()|};
+                        var map = {|#3:new Cell<Dictionary<int, Handle>>()|};
+                        var tuple = {|#4:new Cell<(int, List<Handle>)>()|};
+                        var function = {|#5:new Cell<Func<Handle>>()|};
+                        var around = {|#6:new Cell<List<A>>()|};
+                        int count = {|#7:Cache<List<Handle>>.Count|};
+                        _ = {|#8:Runner.Show(ref text)|};
+                        object boxed = {|#9:default(Text<List<Handle>>)|};
+                    }
+                }
+                #pragma warning restore SCA1026
+
+                {{Generics}}
+
+                {{Types}}
+                """,
+            LanguageVersion = LanguageVersion.Preview,
+            Features = [Verify.UpdatedRulesFeature],
+            NoWarn = [DiagnosticIds.UnsafeToCopyNotTaken],
+            ExpectedDiagnostics = {
+                Verify.UnsafeToCopyReachedNotTakenInField(0, "Inner", "Holds", "Text<System.Collections.Generic.List<Handle>>", "Text<X>", "System.Collections.Generic.List<Handle>", "X").AsError(),
+                Verify.UnsafeToCopyReachedNotTaken(1, "Base<T>", "System.Collections.Generic.List<Handle>", "T").AsError(),
+                Verify.UnsafeToCopyReachedNotTaken(2, "Cell<T>", "System.Collections.Generic.List<Handle>", "T").AsError(),
+                Verify.UnsafeToCopyReachedNotTaken(3, "Cell<T>", "System.Collections.Generic.Dictionary<int, Handle>", "T").AsError(),
+                Verify.UnsafeToCopyReachedNotTaken(4, "Cell<T>", "(int, System.Collections.Generic.List<Handle>)", "T").AsError(),
+                Verify.UnsafeToCopyReachedNotTaken(5, "Cell<T>", "System.Func<Handle>", "T").AsError(),
+                Verify.UnsafeToCopyReachedNotTaken(6, "Cell<T>", "System.Collections.Generic.List<A>", "T").AsError(),
+                Verify.UnsafeToCopyReachedNotTaken(7, "Cache<T>", "System.Collections.Generic.List<Handle>", "T").AsError(),
+                Verify.UnsafeToCopyReachedNotTakenBehindTypeParameter(
+                    8, "Runner.Show<T>(ref T)", "Text<System.Collections.Generic.List<Handle>>", "T", "Text<X>", "System.Collections.Generic.List<Handle>", "X").AsError(),
+                Verify.UnsafeToCopyReachedNotTakenBehindBox(
+                    9, "Text<System.Collections.Generic.List<Handle>>", "object", "Text<X>", "System.Collections.Generic.List<Handle>", "X").AsError(),
+            },
+        }.RunAsync();
+    }
+
+    // A container of a plain non-copyable type, a delegate over one, a tuple that carries one and a container of a type parameter of the
+    // generic around that says UnsafeToCopy = false are taken at every place, under both rule sets. The box hides the list from the
+    // analyzer, as the box of any generic struct over a container does, which is the ordinary warning.
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public Task Container_OfAPlainTypeIsTaken(bool updatedRules)
+    {
+        string source = $$"""
+            using System;
+            using System.Collections.Generic;
+            using Singulink.CodeAnalysis;
+
+            [NonCopyable]
+            public struct Text<[NonCopyable(UnsafeToCopy = false)] X> { public X Value; public override string ToString() => "text"; }
+
+            public class Cache<[NonCopyable(UnsafeToCopy = false)] T> { public static int Count; }
+
+            public static class Runner
+            {
+                public static string Show<[NonCopyable] T>(ref T value) => value.ToString()!;
+            }
+
+            [NonCopyable]
+            public struct Holds
+            {
+                public Text<List<Guard>> Inner;
+            }
+
+            public class Derived : Base<List<Guard>> { }
+
+            class C<[NonCopyable(UnsafeToCopy = false)] P>
+            {
+                void M(Text<List<Guard>> text)
+                {
+                    var list = new Cell<List<Guard>>();
+                    var map = new Cell<Dictionary<int, Guard>>();
+                    var tuple = new Cell<(int, List<Guard>)>();
+                    var function = new Cell<Func<Guard>>();
+                    var around = new Cell<List<P>>();
+                    int count = Cache<List<Guard>>.Count;
+                    _ = Runner.Show(ref text);
+                    object boxed = {|#0:default(Text<List<Guard>>)|};
+                }
+            }
+
+            {{Generics}}
+
+            {{Types}}
+            """;
+
+        var expected = Verify.OpaqueBoxingOfContainers(0, "Text<System.Collections.Generic.List<Guard>>", "object");
+        return updatedRules ? Verify.UpdatedRulesAsync(source, expected) : Verify.AnalyzerAsync(source, expected);
+    }
+
+    // Inside a generic whose type parameter says UnsafeToCopy = false, a value of it converted to a type that hides it and a delegate that
+    // hands one out are the ordinary warning: the generic is given no container of a type that is unsafe to copy. With the mark that does
+    // not say false they stay errors, since the type parameter can stand for such a container.
+    [TestMethod]
+    public Task InsideTheGeneric_AHiddenValueAndADelegateOverItAreTheOrdinaryWarning() => Verify.UpdatedRulesAsync(
+        """
+        using System;
+        using Singulink.CodeAnalysis;
+
+        class Box<[NonCopyable(UnsafeToCopy = false)] T>
+        {
+            public object Hide(Func<T> make) => {|#0:make()|};
+
+            public Func<T> Get() => {|#1:Make|};
+
+            T Make() => default!;
+        }
+
+        class StrictBox<[NonCopyable] T>
+        {
+            public object Hide(Func<T> make) => {|#2:make()|};
+
+            public Func<T> Get() => {|#3:Make|};
+
+            T Make() => default!;
+        }
+        """,
+        Verify.OpaqueTypeParameterConversion(0, "T", "object"),
+        Verify.DelegateOverTypeParameter(1, "Box<T>.Make()", "T", "T"),
+        Verify.OpaqueTypeParameterConversion(2, "T", "object").AsError(),
+        Verify.DelegateOverTypeParameter(3, "StrictBox<T>.Make()", "T", "T").AsError());
 }

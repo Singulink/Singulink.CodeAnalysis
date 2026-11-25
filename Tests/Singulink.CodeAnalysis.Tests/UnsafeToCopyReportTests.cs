@@ -229,7 +229,7 @@ public class UnsafeToCopyReportTests
                 var a = {|#2:_mixed[default]|};
                 var b = {|#3:_byNumber[0]|};
                 {|#4:_mixed.TryGetValue(default, {|#5:out var c|})|};
-                var values = {|#6:_mixed.Values|};
+                bool has = {|#6:_mixed.ContainsValue(default)|};
             }
         }
 
@@ -246,7 +246,7 @@ public class UnsafeToCopyReportTests
         Verify.ReadFromStoredContainer(3, "'Dictionary<TKey, TValue>.this[TKey]'", "UG").AsError(),
         Verify.MemberListedForOtherTypeParameter(4, "Dictionary<TKey, TValue>.TryGetValue(TKey, out TValue)", "PG", "TKey", "TValue"),
         Verify.ReadFromStoredContainer(5, "'Dictionary<TKey, TValue>.TryGetValue(TKey, out TValue)'", "UG").AsError(),
-        Verify.UnlistedMember(6, "Dictionary<TKey, TValue>.Values", "UG", "TValue", "P:System.Collections.Generic.Dictionary`2.Values").AsError());
+        Verify.UnlistedMember(6, "Dictionary<TKey, TValue>.ContainsValue(TValue)", "UG", "TValue", "M:System.Collections.Generic.Dictionary`2.ContainsValue(`1)").AsError());
 
     // MemberwiseClone copies every field, so its report names a field whose type is unsafe to copy, of the class or of a class below
     // it, whichever comes first.
@@ -523,4 +523,244 @@ public class UnsafeToCopyReportTests
             },
         }.RunAsync();
     }
+
+    // What a value carries is involved in every report that other code can get at it: a tuple of a plain guard and a list of a type that
+    // is unsafe to copy lets that code reach the list, at any depth of tuples and structs, so a member that is not on a list and a box
+    // that hides what the tuple holds are strict, and stay errors with '#pragma', [SuppressMessage] and NoWarn. A copy of the tuple
+    // duplicates the guard and only a reference to the list, so the report of the copy is the ordinary warning, which they remove. Boxing
+    // the stored tuple, by an assignment, a pattern or a 'foreach', copies it and hides the list from the analyzer, and both are reported:
+    // one report does not hide the other.
+    [TestMethod]
+    public Task CarriedContainer_MakesAReportThatOtherCodeGetsAtTheValueStrictAndACopyTheWarning()
+    {
+        if (!Verify.CompilerHasUpdatedRules)
+            Assert.Inconclusive("The compiler of this target does not apply the updated memory safety rules.");
+
+        return new Verify.Test {
+            TestCode = CarriedSource("UG"),
+            LanguageVersion = LanguageVersion.Preview,
+            Features = [Verify.UpdatedRulesFeature],
+            NoWarn = [DiagnosticIds.UnsupportedUse, DiagnosticIds.Boxing, DiagnosticIds.UnlistedMember, DiagnosticIds.OpaqueType],
+            ExpectedDiagnostics = {
+                Verify.OpaqueBoxing(0, "(PG, System.Collections.Generic.List<UG>)", "object", "(T1, T2)").AsError(),
+                Verify.OpaqueBoxing(1, "System.Collections.Generic.KeyValuePair<PG, System.Collections.Generic.List<UG>>", "object", "KeyValuePair<TKey, TValue>").AsError(),
+                Verify.OpaqueBoxing(2, "(PG, (int, System.Collections.Generic.List<UG>))", "object", "(T1, T2)").AsError(),
+                Verify.OpaqueBoxing(3, "(PG, System.Collections.Generic.List<UG>)", "object", "(T1, T2)").AsError(),
+                Verify.OpaqueBoxing(4, "(PG, System.Collections.Generic.List<UG>)", "object", "(T1, T2)").AsError(),
+                Verify.UnlistedMember(5, "C.Use<T>(T)", "(PG, System.Collections.Generic.List<UG>)", "T", "M:C.Use``1(``0)").AsError(),
+                Verify.UnlistedMember(6, "C.Use<T>(T)", "(PG, System.Collections.Generic.List<UG>)", "T", "M:C.Use``1(``0)").AsError(),
+                Verify.UnlistedMember(8, "C.Use<T>(T)", "Holder<System.Collections.Generic.List<UG>>", "T", "M:C.Use``1(``0)").AsError(),
+            },
+        }.RunAsync();
+    }
+
+    // The mirror with a plain type in the list: every report is the ordinary warning, which NoWarn suppresses.
+    [TestMethod]
+    public Task CarriedContainer_OfAPlainTypeLeavesEveryReportTheWarning()
+    {
+        if (!Verify.CompilerHasUpdatedRules)
+            Assert.Inconclusive("The compiler of this target does not apply the updated memory safety rules.");
+
+        return new Verify.Test {
+            TestCode = CarriedSource("PG"),
+            LanguageVersion = LanguageVersion.Preview,
+            Features = [Verify.UpdatedRulesFeature],
+            NoWarn = [DiagnosticIds.UnsupportedUse, DiagnosticIds.Boxing, DiagnosticIds.UnlistedMember, DiagnosticIds.OpaqueType],
+        }.RunAsync();
+    }
+
+    // A copy of a tuple of a plain guard and a delegate or a list over a type that is unsafe to copy duplicates the guard and a
+    // reference: the delegate and the list are not duplicated, so the report of the copy is the ordinary warning, in either order of
+    // the elements, and '#pragma' removes it. The same data in a struct of the project's own gets the same warning.
+    [TestMethod]
+    public Task CarriedReference_LeavesTheReportOfACopyTheWarning() => Verify.UpdatedRulesAsync(
+        $$"""
+        using System;
+        using System.Collections.Generic;
+        using Singulink.CodeAnalysis;
+
+        [NonCopyable]
+        public struct Job { public PG Ticket; public Func<UG> MakeGuard; }
+
+        class C
+        {
+            (PG Ticket, Func<UG> MakeGuard) _a;
+            (Func<UG>, PG) _b;
+            (PG, List<UG>) _c;
+            (List<UG>, PG) _d;
+            Job _job;
+
+            void Copies()
+            {
+                var a = {|#0:_a|};
+                var b = {|#1:_b|};
+                var c = {|#2:_c|};
+                var d = {|#3:_d|};
+                var job = {|#4:_job|};
+            }
+
+            void Suppressed()
+            {
+        #pragma warning disable SCA1001
+                var a = _a;
+                var b = _b;
+                var c = _c;
+                var d = _d;
+                var job = _job;
+        #pragma warning restore SCA1001
+            }
+        }
+
+        {{Types}}
+        """,
+        Verify.CopyByAssignment(0, "(PG Ticket, System.Func<UG> MakeGuard)"),
+        Verify.CopyByAssignment(1, "(System.Func<UG>, PG)"),
+        Verify.CopyByAssignment(2, "(PG, System.Collections.Generic.List<UG>)"),
+        Verify.CopyByAssignment(3, "(System.Collections.Generic.List<UG>, PG)"),
+        Verify.CopyByAssignment(4, "Job"));
+
+    // Other code that gets at such a tuple reaches what is behind the delegate or the list: a member that is not on a list and a box
+    // that hides what the tuple holds are strict, in either order of the elements, and '#pragma' leaves them.
+    [TestMethod]
+    public Task CarriedReference_MakesAReportThatOtherCodeGetsAtTheValueStrict() => Verify.UpdatedRulesAsync(
+        $$"""
+        using System;
+        using System.Collections.Generic;
+
+        class C
+        {
+            static (PG, Func<UG>) A() => default;
+            static (Func<UG>, PG) B() => default;
+            static (PG, List<UG>) D() => default;
+            static (List<UG>, PG) E() => default;
+
+            static void Use<T>(T value) { }
+
+        #pragma warning disable SCA1020, SCA1023
+            void M()
+            {
+                {|#0:Use(A())|};
+                {|#1:Use(B())|};
+                {|#2:Use(D())|};
+                {|#3:Use(E())|};
+                object a = {|#4:A()|};
+                object b = {|#5:B()|};
+                object d = {|#6:D()|};
+                object e = {|#7:E()|};
+            }
+        #pragma warning restore SCA1020, SCA1023
+        }
+
+        {{Types}}
+        """,
+        Verify.UnlistedMember(0, "C.Use<T>(T)", "(PG, System.Func<UG>)", "T", "M:C.Use``1(``0)").AsError(),
+        Verify.UnlistedMember(1, "C.Use<T>(T)", "(System.Func<UG>, PG)", "T", "M:C.Use``1(``0)").AsError(),
+        Verify.UnlistedMember(2, "C.Use<T>(T)", "(PG, System.Collections.Generic.List<UG>)", "T", "M:C.Use``1(``0)").AsError(),
+        Verify.UnlistedMember(3, "C.Use<T>(T)", "(System.Collections.Generic.List<UG>, PG)", "T", "M:C.Use``1(``0)").AsError(),
+        Verify.OpaqueBoxing(4, "(PG, System.Func<UG>)", "object", "(T1, T2)").AsError(),
+        Verify.OpaqueBoxing(5, "(System.Func<UG>, PG)", "object", "(T1, T2)").AsError(),
+        Verify.OpaqueBoxing(6, "(PG, System.Collections.Generic.List<UG>)", "object", "(T1, T2)").AsError(),
+        Verify.OpaqueBoxing(7, "(System.Collections.Generic.List<UG>, PG)", "object", "(T1, T2)").AsError());
+
+    // The box of a generic struct hides what its type arguments make reachable, whether its own code is checked or not: a box of a
+    // marked generic struct over a list is reported as the box of a tuple over one is, for a stored value, a new one, a nullable, a
+    // pattern and a 'foreach', and is strict where the list holds a type that is unsafe to copy. A struct over no container hides
+    // nothing that its box does not show, and gets only the report of the copy.
+    [TestMethod]
+    public Task MarkedGenericStruct_BoxHidesWhatItsTypeArgumentsCarry() => Verify.UpdatedRulesAsync(
+        $$"""
+        using System.Collections.Generic;
+        using Singulink.CodeAnalysis;
+
+        [NonCopyable]
+        public struct Mk<[NonCopyable] T> { public T Value; }
+
+        class C
+        {
+            Mk<List<UG>> _list;
+            Mk<(PG, List<UG>)> _tuple;
+            Mk<List<PG>> _plain;
+            Mk<PG> _guard;
+            (PG, List<UG>) _bare;
+
+            static Mk<List<UG>> Create() => default;
+
+            static IEnumerable<Mk<List<UG>>> CreateMany() => [];
+
+            void M()
+            {
+                object list = {|#0:_list|};
+                object tuple = {|#1:_tuple|};
+                object plain = {|#2:_plain|};
+                object guard = {|#3:_guard|};
+                object bare = {|#4:_bare|};
+                object created = {|#5:Create()|};
+                object nullable = {|#6:(Mk<List<UG>>?)Create()|};
+
+                if (Create() is {|#7:object matched|}) { }
+
+                foreach (object item in {|#8:CreateMany()|}) { }
+            }
+        }
+
+        {{Types}}
+        """,
+        Verify.Boxing(0, "Mk<System.Collections.Generic.List<UG>>", "object"),
+        Verify.OpaqueBoxingOfContainers(0, "Mk<System.Collections.Generic.List<UG>>", "object").AsError(),
+        Verify.Boxing(1, "Mk<(PG, System.Collections.Generic.List<UG>)>", "object"),
+        Verify.OpaqueBoxingOfContainers(1, "Mk<(PG, System.Collections.Generic.List<UG>)>", "object").AsError(),
+        Verify.Boxing(2, "Mk<System.Collections.Generic.List<PG>>", "object"),
+        Verify.OpaqueBoxingOfContainers(2, "Mk<System.Collections.Generic.List<PG>>", "object"),
+        Verify.Boxing(3, "Mk<PG>", "object"),
+        Verify.Boxing(4, "(PG, System.Collections.Generic.List<UG>)", "object"),
+        Verify.OpaqueBoxing(4, "(PG, System.Collections.Generic.List<UG>)", "object", "(T1, T2)").AsError(),
+        Verify.OpaqueBoxingOfContainers(5, "Mk<System.Collections.Generic.List<UG>>", "object").AsError(),
+        Verify.OpaqueBoxingOfContainers(6, "Mk<System.Collections.Generic.List<UG>>?", "object").AsError(),
+        Verify.OpaqueBoxingOfContainers(7, "Mk<System.Collections.Generic.List<UG>>", "object").AsError(),
+        Verify.OpaqueBoxingOfContainers(8, "Mk<System.Collections.Generic.List<UG>>", "object").AsError());
+
+    private static string CarriedSource(string inList) => $$"""
+        using System.Collections.Generic;
+        using System.Diagnostics.CodeAnalysis;
+        using Singulink.CodeAnalysis;
+
+        [NonCopyable]
+        public struct Holder<[NonCopyable] T> { public T Value; }
+
+        class C
+        {
+            (PG, List<{{inList}}>) _tuple;
+            KeyValuePair<PG, List<{{inList}}>> _pair;
+            (PG, (int, List<{{inList}}>)) _nested;
+            (PG, List<{{inList}}>)[] _tuples = [];
+            Holder<List<{{inList}}>> _holder;
+
+            static (PG, List<{{inList}}>) Make() => (default, new());
+
+            static void Use<T>(T value) { }
+
+        #pragma warning disable SCA1003, SCA1004, SCA1020, SCA1023
+            [SuppressMessage("Reliability", "SCA1003")]
+            [SuppressMessage("Reliability", "SCA1004")]
+            [SuppressMessage("Reliability", "SCA1020")]
+            [SuppressMessage("Reliability", "SCA1023")]
+            void M()
+            {
+                object boxed = {|#0:_tuple|};
+                object pair = {|#1:_pair|};
+                object nested = {|#2:_nested|};
+
+                if (_tuple is {|#3:object matched|}) { }
+
+                foreach (object element in {|#4:_tuples|}) { }
+
+                {|#5:Use(Make())|};
+                {|#6:Use({|#7:_tuple|})|};
+                {|#8:Use(NonCopyable.Move(ref _holder))|};
+            }
+        #pragma warning restore SCA1003, SCA1004, SCA1020, SCA1023
+        }
+
+        {{Types}}
+        """;
 }

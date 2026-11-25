@@ -307,6 +307,9 @@ public sealed partial class DoNotCopyValueAnalyzer
                 }
             }
 
+            // Taking the address of a variable makes no copy: the pointer refers to the variable itself.
+            using var handled = Handle();
+            handled.Add(operation.Reference);
             base.VisitAddressOf(operation);
         }
 
@@ -430,6 +433,16 @@ public sealed partial class DoNotCopyValueAnalyzer
 
         public override void VisitBinaryOperator(IBinaryOperation operation)
         {
+            // A sum of many terms is a tree as deep as it is long, and this runs at every level of it: the checks are made in a function
+            // of their own, so that what they keep is off the stack while the operands are visited.
+            using var handled = Handle();
+            CheckBinaryOperator(operation, handled);
+            base.VisitBinaryOperator(operation);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private void CheckBinaryOperator(IBinaryOperation operation, HandledScope handled)
+        {
             var use = CheckMemberUse(operation.Syntax, operation.OperatorMethod);
 
             if (operation.OperatorMethod is null && operation.OperatorKind is BinaryOperatorKind.Add)
@@ -452,7 +465,7 @@ public sealed partial class DoNotCopyValueAnalyzer
             if (operation.OperatorMethod is not null && !operation.IsLifted)
             {
                 bool operandsAreNew = AreCarriedValuesNew(operation.LeftOperand) && AreCarriedValuesNew(operation.RightOperand);
-                CheckHandedOutValue(operation.Syntax, use, operation.Type, operandsAreNew);
+                CheckHandedOutValue(operation.Syntax, operation.OperatorMethod, use, operation.Type, operandsAreNew);
             }
 
             CheckTypeInUnsupportedContext(operation);
@@ -468,14 +481,11 @@ public sealed partial class DoNotCopyValueAnalyzer
                     comparedWithNull = operation.RightOperand;
             }
 
-            using var handled = Handle();
             handled.Add(comparedWithNull);
 
             var operatorMethod = operation.OperatorMethod;
             handled.Add(CheckOperatorOperand(operatorMethod, 0, operation.LeftOperand));
             handled.Add(CheckOperatorOperand(operatorMethod, 1, operation.RightOperand));
-
-            base.VisitBinaryOperator(operation);
         }
 
         public override void VisitCollectionExpression(ICollectionExpressionOperation operation)
@@ -650,7 +660,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                 var use = CheckMemberUse(operation.Syntax, operatorMethod);
 
                 if (ReturnsByValue(operatorMethod))
-                    CheckHandedOutValue(operation.Syntax, use, operation.Type, AreCarriedValuesNew(operand));
+                    CheckHandedOutValue(operation.Syntax, operatorMethod, use, operation.Type, AreCarriedValuesNew(operand));
 
                 // The operand is the argument of the operator: a new value is moved into it. Roslyn's rule reports every operand of a
                 // user-defined conversion that is not an object creation.
@@ -682,11 +692,14 @@ public sealed partial class DoNotCopyValueAnalyzer
             else if (!IsSupportedConversion())
             {
                 // A stored value that is converted to a reference type is boxed, which has its own finding. Without it the operand would be reported
-                // as an unsupported use when it is visited.
+                // as an unsupported use when it is visited. What the box hides is a second rule, which the copy does not answer.
                 if (isBoxing && !_handledOperations.Contains(operand))
                 {
                     Report(Rules.Boxing, operand.Syntax, operand.Type, operation.Type);
                     handledOperand = operand;
+
+                    if (GetReceivingMember(operation) is not { } receiving || !types.IsBorrowing(receiving))
+                        CheckWhatTheBoxHides(operand.Syntax, operand.Type!, operation.Type!, IsUnwantedResultOfLambda(operation));
                 }
 
                 CheckTypeInUnsupportedContext(operation);
@@ -702,14 +715,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                 // arguments runs unchecked code on its box, which hands out boxed copies. A member that the list marks 'borrows' may
                 // receive either, as it may a container.
                 if (GetReceivingMember(operation) is not { } member || !types.IsBorrowing(member))
-                {
-                    if (types.HidesTypeParameter(operand.Type, operation.Type))
-                        Report(Rules.OpaqueTypeParameterConversion, operand.Syntax, operand.Type, operation.Type);
-                    else if (operation.Type is { } boxType && types.IsStructOfUncheckedCode(operand.Type) && types.LosesNonCopyableType(operand.Type, boxType))
-                        Report(IsUnwantedResultOfLambda(operation) ? Rules.OpaqueLambdaBoxing : Rules.OpaqueBoxing, operand.Syntax, operand.Type, operation.Type, Display(GetStructDefinition(operand.Type)));
-                    else
-                        CheckBoxOfBindingNotTaken(operand.Syntax, operand.Type, operation.Type);
-                }
+                    CheckWhatTheBoxHides(operand.Syntax, operand.Type!, operation.Type!, IsUnwantedResultOfLambda(operation));
             }
 
             // A conversion from one non-copyable type to another, such as from Guard to Guard?, wraps the operand: what uses the result has
@@ -1021,7 +1027,7 @@ public sealed partial class DoNotCopyValueAnalyzer
             CheckReceiverType(operation.Syntax, instanceType, operation.IndexerSymbol);
 
             if (ReturnsByValue(operation.IndexerSymbol))
-                CheckHandedOutValue(operation.Syntax, use, operation.Type, !types.IsView(instanceType) && AreCarriedValuesNew(operation.Instance));
+                CheckHandedOutValue(operation.Syntax, operation.IndexerSymbol, use, operation.Type, !types.IsView(instanceType) && AreCarriedValuesNew(operation.Instance));
             else
                 CheckTypeInUnsupportedContext(operation);
 
@@ -1159,12 +1165,12 @@ public sealed partial class DoNotCopyValueAnalyzer
                 bool? inputsAreNew = null;
 
                 if (ReturnsByValue(method) && types.IsNonCopyableType(operation.Type))
-                    CheckHandedOutValue(operation.Syntax, use, operation.Type, inputsAreNew ??= AreInputsNew(instance, operation.Arguments), instance, operation);
+                    CheckHandedOutValue(operation.Syntax, method, use, operation.Type, inputsAreNew ??= AreInputsNew(instance, operation.Arguments), instance, operation);
 
                 foreach (var argument in operation.Arguments)
                 {
                     if (argument.Parameter is { RefKind: RefKind.Out } parameter && types.IsNonCopyableType(parameter.Type))
-                        CheckHandedOutValue(argument.Syntax, use, parameter.Type, inputsAreNew ??= AreInputsNew(instance, operation.Arguments));
+                        CheckHandedOutValue(argument.Syntax, method, use, parameter.Type, inputsAreNew ??= AreInputsNew(instance, operation.Arguments));
                 }
             }
 
@@ -1265,14 +1271,14 @@ public sealed partial class DoNotCopyValueAnalyzer
             // The delegate can be invoked any number of times, so what it is created on counts as stored. That goes for a member marked 'new'
             // as well: the delegate hands out what the member does, and its callers take a non-copyable value from it for new.
             if (ReturnsByValue(method))
-                CheckHandedOutValue(operation.Syntax, use, method.ReturnType, inputsAreNew: false);
+                CheckHandedOutValue(operation.Syntax, method, use, method.ReturnType, inputsAreNew: false);
 
             // And it hands out through its 'out' parameters as it does through its return value: the callers of
             // 'TryGet get = dictionary.TryGetValue' take what comes out for new.
             foreach (var parameter in NonCopyableTypes.GetParametersWithReceiver(method))
             {
                 if (parameter.RefKind is RefKind.Out)
-                    CheckHandedOutValue(operation.Syntax, use, parameter.Type, inputsAreNew: false);
+                    CheckHandedOutValue(operation.Syntax, method, use, parameter.Type, inputsAreNew: false);
             }
 
             CheckTypeInUnsupportedContext(operation);
@@ -1332,7 +1338,7 @@ public sealed partial class DoNotCopyValueAnalyzer
             ReportCloningBindingOfCreation(operation);
 
             if (use.ListedKind is MemberUseKind.Listed && types.IsNonCopyableType(operation.Type))
-                CheckHandedOutValue(operation.Syntax, use, operation.Type, AreInputsNew(null, operation.Arguments, forValue: true), operation.Arguments is [var only] ? only.Value : null);
+                CheckHandedOutValue(operation.Syntax, operation.Constructor, use, operation.Type, AreInputsNew(null, operation.Arguments, forValue: true), operation.Arguments is [var only] ? only.Value : null);
 
             // 'new T()' is a valid way to acquire a 'T'. No need to check the method signature further. Parameters will be checked by the
             // IArgumentOperation. Also mark the initializer (if any) as handled.
@@ -1401,7 +1407,7 @@ public sealed partial class DoNotCopyValueAnalyzer
             {
                 // A view never owns its elements: an element that its indexer hands out by value is a copy, whatever the view came from.
                 bool isElementOfView = property.IsIndexer && IsViewBehindConversions(instance);
-                CheckHandedOutValue(operation.Syntax, use, operation.Type, !isElementOfView && AreInputsNew(instance, operation.Arguments), instance, operation);
+                CheckHandedOutValue(operation.Syntax, property, use, operation.Type, !isElementOfView && AreInputsNew(instance, operation.Arguments), instance, operation);
             }
 
             // Allow a property to return a non-copyable type by value
@@ -1701,7 +1707,7 @@ public sealed partial class DoNotCopyValueAnalyzer
             var use = CheckMemberUse(operation.Syntax, operation.OperatorMethod);
 
             if (operation.OperatorMethod is not null && !operation.IsLifted)
-                CheckHandedOutValue(operation.Syntax, use, operation.Type, AreCarriedValuesNew(operation.Operand));
+                CheckHandedOutValue(operation.Syntax, operation.OperatorMethod, use, operation.Type, AreCarriedValuesNew(operation.Operand));
 
             CheckTypeInUnsupportedContext(operation);
 
@@ -1998,7 +2004,7 @@ public sealed partial class DoNotCopyValueAnalyzer
             ReportDiagnostic(severities.Create(rule, location, arguments));
         }
 
-        // Reports a rule whose message does not name the types that the report is about: see About.Given.
+        // Reports a rule whose message does not name the types that the report is about: see About.GivenCopy and About.GivenReach.
         private void ReportAbout(Rule rule, Subject subject, SyntaxNode syntax, params object?[] arguments) =>
             ReportAbout(rule, subject, syntax.GetLocation(), arguments);
 
@@ -2083,8 +2089,8 @@ public sealed partial class DoNotCopyValueAnalyzer
                 : operation.Type;
 
             // Copies of other types, and operations without a type, are allowed. The type is tested first: it is cheaper than the set, and
-            // nearly every operation stops there.
-            if (!types.IsNonCopyableType(type) || _handledOperations.Contains(operation))
+            // nearly every operation stops there. Code that does not compile cannot run, and the compiler reports it.
+            if (!types.IsNonCopyableType(type) || _handledOperations.Contains(operation) || CannotRun(operation))
                 return;
 
             // What takes a copy of a stored value is named where it is known. The text that names the kind of operation is for a
@@ -2094,6 +2100,49 @@ public sealed partial class DoNotCopyValueAnalyzer
                 Report(Rules.CopyOfStoredValue, operation.Syntax, what, type, GetHandlerHint(operation));
             else
                 Report(Rules.UnsupportedUse, operation.Syntax, type, operation.Kind);
+        }
+
+        /// <summary>
+        /// Gets a value indicating whether an operation is in code that does not compile, which cannot run: the operation, or one that it
+        /// is a part of within its statement, is one that the compiler marked invalid, or has a type that is or mentions an error type.
+        /// An editor shows such code while someone types. The compiler reports it, so the analyzer reports no use in it as one that it
+        /// has no rule for, and keeps every report about the code of the member that compiles.
+        /// </summary>
+        private static bool CannotRun(IOperation operation)
+        {
+            for (var current = operation; current is not null; current = current.Parent)
+            {
+                if (current is IInvalidOperation || MentionsErrorType(current.Type))
+                    return true;
+
+                if (current.Syntax is StatementSyntax)
+                    break;
+            }
+
+            return false;
+
+            // A type with more parts than a walk looks at counts as one that mentions none.
+            static bool MentionsErrorType(ITypeSymbol? type)
+            {
+                var walk = new TypeWalk();
+                return type is not null && Mentions(type);
+
+                bool Mentions(ITypeSymbol type)
+                {
+                    RuntimeHelpers.EnsureSufficientExecutionStack();
+
+                    if (!walk.LookAt(type))
+                        return false;
+
+                    return type switch {
+                        { TypeKind: TypeKind.Error } => true,
+                        IArrayTypeSymbol array => Mentions(array.ElementType),
+                        IPointerTypeSymbol pointer => Mentions(pointer.PointedAtType),
+                        INamedTypeSymbol named => named.TypeArguments.Any(Mentions) || (named.ContainingType is { } containing && Mentions(containing)),
+                        _ => false,
+                    };
+                }
+            }
         }
 
         /// <summary>

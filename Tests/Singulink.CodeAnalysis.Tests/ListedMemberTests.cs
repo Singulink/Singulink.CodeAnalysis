@@ -474,5 +474,27 @@ public class ListedMemberTests
         Verify.ReadFromStoredContainer(1, "'List<T>.this[int]'", "Lease"),
         Verify.ReadFromStoredContainer(2, "'Stack<T>.Peek()'", "Lease"),
         Verify.ReadFromStoredContainer(3, "'List<T>.this[int]'", "Lease"),
-        Verify.ReadFromStoredContainer(4, "'ValueTask<TResult>.GetAwaiter()'", "System.Runtime.CompilerServices.ValueTaskAwaiter<Guard>"));
+        Verify.MadeFromStoredContainer(4, "'ValueTask<TResult>.GetAwaiter()'", "System.Runtime.CompilerServices.ValueTaskAwaiter<Guard>"));
+
+    // A member that makes a value of another type out of a stored container, as GetEnumerator makes an enumerator over a stored list,
+    // hands out a new value that reads what the container still holds, and the message says so.
+    [TestMethod]
+    public Task MadeFromStoredContainer_NamesTheNewValueAndWhatItReads() => Verify.AnalyzerAsync(
+        $$"""
+        using System.Collections.Generic;
+
+        class C
+        {
+            List<Guard> _list = new();
+
+            void M()
+            {
+                var enumerator = {|#0:_list.GetEnumerator()|};
+                enumerator.Dispose();
+            }
+        }
+
+        {{Sources.Guard}}
+        """,
+        Verify.MadeFromStoredContainer(0, "'List<T>.GetEnumerator()'", "System.Collections.Generic.List<Guard>.Enumerator"));
 }

@@ -29,6 +29,7 @@ classes that clone themselves come from a scan of the IL of the shared framework
 - **Other readings of the source:**
   - The `borrows` entries for the handle types and `AsyncFlowControl` are read on dotnet/runtime `main`, 16 November 2026.
   - The `drains` entries and the members behind `ConfigureAwait` and `WithCancellation` of an async sequence are read at the release tags `v10.0.0` and `v11.0.0`, the frameworks that the analyzer is tested with.
+  - The `erasable;for=` lines are read at the release tags `v10.0.0` and `v11.0.0`, and in the .NET Framework reference source (see [Key and Value Collections That Are Erasable for the Other Type](#key-and-value-collections-that-are-erasable-for-the-other-type)).
   - The `clones` lines come from a scan of the IL of the shared frameworks, not from a reading of the source (see [Classes That Clone Themselves](#classes-that-clone-themselves)).
 - **Path abbreviations in the tables:**
   - `CL/` = `src/libraries/System.Private.CoreLib/src/System/`
@@ -40,7 +41,7 @@ classes that clone themselves come from a scan of the IL of the shared framework
   - `Nullable<T>`, `KeyValuePair<TKey, TValue>`, `ValueTuple`;
   - the opaque sinks.
 
-  Beyond that basic level, the list covers `LinkedList<T>`, the concurrent collections, `ReadOnlySequence<T>`'s own members, `ManualResetValueTaskSourceCore<T>`'s members and `TaskFactory`, each in its own entry. **Not covered:** `ImmutableArray<T>`'s members (it has only its `view` entry), `ContinueWith` and `PoolingAsyncValueTaskMethodBuilder<T>`. A use of one of these members with a non-copyable type gets a warning until someone lists it.
+  Beyond that basic level, the list covers `LinkedList<T>`, the concurrent collections, `ReadOnlySequence<T>`'s own members, `ManualResetValueTaskSourceCore<T>`'s members and `TaskFactory`, each in its own entry, and the members of `ImmutableArray<T>` that read its length, hand out an element, a reference or a view, and build one, with the counts of `ImmutableList<T>` and `ImmutableDictionary<TKey, TValue>` (see [Default Comparers, an Empty Sequence and Immutable Collections](#default-comparers-an-empty-sequence-and-immutable-collections)). **Not covered:** the other members of the immutable collections, `ContinueWith` and `PoolingAsyncValueTaskMethodBuilder<T>`. A use of one of these members with a non-copyable type gets a warning until someone lists it.
 
 ## How the Criterion Is Applied
 
@@ -901,11 +902,21 @@ The entries of the other collections are in the sections below. `List<T>.RemoveR
 | Member | What it does with a value | Marker |
 |---|---|---|
 | `Dictionary<,>.Keys` | hands out the key collection, which holds the dictionary | none |
-| `KeyCollection.GetEnumerator()`, `.Count`, `.Contains(TKey)`, `.CopyTo(TKey[], int)` | read keys and the count only (`Dictionary.cs` 1900-1937) | none |
+| `KeyCollection.GetEnumerator()` | makes an enumerator that holds the dictionary, an index and a key, and no value (`Dictionary.cs` 1900, 2008-2024), so the enumerator is a new one whatever the collection is | `new` |
+| `KeyCollection.Count`, `.Contains(TKey)`, `.CopyTo(TKey[], int)` | read keys and the count only (`Dictionary.cs` 1900-1937) | none |
 | `KeyCollection.Enumerator.MoveNext()`, `.Current`, `.Dispose()` | `_currentKey = entry.key`: no value is read | none |
 | `KeyCollection(Dictionary<,>)` | makes a key collection | **not listed**: the property is how one is got |
 
-`map.Keys.ToList()` still gets a warning (`SCA1023`): the conversion of the key collection to `IEnumerable<TKey>` loses the value type that its type names, and `erasable` cannot say "for `TValue` only". The clean form is a spread, `[.. map.Keys]`.
+**The values.** `Dictionary<,>.Values` hands out the value collection, which holds the dictionary (`Dictionary.cs` 222, 2081-2093). Its enumerator copies each value into `_currentValue`, which `Current` hands out, and reads no key (`Dictionary.cs` 2206-2244): that is the copy inside what is handed out of rule 2, as the enumerator of `List<T>` makes. So a `foreach` over the values of a stored dictionary gets one warning, for the copy that `Current` hands out.
+
+| Member | What it does with a value | Marker |
+|---|---|---|
+| `Dictionary<,>.Values` | hands out the value collection, which holds the dictionary | none |
+| `ValueCollection.GetEnumerator()`, `.Count` | make an enumerator that holds the dictionary; read the count | none |
+| `ValueCollection.Enumerator.MoveNext()`, `.Current`, `.Dispose()` | `_currentValue = entry.value`, which `Current` hands out | none |
+| `ValueCollection.CopyTo(TValue[], int)` | copies every value into an array | **not listed**: copies |
+
+**The key and value collections are erasable for the other type.** `KeyCollection` is marked `erasable;for=TValue` and `ValueCollection` `erasable;for=TKey`, so `map.Keys.ToList()` converts the key collection to `IEnumerable<TKey>` with no warning. See [Key and Value Collections That Are Erasable for the Other Type](#key-and-value-collections-that-are-erasable-for-the-other-type).
 
 Every public member:
 
@@ -940,7 +951,7 @@ Every public member:
 | `Dictionary<TKey, TValue>.Capacity` | the comparer of keys, or the length of the entries array (Dictionary.cs 160-185) | for=TValue |
 | `Dictionary<TKey, TValue>.this[TKey]` | a basic member: see the summary table | for=TValue |
 | `Dictionary<TKey, TValue>.Keys` | a basic member: see the summary table | for=TValue |
-| `Dictionary<TKey, TValue>.Values` | a collection that hands out every value by value, CopyTo included (Dictionary.cs 2081-2244) | not listed: copies |
+| `Dictionary<TKey, TValue>.Values` | a basic member: the value collection, which holds the dictionary (Dictionary.cs 222) | for=TValue |
 | `T:System.Collections.Generic.Dictionary`2.AlternateLookup`1` | looks up by the alternate key; reads by value what the dictionary holds (Dictionary.cs 751-870) | view |
 | `Dictionary<TKey, TValue>.AlternateLookup<TAlternateKey>.ContainsKey(TAlternateKey)` | looks up by the alternate key; reads by value what the dictionary holds (Dictionary.cs 751-870) | for=TValue |
 | `Dictionary<TKey, TValue>.AlternateLookup<TAlternateKey>.TryAdd(TAlternateKey, TValue)` | stores into a slot found by the alternate key (Dictionary.cs 712-750, 947-960), only where it returns true | borrowswhen=false;for=TValue |
@@ -953,23 +964,46 @@ Every public member:
 | `Dictionary<TKey, TValue>.Enumerator.Dispose()` | a basic member: see the summary table | for=TValue |
 | `Dictionary<TKey, TValue>.Enumerator.MoveNext()` | a basic member: see the summary table | for=TValue |
 | `Dictionary<TKey, TValue>.Enumerator.Current` | a basic member: see the summary table | for=TValue |
+| `T:System.Collections.Generic.Dictionary`2.KeyCollection` | the type: its generic interfaces hand out keys, its code reads keys only (Dictionary.cs 1886-2079), and `ICollection.SyncRoot` hands out the dictionary's lock object, which is the dictionary itself on .NET: see [Key and Value Collections That Are Erasable for the Other Type](#key-and-value-collections-that-are-erasable-for-the-other-type) | erasable;for=TValue |
 | `Dictionary<TKey, TValue>.KeyCollection.KeyCollection(Dictionary<TKey, TValue>)` | a view of the keys; judged with Keys | not listed: a constructor of a view is not what code calls |
 | `Dictionary<TKey, TValue>.KeyCollection.CopyTo(TKey[], int)` | a basic member: see the summary table | for=TValue |
-| `Dictionary<TKey, TValue>.KeyCollection.GetEnumerator()` | a basic member: see the summary table | for=TValue |
+| `Dictionary<TKey, TValue>.KeyCollection.GetEnumerator()` | makes an enumerator that holds no value (Dictionary.cs 1900, 2008-2024) | new;for=TValue |
 | `Dictionary<TKey, TValue>.KeyCollection.Contains(TKey)` | a basic member: see the summary table | for=TValue |
 | `Dictionary<TKey, TValue>.KeyCollection.Count` | a basic member: see the summary table | for=TValue |
 | `Dictionary<TKey, TValue>.KeyCollection.Enumerator.Dispose()` | a basic member: see the summary table | for=TValue |
 | `Dictionary<TKey, TValue>.KeyCollection.Enumerator.MoveNext()` | a basic member: see the summary table | for=TValue |
 | `Dictionary<TKey, TValue>.KeyCollection.Enumerator.Current` | a basic member: see the summary table | for=TValue |
-| `T:System.Collections.Generic.Dictionary`2.ValueCollection` | hands out every value by value, CopyTo included (Dictionary.cs 2081-2244) | not listed: copies |
-| `Dictionary<TKey, TValue>.ValueCollection.ValueCollection(Dictionary<TKey, TValue>)` | hands out every value by value, CopyTo included (Dictionary.cs 2081-2244) | not listed: copies |
-| `Dictionary<TKey, TValue>.ValueCollection.CopyTo(TValue[], int)` | hands out every value by value, CopyTo included (Dictionary.cs 2081-2244) | not listed: copies |
-| `Dictionary<TKey, TValue>.ValueCollection.GetEnumerator()` | hands out every value by value, CopyTo included (Dictionary.cs 2081-2244) | not listed: copies |
-| `Dictionary<TKey, TValue>.ValueCollection.Count` | hands out every value by value, CopyTo included (Dictionary.cs 2081-2244) | not listed: copies |
-| `T:System.Collections.Generic.Dictionary`2.ValueCollection.Enumerator` | hands out every value by value, CopyTo included (Dictionary.cs 2081-2244) | not listed: copies |
-| `Dictionary<TKey, TValue>.ValueCollection.Enumerator.Dispose()` | hands out every value by value, CopyTo included (Dictionary.cs 2081-2244) | not listed: copies |
-| `Dictionary<TKey, TValue>.ValueCollection.Enumerator.MoveNext()` | hands out every value by value, CopyTo included (Dictionary.cs 2081-2244) | not listed: copies |
-| `Dictionary<TKey, TValue>.ValueCollection.Enumerator.Current` | hands out every value by value, CopyTo included (Dictionary.cs 2081-2244) | not listed: copies |
+| `Dictionary<TKey, TValue>.ValueCollection.ValueCollection(Dictionary<TKey, TValue>)` | a view of the values; judged with Values | not listed: a constructor of a view is not what code calls |
+| `Dictionary<TKey, TValue>.ValueCollection.CopyTo(TValue[], int)` | copies every value into an array (Dictionary.cs 2097-2120) | not listed: copies |
+| `Dictionary<TKey, TValue>.ValueCollection.GetEnumerator()` | makes an enumerator that holds the dictionary (Dictionary.cs 2095) | for=TValue |
+| `Dictionary<TKey, TValue>.ValueCollection.Count` | the count of the dictionary (Dictionary.cs 2122) | for=TValue |
+| `Dictionary<TKey, TValue>.ValueCollection.Enumerator.Dispose()` | does nothing (Dictionary.cs 2220) | for=TValue |
+| `Dictionary<TKey, TValue>.ValueCollection.Enumerator.MoveNext()` | copies the value into `_currentValue`, which Current hands out, and reads no key (Dictionary.cs 2222-2242) | for=TValue |
+| `Dictionary<TKey, TValue>.ValueCollection.Enumerator.Current` | hands out `_currentValue` (Dictionary.cs 2244) | for=TValue |
+
+### Default Comparers, an Empty Sequence and Immutable Collections
+
+Read at dotnet/runtime `d757c03` (`Lib/System.Collections.Immutable/src/System/Collections/Immutable/`, `Lib/System.Linq/src/System/Linq/`, `src/coreclr/System.Private.CoreLib/src/System/Collections/Generic/`).
+
+| Member | What it does with a value | List entry |
+|---|---|---|
+| `EqualityComparer<T>.Default`, `Comparer<T>.Default` | the static initializer makes the comparer of the type by reflection (`EqualityComparer.CoreCLR.cs` 13, `Comparer.CoreCLR.cs` 12); no value is read. What a comparer is given is judged where its `Equals`, `GetHashCode` or `Compare` is called | listed |
+| `Enumerable.Empty<TResult>()` | `Array.Empty<TResult>()`, an array with no element (`Enumerable.cs` 19-20) | listed |
+| `ImmutableArray.Create<T>()` | `ImmutableArray<T>.Empty` (`ImmutableArray.cs` 26-29) | listed |
+| `ImmutableArray.Create<T>(T)` | `new[] { item }`: takes the value that it is given into a new array (`ImmutableArray.cs` 37-41), as `List<T>.Add` does | listed |
+| `ImmutableArray.CreateBuilder<T>()`, `ImmutableArray.CreateBuilder<T>(int)` | a builder with an empty array (`ImmutableArray.cs` 408-422; `ToBuilder` of an empty array, `ImmutableArray_1.Minimal.cs` 263-269) | listed |
+| `ImmutableArray<T>.Length`, `.IsEmpty`, `.IsDefault`, `.IsDefaultOrEmpty` | read the array's length or whether it is there (`ImmutableArray_1.Minimal.cs` 154-198) | listed |
+| `ImmutableArray<T>.this[int]` | `return this.array![index]`: hands out a copy of an element, as the indexer of `List<T>` does (`ImmutableArray_1.Minimal.cs` 121-135) | listed |
+| `ImmutableArray<T>.ItemRef(int)` | hands out a read-only reference to an element (`ImmutableArray_1.Minimal.cs` 140-148) | listed |
+| `ImmutableArray<T>.AsSpan()` | a span over the array (`ImmutableArray_1.cs` 99) | listed |
+| `ImmutableArray<T>.GetEnumerator()` | an enumerator that holds the array and an index (`ImmutableArray_1.Minimal.cs` 281-286; the enumerator is a view) | listed |
+| `ImmutableArray<T>.Enumerator.MoveNext()`, `.Current` | `++_index < _array.Length`; `Current` hands out a copy of the element (`ImmutableArray_1.Enumerator.cs` 38-65) | listed |
+| `ImmutableArray<T>.Builder.Add(T)` | `_elements[_count] = item`, after a growth that moves the elements into a new array that the builder alone holds (`ImmutableArray_1.Builder.cs` 326-332) | listed |
+| `ImmutableArray<T>.Builder.Count` | reads the count, or truncates and clears, or grows as `Add` does (`ImmutableArray_1.Builder.cs` 90-130) | listed |
+| `ImmutableArray<T>.Builder.MoveToImmutable()` | hands out the builder's array and takes an empty one; throws, keeping the elements, where the capacity is not the count (`ImmutableArray_1.Builder.cs` 203-214) | listed |
+| `ImmutableList<T>.Count`, `ImmutableDictionary<TKey, TValue>.Count` | read a field (`ImmutableList_1.cs` 142, `ImmutableDictionary_2.cs` 133-136) | listed |
+
+Not listed, on purpose: `ImmutableArray<T>`'s `Contains`, `IndexOf` and `Remove`, which give elements to `Equals`; `Add`, `Insert`, `SetItem` and the other members that make a new immutable array, which copy every element into it; `ToBuilder` and `ToImmutable` of a builder that holds elements, which copy them; and the other members of the immutable lists and dictionaries, which compare or copy elements.
 
 ### `PriorityQueue<TElement, TPriority>`
 
@@ -1176,6 +1210,48 @@ It is listed with `for=TValue`: keys and values are two arrays, and only the key
 | `FrozenDictionary.ToFrozenDictionary<TKey, TValue>(IEnumerable<KeyValuePair<TKey, TValue>>, IEqualityComparer<TKey>?)` | makes a frozen dictionary by copying every value of the source into a dictionary and then into arrays (FrozenDictionary.cs 42-160) | not listed: copies |
 | `FrozenDictionary.ToFrozenDictionary<TSource, TKey>(IEnumerable<TSource>, Func<TSource, TKey>, IEqualityComparer<TKey>?)` | makes a frozen dictionary by copying every value of the source into a dictionary and then into arrays (FrozenDictionary.cs 42-160) | not listed: copies |
 | `FrozenDictionary.ToFrozenDictionary<TSource, TKey, TElement>(IEnumerable<TSource>, Func<TSource, TKey>, Func<TSource, TElement>, IEqualityComparer<TKey>?)` | makes a frozen dictionary by copying every value of the source into a dictionary and then into arrays (FrozenDictionary.cs 42-160) | not listed: copies |
+
+### Key and Value Collections That Are Erasable for the Other Type
+
+An `erasable` line with `for=` says that no base type and no interface of the type hands out a value of the type parameters that it
+names. For the claim to hold, the code behind those interfaces must also make no copy of such a value: a conversion to the interface
+hands the object to code that the analyzer does not see. So each line below rests on two readings: the declaration of the type, and
+every member that implements one of its interfaces. `ErasableLines_NameTypesWhoseBaseTypesAndInterfacesMentionNoTypeParameterThatTheyAreFor`
+in `SafeListTests` checks the first against the reference packs of .NET 10 and .NET 11.
+
+**What the interfaces hand out, exactly.** The generic interfaces of the key collection hand out keys, and those of the value
+collection values. The non-generic `ICollection` hands out elements through `CopyTo(Array, int)`, which copies keys or values only, and
+one more object: `ICollection.SyncRoot`. Both collections return `((ICollection)_dictionary).SyncRoot`, and the dictionary returns
+`this` (Dictionary.cs 1634, 2009, 2203 / 1742, 2117, 2311). So on .NET the lock object of a key or a value collection is the dictionary
+itself, and code that casts it back to `Dictionary<TKey, TValue>` reaches the other half of every entry. The .NET Framework makes the
+lock object of a dictionary a `new Object()` (netfx dictionary.cs 591-597, 917-918, 1103-1104), which reaches nothing. The route takes
+a cast to a legacy interface, and the use of a property that `ICollection` documents as an object to synchronize access with, as the
+dictionary itself: it is an API used against its documentation, which the analyzer does not follow (see What Is Not Covered), and the
+lines stay.
+
+**How the candidates were found.** Every public generic class and interface of the reference packs of .NET 10 (10.0.14) and .NET 11
+(11.0.0) was listed with the type parameters, its own or those of a type that contains it, that no base type and no interface of it
+mentions. That gave the types below, and the options types of `Microsoft.Extensions.Options` in the pack of .NET 11.
+
+**Read at the release tags `v10.0.0` and `v11.0.0`,** where the line numbers differ by `v11.0.0` second, and in the .NET Framework
+reference source (microsoft/referencesource, branch `main`, `mscorlib/system/collections/generic/dictionary.cs`).
+
+| Type | Interfaces | What the code behind them reads | Source | List entry |
+|---|---|---|---|---|
+| `Dictionary<TKey, TValue>.KeyCollection` | `ICollection<TKey>`, `IReadOnlyCollection<TKey>`, `ICollection` | `CopyTo` and `ICollection.CopyTo` read `entries[i].key`, a field of the array element; `Contains` is `ContainsKey`, which compares keys through `ref Entry`; the enumerator takes `ref Entry entry` and sets `_currentKey = entry.key`; `Add`, `Remove` and `Clear` throw. No value is read, and no whole entry is copied. `ICollection.SyncRoot` is the dictionary's, the dictionary itself on .NET (see above) | Dictionary.cs 1886, 1923, 1937-1938, 1997, 2037-2041 / 1994, 2031, 2045-2046, 2105, 2145-2149; `FindValue` 297-298; netfx dictionary.cs 801, 832, 853, 904, 946 | `erasable;for=TValue` |
+| `Dictionary<TKey, TValue>.ValueCollection` | `ICollection<TValue>`, `IReadOnlyCollection<TValue>`, `ICollection` | `CopyTo` and `ICollection.CopyTo` read `entries[i].value`; `Contains` is `ContainsValue`, which compares values only; the enumerator takes `ref Entry entry` and sets `_currentValue = entry.value`; `Add`, `Remove` and `Clear` throw. No key is read. `ICollection.SyncRoot` is the dictionary's, the dictionary itself on .NET (see above) | Dictionary.cs 2081, 2118, 2138, 2191, 2231-2235, `ContainsValue` 300-339 / 2189, 2226, 2246, 2299, 2339-2343; netfx dictionary.cs 988, 1019, 1045, 1090, 1132 | `erasable;for=TKey` |
+| `OrderedDictionary<TKey, TValue>.KeyCollection`, `.ValueCollection` | `IList<T>`, `IReadOnlyList<T>`, `IList` | the enumerators wrap the dictionary's, whose `MoveNext` makes `new KeyValuePair<TKey, TValue>(entry.Key, entry.Value)`, and the indexers call `GetAt`, which makes `new(e.Key, e.Value)`: both copy the other half | OrderedDictionary.cs 599, 1439, 1467, 1643, 1662, 1887 / 599, 1440, 1468, 1644, 1663, 1888 | not listed |
+| `SortedDictionary<TKey, TValue>.KeyCollection`, `.ValueCollection` | `ICollection<T>`, `IReadOnlyCollection<T>`, `ICollection` | `Current` is `_dictEnum.Current.Key` or `.Value`, and the dictionary's `Current` hands out the whole `KeyValuePair<TKey, TValue>` by value: the other half is copied | SortedDictionary.cs 432, 515, 650, 676, 811 (same at both tags) | not listed |
+| `ReadOnlyDictionary<TKey, TValue>.KeyCollection`, `.ValueCollection` | `ICollection<T>`, `IReadOnlyCollection<T>`, `ICollection` | wrap the `Keys` or `Values` of whatever `IDictionary<TKey, TValue>` the dictionary was made with, whose code is not known | ReadOnlyDictionary.cs 38-40, 247-255, 287, 303-311, 339 (same at both tags) | not listed |
+| `Lazy<T, TMetadata>` | none; its base `Lazy<T>` has none either | `Lazy<T>` has no field of the metadata and never sees it, and `Lazy<T, TMetadata>` overrides nothing: only `Metadata` hands it out. The class of the .NET Framework, in System.ComponentModel.Composition, has the same shape in its metadata: one field, the constructors and `get_Metadata`, no interface and no override | LazyOfTTMetadata.cs (the same file at both tags), Lazy.cs 186-505; netfx mscorlib/system/Lazy.cs 59 | `erasable;for=TMetadata` |
+| `IGrouping<TKey, TElement>`, `ISignatureTypeProvider<TType, TGenericContext>` | interfaces | the code behind an interface is whatever implements it | | not listed |
+| `KeyedCollection<TKey, TItem>` | `Collection<TItem>` and its interfaces | adding an item through `IList<TItem>` runs `InsertItem`, which puts the key that `GetKeyForItem` gives into its dictionary: a copy of the key | | not listed |
+| `ConfigureNamedOptions<TOptions, TDep...>`, `PostConfigureOptions<...>`, `ValidateOptions<...>` and `AsyncValidateOptions<...>` (.NET 11) | `IConfigureNamedOptions<TOptions>` and the like | pass each dependency by value to the delegate that they were made with | ConfigureNamedOptions.cs 63, 107; PostConfigureOptions.cs 101; ValidateOptions.cs 122 (v11.0.0) | not listed |
+
+The other dictionaries need no line: `ConcurrentDictionary<,>.Keys` and `.Values` are typed `ICollection<T>`, `SortedList<,>.Keys` and
+`.Values` `IList<T>`, the `Keys` and `Values` of `ImmutableDictionary<,>` and `ImmutableSortedDictionary<,>` `IEnumerable<T>`, and
+those of `FrozenDictionary<,>` `ImmutableArray<T>`. None of these types names the other type parameter, so a conversion of it hides
+nothing of it.
 
 ## Channels and Concurrent Collections
 

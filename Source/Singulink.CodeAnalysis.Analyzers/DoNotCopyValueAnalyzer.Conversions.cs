@@ -172,6 +172,26 @@ public sealed partial class DoNotCopyValueAnalyzer
         }
 
         /// <summary>
+        /// Reports what a box of a value of a non-copyable type hides from the analyzer, whether the value is new or stored: a value of a
+        /// marked type parameter, which a container can be bound to, used as a type that hides it; a generic struct of unchecked code,
+        /// whose box hands out boxed copies of what it holds; a struct whose members run on the box with a type that a type parameter
+        /// of it does not take; or any other generic struct whose type arguments carry containers, which other code can reach through
+        /// the box. A stored value gets the report of its copy as well, where it is boxed: the box breaks both rules, and the
+        /// report of the copy says nothing of what the box hides, which can be a container of a type that is unsafe to copy.
+        /// </summary>
+        private void CheckWhatTheBoxHides(SyntaxNode syntax, ITypeSymbol valueType, ITypeSymbol boxType, bool isResultOfLambda = false)
+        {
+            if (types.HidesTypeParameter(valueType, boxType))
+                Report(Rules.OpaqueTypeParameterConversion, syntax, valueType, boxType);
+            else if (types.IsStructOfUncheckedCode(valueType) && types.LosesNonCopyableType(valueType, boxType))
+                Report(isResultOfLambda ? Rules.OpaqueLambdaBoxing : Rules.OpaqueBoxing, syntax, valueType, boxType, Display(GetStructDefinition(valueType)));
+            else if (types.FindStructBindingNotTaken(valueType) is not null)
+                CheckBoxOfBindingNotTaken(syntax, valueType, boxType);
+            else if (types.HidesContainersOfTypeArguments(valueType, boxType))
+                Report(Rules.OpaqueBoxingOfContainers, syntax, valueType, boxType);
+        }
+
+        /// <summary>
         /// Checks a conversion that the compiler applies with no conversion node in the tree: the value of a '??', the elements of a
         /// spread and of a deconstruction, and the receiver of an extension that a pattern calls. It is judged as a node would be: a
         /// conversion that hides the non-copyable type, and a stored value of a non-copyable type that is boxed.
@@ -182,9 +202,16 @@ public sealed partial class DoNotCopyValueAnalyzer
                 return;
 
             if (types.HidesNonCopyableType(sourceType, targetType))
+            {
                 ReportHidingConversion(syntax, sourceType, targetType, receivingMember);
-            else if (!sourceIsNew && targetType is { IsValueType: false } && types.IsNonCopyableType(sourceType) && !(receivingMember is not null && types.IsBorrowing(receivingMember)))
-                Report(Rules.Boxing, syntax, sourceType, targetType);
+            }
+            else if (targetType is { IsValueType: false } && types.IsNonCopyableType(sourceType) && !(receivingMember is not null && types.IsBorrowing(receivingMember)))
+            {
+                if (!sourceIsNew)
+                    Report(Rules.Boxing, syntax, sourceType, targetType);
+
+                CheckWhatTheBoxHides(syntax, sourceType, targetType);
+            }
         }
 
         /// <summary>
@@ -255,9 +282,9 @@ public sealed partial class DoNotCopyValueAnalyzer
             if (types.FindCloningBindingWithin(sourceType) is not { } binding)
                 return false;
 
-            // The report stands for the warning of the hidden container as well, so it is about what the value holds besides the
-            // binding that it names: strict where either is unsafe to copy.
-            var subject = Subject.Of(binding.Type, sourceType);
+            // The report stands for the warning of the hidden container as well, so it is about what other code can reach of the value
+            // besides the binding that the clone copies: strict where either is unsafe to copy.
+            var subject = Subject.OfCopyAndReach(binding.Type, sourceType);
 
             if (member is not null && NonCopyableTypes.GetListDefinition(member) is var definition && types.IsCloningMember(definition))
                 ReportAbout(Rules.CloningUseOfCloningMember, subject, syntax, Display(definition), sourceType, binding.Type, binding.Bound);
@@ -294,7 +321,11 @@ public sealed partial class DoNotCopyValueAnalyzer
                 ? Rules.UntypedCollectionConversion
                 : isResultOfLambda ? Rules.OpaqueLambdaResult : Rules.OpaqueConversion;
 
-            ReportAbout(rule, Subject.Of(sourceType), syntax, DescribeContainer(sourceType), targetType);
+            // The report is about what the conversion hides, which is what the container exposes: the key collection of a dictionary
+            // hides its keys, and nothing of its values, whatever the key is.
+            var exposed = types.GetExposedNonCopyableTypes(sourceType);
+            var subject = exposed.IsDefaultOrEmpty ? Subject.Of(sourceType) : Subject.Of([.. exposed]);
+            ReportAbout(rule, subject, syntax, DescribeContainer(sourceType), targetType);
         }
 
         /// <summary>

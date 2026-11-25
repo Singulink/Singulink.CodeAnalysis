@@ -470,7 +470,7 @@ public sealed partial class DoNotCopyValueAnalyzer
         }
 
         private static string GetUncheckedDerivedContainerHint(ITypeSymbol type) =>
-            $": '{type}' is of an assembly that was not built with the analyzer and is a container only through what it derives from or " +
+            $": '{SymbolText.Of(type)}' is of an assembly that was not built with the analyzer and is a container only through what it derives from or " +
             "implements, so nothing checks what its own code puts in it, and an object of it is never a new container";
 
         /// <summary>
@@ -497,7 +497,9 @@ public sealed partial class DoNotCopyValueAnalyzer
         private string DescribeContainer(ITypeSymbol? type)
         {
             var shown = type is { IsValueType: false, NullableAnnotation: NullableAnnotation.Annotated } ? type.WithNullableAnnotation(NullableAnnotation.NotAnnotated) : type;
-            return types.GetContainerBehind(shown) is { } behind ? $"'{shown}' (a container through '{behind}')" : $"'{shown}'";
+            return shown is null
+                ? "''"
+                : types.GetContainerBehind(shown) is { } behind ? $"'{SymbolText.Of(shown)}' (a container through '{SymbolText.Of(behind)}')" : $"'{SymbolText.Of(shown)}'";
         }
 
         /// <summary>
