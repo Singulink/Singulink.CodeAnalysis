@@ -2,9 +2,9 @@
 
 # Built-in Framework Symbol List
 
-The built-in framework symbol list is the [symbol list](symbol-list-format.md) for .NET's own libraries: it is built into the analyzer and merged with the symbol list files of the project. It has an entry for each member that low-level code reaches for, and a line for each class of the framework that clones itself. Each entry was checked against the runtime's source or its IL. What in the source backs each entry is in [NonCopyableSymbols.evidence.md](https://github.com/Singulink/Singulink.CodeAnalysis/blob/main/Source/Singulink.CodeAnalysis.Analyzers/NonCopyableSymbols.evidence.md), beside the list in the repository.
+The built-in framework symbol list is the [symbol list](symbol-list-format.md) for .NET's own libraries: it is built into the analyzer and merged with the symbol list files of the project. It has an entry for each member that low-level code reaches for, a line for each static field of a generic type, and a line for each class of the framework that clones itself. Each entry was checked against the runtime's source or its IL. What in the source backs each entry is in [NonCopyableSymbols.evidence.md](https://github.com/Singulink/Singulink.CodeAnalysis/blob/main/Source/Singulink.CodeAnalysis.Analyzers/NonCopyableSymbols.evidence.md), beside the list in the repository.
 
-This page says what is on it, and what cannot be. The [symbol list files](symbol-list-format.md) that a project reads, its own and those that come with a library, are merged with it, and none of their lines can loosen one of its entries, except `copyable`.
+This page says what is on it, and what cannot be. The [symbol list files](symbol-list-format.md) that a project reads, its own and those that come with a library, are merged with it, and none of their lines can loosen one of its entries, except a `copyable` line of the project's own file.
 
 ### At a Glance
 
@@ -126,6 +126,27 @@ The method uses `writer` after an `await`, so the parameter needs `[Kept]`, or i
 | <xref:System.Threading.Tasks.Task`1>, <xref:System.Threading.Tasks.TaskFactory`1>, <xref:System.Threading.Tasks.ValueTask`1>, <xref:System.Threading.Tasks.TaskCompletionSource`1> | making and completing a task with one result, and reading it |
 | <xref:System.Span`1>, <xref:System.Memory`1>, <xref:System.ArraySegment`1>, <xref:System.Buffers.ReadOnlySequence`1>, <xref:System.Buffers.IBufferWriter`1>, <xref:System.Buffers.ArrayBufferWriter`1>, <xref:System.Buffers.MemoryManager`1> | the views and the members that hand out a view |
 
+## Static Fields of Generic Types
+
+Reading or writing a static field of a generic type runs the static initializers of the type with the type arguments of the use (see [Static Fields](symbol-list-format.md#static-fields)). The built-in framework symbol list has a line for every public or protected static field of a generic type of the framework. A test keeps the lines complete for .NET 10, .NET 11 and the .NET Framework 4.8.1.
+
+```cs
+ImmutableArray<LockGuard> none = ImmutableArray<LockGuard>.Empty;      // OK: on the framework symbol list
+NullLogger<LockGuard> logger = NullLogger<LockGuard>.Instance;          // OK
+```
+
+The static initializers of each of these types make no copy of a value of its type arguments. Each field holds a value that was made for it:
+
+| Field | Holds |
+|---|---|
+| `Empty` of <xref:System.Collections.Immutable.ImmutableArray`1>, <xref:System.Collections.Immutable.ImmutableDictionary`2>, <xref:System.Collections.Immutable.ImmutableHashSet`1>, <xref:System.Collections.Immutable.ImmutableList`1>, <xref:System.Collections.Immutable.ImmutableSortedDictionary`2> and <xref:System.Collections.Immutable.ImmutableSortedSet`1> | The empty collection |
+| `Empty` of <xref:System.Buffers.ReadOnlySequence`1> | A sequence over an empty array |
+| `NullLogger<T>.Instance` | A logger that holds nothing |
+| `EventCallback<TValue>.Empty` | A callback with no receiver |
+| `FeatureReference<T>.Default` | A reference that holds the default value of `T` |
+| `EndpointMetadataComparer<TMetadata>.Default` | A comparer that holds nothing |
+| Only in the .NET Framework: `XmlQuerySequence<T>.Empty` of `System.Xml.Xsl.Runtime` | An empty sequence |
+
 ## Classes That Clone Themselves
 
 The built-in framework symbol list marks as `clones` the classes of the framework whose own code clones an object with <xref:System.Object.MemberwiseClone>. A class of the project that derives from one of them, at any depth, gets a warning on each field that holds a non-copyable value (SCA1009), since the clone copies the field:
@@ -186,9 +207,9 @@ Two classes need no line:
 
 ## .NET Framework
 
-The framework symbol list is checked against the .NET Framework 4.8.1 as it is against .NET 10 and .NET 11, by the same tests: the members that get at a built-in non-copyable type, and the classes and members that clone. So a project for the .NET Framework gets the same checks as a project for .NET.
+The framework symbol list is checked against the .NET Framework 4.8.1 as it is against .NET 10 and .NET 11, by the same tests: the members that get at a built-in non-copyable type, the static fields of generic types, and the classes and members that clone. So a project for the .NET Framework gets the same checks as a project for .NET.
 
-A few lines name classes that only the .NET Framework has, the last rows of [Classes That Clone Themselves](#classes-that-clone-themselves). Their lines say `clones` and not `clones=complete`, so every member of these classes that no line names counts as one that can clone. In a project for .NET such a line names nothing, and has no effect.
+A few lines name symbols that only the .NET Framework has: the classes in the last rows of [Classes That Clone Themselves](#classes-that-clone-themselves), and `XmlQuerySequence<T>.Empty`. The lines of those classes say `clones` and not `clones=complete`, so every member of these classes that no line names counts as one that can clone. In a project for .NET such a line names nothing, and has no effect.
 
 ## What Cannot Be on the Built-in Framework Symbol List
 
@@ -198,7 +219,7 @@ These cannot be on the built-in framework symbol list, by design:
 |---|---|
 | <xref:System.Collections.Generic.HashSet`1>, <xref:System.Collections.Generic.SortedSet`1>, <xref:System.Collections.Generic.SortedDictionary`2> | They compare what they hold. The last gives each pair that a lookup passes, value included, to its comparer by value |
 | <xref:System.Lazy`1>, <xref:System.Threading.ThreadLocal`1>, <xref:System.Threading.AsyncLocal`1> | They hand out a copy at every read and have no access by reference |
-| The immutable collections, LINQ, <xref:System.Array.Resize*?displayProperty=nameWithType>, <xref:System.Array.Copy*?displayProperty=nameWithType>, <xref:System.Collections.Generic.Dictionary`2.Values?displayProperty=nameWithType>, the making of a frozen dictionary | They copy |
+| The members of the immutable collections, LINQ, <xref:System.Array.Resize*?displayProperty=nameWithType>, <xref:System.Array.Copy*?displayProperty=nameWithType>, <xref:System.Collections.Generic.Dictionary`2.Values?displayProperty=nameWithType>, the making of a frozen dictionary | They copy |
 | <xref:System.Runtime.InteropServices.CollectionsMarshal.SetCount*?displayProperty=nameWithType> | It can turn a removed element back into an element of the list |
 
 > [!TIP]

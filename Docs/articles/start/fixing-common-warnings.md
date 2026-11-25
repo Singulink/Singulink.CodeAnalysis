@@ -20,10 +20,11 @@ ref LockGuard inPlace = ref CollectionsMarshal.AsSpan(guards)[0];
 
 #### Loop Over the Elements
 
-Declare a `ref` variable over a span of them.
+A `foreach` with a by-value variable copies each element, of a list and of an array alike. Declare a `ref` variable over a span of them.
 
 ```cs
-foreach (var guard in guards) guard.Dispose();            // SCA1030: each 'guard' is a copy
+foreach (var guard in guards) guard.Dispose();            // SCA1030: each 'guard' is a copy out of the list
+foreach (var guard in array) guard.Dispose();             // SCA1001: each 'guard' is a copy of an element
 
 foreach (ref var guard in CollectionsMarshal.AsSpan(guards)) guard.Dispose();   // OK
 foreach (ref var guard in array.AsSpan()) guard.Dispose();                      // OK
@@ -58,14 +59,13 @@ Take(_guard);                                             // SCA1003
 Take(NonCopyable.Move(ref _guard));                       // OK
 ```
 
-#### Variable That Is Used After It Was Handed On
+#### Variable That Is Used After It Was Handed Over
 
-Read what you need first. A variable is a new value where it is used for the last time,
-so the hand-over has to be that last use. The warning is at the use after the hand-over.
+Read what you need first. A variable is a new value where it is used for the last time, so the hand-off has to be that last use. The warning is at the use after the hand-off.
 
 ```cs
 _held = guard;                                            // a copy, since 'guard' is read again below
-Log(guard.Id);                                            // SCA1016: used after it was handed on
+Log(guard.Id);                                            // SCA1016: used after it was handed over
 
 int id = guard.Id;
 _held = guard;                                            // OK: the last use
@@ -101,15 +101,6 @@ struct Holding { LockGuard _guard; }                  // SCA1010: a struct that 
 
 [NonCopyable]
 struct MarkedHolding { LockGuard _guard; }            // OK
-```
-
-#### Loop Over an Array
-
-A `foreach` with a by-value variable copies each element. Loop with a `ref` variable over a span of the array:
-
-```cs
-foreach (LockGuard guard in array) guard.Dispose();         // SCA1001: each 'guard' is a copy
-foreach (ref LockGuard guard in array.AsSpan()) guard.Dispose();   // OK
 ```
 
 ## More Cases

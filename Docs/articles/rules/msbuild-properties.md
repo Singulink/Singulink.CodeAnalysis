@@ -8,7 +8,7 @@ Three MSBuild properties change what the analyzer takes for granted or how it re
 
 | Property | Default | Effect |
 |---|---|---|
-| `NonCopyableIncludeBuiltInTypes` | `true` in a project that references one of the two packages itself, `false` in one that only gets the analyzers through a library | Turns the built-in non-copyable types on or off |
+| `NonCopyableIncludeBuiltInTypes` | `true` in a project that references one of the two packages itself, `false` in one that only gets the analyzer through a library | Turns the [built-in non-copyable types](../guides/built-in-types.md) on or off |
 | `NonCopyableAllowImplicitMoves` | `true` | `false` turns off the move of a variable at its [last use](last-use.md) |
 | `NonCopyableErrorsAsWarnings` | `false` | `true` makes the analyzer report as under the current memory safety rules, in a project that turns on the [updated rules](updated-memory-safety-rules.md) |
 
@@ -16,13 +16,13 @@ All three are meant to be set in the project file or in a `Directory.Build.props
 
 ## Built-in Non-copyable Types
 
-The built-in non-copyable types are framework structs that a project may copy on purpose. **The analyzer checks them in a project that references one of the two packages itself, with a `PackageReference`, but not in a project that gets the analyzers only through a library.** A library that marks its guards brings the analyzers to every project that uses it, to keep those projects from copying the guards. That does not also give them warnings about their own <xref:System.Runtime.InteropServices.GCHandle> code.
+The [built-in non-copyable types](../guides/built-in-types.md) are structs of the framework that a project may copy on purpose. **The analyzer checks them in a project that references one of the two packages itself, with a `PackageReference`, but not in a project that gets the analyzer only through a library.** A library that marks its guards brings the analyzer to every project that uses it, to keep those projects from copying the guards. That does not also give them warnings about their own <xref:System.Runtime.InteropServices.GCHandle> code.
 
 Where the project has not set the property, the package decides. A project that sets the property gets the value that it sets:
 
 ```xml
 <PropertyGroup>
-  <!-- false: the built-in types are off here, unless a noncopyable line names one -->
+  <!-- false: the built-in non-copyable types are off here, unless a noncopyable line names one -->
   <NonCopyableIncludeBuiltInTypes>false</NonCopyableIncludeBuiltInTypes>
 </PropertyGroup>
 ```
@@ -34,7 +34,7 @@ Where the project has not set the property, the package decides. A project that 
 
 ## Turning Off the Move on the Last Use
 
-A local or a by-value parameter is a new value [where it is used for the last time](last-use.md). A project that wants every hand-over of a value written out turns that off:
+A local or a by-value parameter is a new value [where it is used for the last time](last-use.md). A project that wants every hand-off of a value written out turns that off:
 
 ```xml
 <PropertyGroup>
@@ -62,7 +62,7 @@ _held = NonCopyable.Move(ref guard);     // OK either way
 
 ## Errors as Warnings
 
-Under the [updated memory safety rules](updated-memory-safety-rules.md) of C#, the analyzer reports most rules as errors. A project that has those rules on, and wants the warnings that it gets under the current rules, sets this property:
+Under the [updated memory safety rules](updated-memory-safety-rules.md) of C#, the analyzer reports most rules as errors for a type that is unsafe to copy. A project that has those rules on, and wants the warnings that it gets under the current rules for those types as well, sets this property:
 
 ```xml
 <PropertyGroup>

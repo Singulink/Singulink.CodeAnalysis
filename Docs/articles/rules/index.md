@@ -25,6 +25,14 @@ A **new value** is one that nothing else holds yet: the result of a call, `new`,
 
 A struct marked `[NonCopyable]`, a type parameter so marked inside its generic, a generic struct with a non-copyable type argument such as `(LockGuard, bool)`, or a struct that a [symbol list entry](symbol-list-format.md) names as non-copyable. Such an entry is in the [built-in framework symbol list](framework-symbol-list.md) or in a symbol list file. See [Non-copyable Types](non-copyable-types.md#what-is-non-copyable).
 
+#### Unsafe to Copy
+
+A non-copyable type whose copy can break memory safety, as one that frees or unpins memory twice does: a struct marked `[NonCopyable(UnsafeToCopy = true)]` or named by an `unsafetocopy` line, a nullable, a tuple or a generic struct over one, and a type parameter marked `[NonCopyable]` whose mark does not say `UnsafeToCopy = false`. A struct that holds such a value in a field says so itself. Under the [updated memory safety rules](updated-memory-safety-rules.md) only a report about such a type is an error. See [Unsafe to Copy](../guides/marking-a-struct.md#unsafe-to-copy).
+
+#### Built-in Non-copyable Types
+
+The eleven structs of the framework that the [built-in framework symbol list](framework-symbol-list.md) makes non-copyable, such as <xref:System.Runtime.InteropServices.GCHandle> and <xref:System.Threading.SpinLock>. The analyzer checks them in a project that references one of the two packages itself, and not in one that gets the analyzer only through a library. See [Built-in Non-copyable Types](../guides/built-in-types.md).
+
 #### Container
 
 Any other type that mentions a non-copyable type, such as `LockGuard[]`, `List<LockGuard>` or `Task<LockGuard>`. Copying a container copies no element; the rules control how a value is read out of it. See [Non-copyable Types](non-copyable-types.md#containers).
@@ -94,11 +102,13 @@ A generic class or interface where no base type or interface hands out a value o
 
 #### Class That Clones Itself
 
-A class whose own code clones its objects field by field with <xref:System.Object.MemberwiseClone>, such as <xref:System.Text.Encoding>. A class that derives from one and holds a non-copyable value gets a warning on that field (SCA1009). A `clones` line of the symbol list names such a class. See [Symbol List Format](symbol-list-format.md#clones).
+A class whose own code clones its objects field by field with <xref:System.Object.MemberwiseClone>, such as <xref:System.Text.Encoding>. A class that derives from one and holds a non-copyable value gets a warning on that field (SCA1009). A `clones` line of the symbol list names such a class. See [Base Classes That Clone Themselves](declarations.md#base-classes-that-clone-themselves).
 
 #### Current and Updated Memory Safety Rules
 
-The two sets of rules of C# for unsafe code. Under the current rules, which a project has by default, every report of the analyzer is a warning. Under the updated memory safety rules, a preview feature of the compiler, most reports are errors, and only code in an unsafe context, such as an `unsafe` block or an `unsafe(...)` expression, can take one on itself. See [Updated Memory Safety Rules](updated-memory-safety-rules.md).
+The two sets of rules of C# for unsafe code. Under the current rules, which a project has by default, every report of the analyzer is a warning. Under the updated memory safety rules, a preview feature of the compiler, a report about a type that is [unsafe to copy](#unsafe-to-copy) is an error, and every other report is the same warning as under the current rules.
+
+Only code in an unsafe context, such as an `unsafe` block or an `unsafe(...)` expression, and a declaration marked `safe` or `unsafe` can take such an error on itself. See [Updated Memory Safety Rules](updated-memory-safety-rules.md).
 
 #### Temporary Copy
 

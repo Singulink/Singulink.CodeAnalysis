@@ -2,7 +2,7 @@
 
 # How the Attributes Are Recognized
 
-The analyzer reads six attributes. This page gives the exact rule for when a class is one of them, and the two mistakes in declaring one that it warns about. [Marking a Struct](../guides/marking-a-struct.md) shows how to use them.
+The analyzer reads six attributes. This page gives the exact rule for when a class is one of them, the mistakes in declaring one that it warns about, and what a mark of your own can say. [Marking a Struct](../guides/marking-a-struct.md) shows how to use them.
 
 ### At a Glance
 
@@ -19,11 +19,13 @@ The six attributes are <xref:Singulink.CodeAnalysis.NonCopyableAttribute>, <xref
 
 ## By Full Name
 
-The analyzer recognizes its attributes **by their full name: the namespace `Singulink.CodeAnalysis` and the name of the class, in any assembly, public or internal.** So a project can reference the attributes package, or declare the attributes itself in that namespace and reference only the analyzers package.
+The analyzer recognizes its attributes **by their full name: the namespace `Singulink.CodeAnalysis` and the name of the class, in any assembly, public or internal.** So a project can reference the attributes package, or declare the attributes itself in that namespace and reference only the analyzer package.
 
 This works across assemblies. A struct that a referenced assembly marks with its own internal attribute is non-copyable in your code as well, and the same holds for the other five attributes.
 
-## The Namespace Is Part of the Name
+The analyzer reads the arguments of an attribute and never calls it. So a `NonCopyableAttribute` that a project declares itself needs only a settable `bool` property named `UnsafeToCopy` for `UnsafeToCopy = true` or `UnsafeToCopy = false` to count. The analyzer also reads an argument for a `bool` parameter of its constructor named `unsafeToCopy`, in any case. Without either the value cannot be written, and the project's structs and type parameters have the default: see [Marking a Struct](../guides/marking-a-struct.md#unsafe-to-copy).
+
+## Namespace Is Part of the Name
 
 A class called `KeptAttribute` or `BorrowedAttribute` in any other namespace belongs to something else, another tool's attribute perhaps, and has no effect here. No other namespace is recognized, `Microsoft.CodeAnalysis` included.
 
@@ -41,7 +43,7 @@ namespace Contoso.Tools;
 internal sealed class NonCopyableAttribute : Attribute;   // SCA1045: the analyzer does not read this one
 ```
 
-## The Suffix Is Part of the Name
+## Suffix Is Part of the Name
 
 C# lets you write `[NonCopyable]` for a class named either `NonCopyableAttribute` or `NonCopyable`. The analyzer recognizes only the first. A class named `NonCopyable` that derives from <xref:System.Attribute> gets a warning in every namespace, `Singulink.CodeAnalysis` included (SCA1045): rename it to `NonCopyableAttribute`.
 
@@ -81,8 +83,33 @@ internal sealed class NonCopyableAttribute : Attribute;
 
 ## Attributes That Derive From NonCopyableAttribute
 
-**A class that derives from `NonCopyableAttribute` marks a struct just as `NonCopyableAttribute` does.** `sealed class LockGuardAttribute : NonCopyableAttribute` gives the mark a name from your domain. It marks a struct and a type parameter. On a struct of a referenced assembly, it also marks when its base class has that name in any namespace. The attribute in the package is sealed, so this is for a project that declares its own `NonCopyableAttribute` and leaves it unsealed.
+**A class that derives from `NonCopyableAttribute` marks a struct just as `NonCopyableAttribute` does.** `sealed class LockGuardAttribute : NonCopyableAttribute` gives the mark a name from your domain, and marks a struct and a type parameter. On a struct of a referenced assembly, it also marks when its base class has that name in any namespace. The attribute in the package is sealed, so this is for a project that declares its own `NonCopyableAttribute` and leaves it unsealed.
 
 This holds for `NonCopyableAttribute` only. A class that derives from one of the other five is not recognized, which means more warnings and not fewer.
+
+#### What a Derived Mark Can Say
+
+The analyzer reads `UnsafeToCopy` where a mark is applied, and never the code of the attribute class. Metadata shows the arguments of a mark, so this works for a struct of a referenced assembly as well. A derived mark says what its use says:
+
+| Written | Read as |
+|---|---|
+| `[LockGuard]` | No value: plain non-copyable on a struct, the default on a type parameter |
+| `[NativeHandle(UnsafeToCopy = true)]` | Unsafe to copy |
+| `[NativeHandle(unsafeToCopy: true)]` or `[NativeHandle(true)]`, for a `bool` parameter of the constructor named `unsafeToCopy` | Unsafe to copy |
+
+A mark that sets the value in its own code is read as if it did not set it. That is a constructor that sets `UnsafeToCopy = true`, an initializer of the property, or `: base(unsafeToCopy: true)`, so a struct marked with it counts as plain non-copyable.
+
+> [!WARNING]
+> **Such code gets a warning where the attribute class is declared (SCA1049).** Take the value as a `bool` parameter named `unsafeToCopy` and set the property from it, or pass the parameter on to the base class:
+>
+> ```cs
+> internal sealed class NativeHandleAttribute : NonCopyableAttribute
+> {
+>     public NativeHandleAttribute(bool unsafeToCopy) { UnsafeToCopy = unsafeToCopy; }
+> }
+>
+> [NativeHandle(unsafeToCopy: true)]
+> public struct NativeBuffer { }   // unsafe to copy
+> ```
 
 </div>

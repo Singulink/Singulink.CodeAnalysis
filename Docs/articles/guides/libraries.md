@@ -7,7 +7,7 @@ If your library's public API has non-copyable structs, let the analyzer reach th
 ### At a Glance
 
 - **Reference the analyzers package with `PrivateAssets="none"`,** or reference `Singulink.CodeAnalysis` as a normal reference: either one passes the analyzer on.
-- **The analyzer then reaches every project down the chain,** and checks there only what your library marked. In those projects, it does not check the built-in framework structs.
+- **The analyzer then reaches every project down the chain,** and checks there only what your library marked. In those projects, it does not check the [built-in non-copyable types](built-in-types.md).
 - **A library that keeps the analyzer to itself** leaves the projects that use it without the analyzer, and a project that references both is told about it (SCA1025).
 - **A [symbol list file](symbol-list.md) can ship with the library,** for the members of its own generics that are not marked, for its own members that take a value only where they return true, and for each class of the library that clones itself.
 
@@ -27,7 +27,9 @@ The .NET SDK (checked with the .NET 10 and 11 SDKs) applies the analyzers of eve
 
 #### What Your Users See
 
-In a project that only gets the analyzer through your library, the analyzer checks the types that your library marked, and it does not check the [built-in types](built-in-types.md). See [Why Am I Seeing This?](../start/why-am-i-seeing-this.md), which is the page your users land on.
+In a project that only gets the analyzer through your library, the analyzer checks the types that your library marked, and it does not check the [built-in non-copyable types](built-in-types.md). See [Why Am I Seeing This?](../start/why-am-i-seeing-this.md), which is the page your users land on.
+
+Mark a struct `[NonCopyable(UnsafeToCopy = true)]` where a copy of it can free, unpin or reach memory twice, or after it is gone: see [Unsafe to Copy](marking-a-struct.md#unsafe-to-copy). Your users get the same warnings either way under the current memory safety rules of C#. A project that turns on the [updated memory safety rules](../rules/updated-memory-safety-rules.md) gets an error for a copy of such a struct, and the ordinary warning for a copy of any other.
 
 > [!CAUTION]
 > **A library that keeps the analyzer to itself leaves the projects that use it without the analyzer.** Their code can copy your structs where it implements one of your interfaces, makes a delegate that you call or reads an object of one of your classes, and neither your library nor a project further down the chain can see that. A project that references both your library and such an assembly gets [SCA1025](../diagnostics/sca1025.md) for it, once for each such assembly: a warning in a project that added the analyzer itself, and a message in one that got it only through a library.
@@ -70,7 +72,7 @@ The `AdditionalFiles` line makes the library read its own file, wherever the fil
 - a `borrows` line for a member that the built-in framework symbol list names with `borrowswhen` or with no marker, and the entry of that list applies;
 - a `borrowswhen` line with an outcome that the analyzer does not know, which is taken without that outcome.
 
-For the project that uses the library, the file is a symbol list file like its own: all symbol list files are merged, with each other and with the [built-in framework symbol list](../rules/framework-symbol-list.md). A library that ships a symbol list file also [passes the analyzer on](#passing-the-analyzer-on), since the list is of no use without it.
+For the project that uses the library, the file is a symbol list file like its own: all symbol list files are merged, with each other and with the [built-in framework symbol list](../rules/framework-symbol-list.md). A `copyable` line is the one exception: it counts in the library's own build and does nothing for the projects that use the library, since each project decides for itself which structs it copies on purpose. A library that ships a symbol list file also [passes the analyzer on](#passing-the-analyzer-on), since the list is of no use without it.
 
 #### A Class That Clones Itself
 

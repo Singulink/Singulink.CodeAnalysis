@@ -9,7 +9,7 @@ The rules for values come from the `RS0042` rule ("Do not copy value") of Roslyn
 | Topic | This analyzer | RS0042 |
 |---|---|---|
 | IDs | One ID per kind of warning | One ID |
-| Severity | A warning, and under the [updated memory safety rules](updated-memory-safety-rules.md) of C# an error outside an unsafe context | A warning |
+| Severity | A warning, and under the [updated memory safety rules](updated-memory-safety-rules.md) of C# an error for a type that is unsafe to copy, outside an unsafe context and at a declaration that is not marked `safe` or `unsafe` | A warning |
 | Generic structs | A generic struct over a non-copyable type is a non-copyable type | Knows only <xref:System.Nullable`1>, which it forbids altogether, and misses copies of tuples and value tasks |
 | Generic code | Type parameters can be marked, generics that are not marked get a warning unless they are on the [symbol list](symbol-list-format.md), and containers are followed through conversions | Does not look at generic code |
 | Value tasks | Awaiting a stored <xref:System.Threading.Tasks.ValueTask`1> gets a warning | Treats it as a new value |
@@ -33,7 +33,7 @@ The rules for values come from the `RS0042` rule ("Do not copy value") of Roslyn
 | Nullable returns | A local or a by-value parameter can be returned as a <xref:System.Nullable`1> of its type |  Not described |
 | With | `with` on a stored value gets one warning, and on a new value it is allowed | Warns three times about every `with` |
 | Records and clones | A field of a non-copyable type in a record, and a <xref:System.Object.MemberwiseClone> that copies one, get a warning |  Not described |
-| Framework structs | <xref:System.Threading.SpinLock> and <xref:System.Runtime.InteropServices.GCHandle> are entries of the [built-in framework symbol list](framework-symbol-list.md), with other framework structs, and a project can leave them all out |  Not described |
+| Built-in non-copyable types | <xref:System.Threading.SpinLock>, <xref:System.Runtime.InteropServices.GCHandle> and other structs of the framework are [built-in non-copyable types](../guides/built-in-types.md), and a project can leave them all out |  Not described |
 | Arglist | A non-copyable value passed in an `__arglist` gets a warning | Fails on it |
 
 </div>

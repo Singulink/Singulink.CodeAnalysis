@@ -50,6 +50,9 @@
   - name: "SCA1016: Use After a Hand-off"
     href: sca1016.md
 
+  - name: "SCA1017: Field That Is Unsafe to Copy in a Struct That Does Not Say So"
+    href: sca1017.md
+
 - name: Generic and Unchecked Code
   items:
   - name: "SCA1020: Member of an Unmarked Generic Not on the Symbol List"
@@ -69,6 +72,9 @@
 
   - name: "SCA1025: Unchecked Assembly That Uses a Non-copyable Type"
     href: sca1025.md
+
+  - name: "SCA1026: Type That Is Unsafe to Copy for a Type Parameter That Does Not Take One"
+    href: sca1026.md
 
 - name: Containers
   items:
@@ -112,3 +118,6 @@
 
   - name: "SCA1048: Member Nested Too Deeply"
     href: sca1048.md
+
+  - name: "SCA1049: UnsafeToCopy Set in the Code of a Mark"
+    href: sca1049.md

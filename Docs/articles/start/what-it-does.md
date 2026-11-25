@@ -4,13 +4,13 @@
 
 Singulink.CodeAnalysis is a set of Roslyn analyzers that warn about every place where C# code copies a struct that must not be copied. This page shows the problem it solves, what a warning looks like and what the analyzer promises.
 
-### The Problem
+### Why a Copy Is a Problem
 
 Some structs own something: a lock guard holds a lock, a handle owns a native handle, a pooled buffer owns an array rented from a pool. C# copies a struct every time it is assigned or passed by value, and nothing in the language stops that. Copy such a struct, and two instances own the same thing:
 
 ```cs
 var guard = myLock.Enter();     // one guard, which holds the lock
-var copy = guard;               // now two guards hold the same lock
+var copy = guard;               // two guards hold the same lock
 
 guard.Dispose();                // SCA1016: releases the lock, and 'copy' still holds it
 copy.Dispose();                 // releases it again
@@ -54,7 +54,7 @@ LockGuard first = guards[0];            // SCA1030: a copy out of the list
 LockGuard[] all = guards.ToArray();     // SCA1020: ToArray copies every element
 ```
 
-It checks only the types that are marked. In a project that references the package directly, it also checks some framework structs, such as <xref:System.Runtime.InteropServices.GCHandle> (see [Built-in Types](../guides/built-in-types.md)). It has no style or opinion rules. [New and Stored Values](new-and-stored-values.md) explains why some of these lines are fine and others are not.
+It checks only the types that are marked. In a project that references the package directly, it also checks the [built-in non-copyable types](../guides/built-in-types.md), a few structs of the framework such as <xref:System.Runtime.InteropServices.GCHandle>. It has no style or opinion rules. [New and Stored Values](new-and-stored-values.md) explains why some of these lines are fine and others are not.
 
 ## What a Warning Looks Like
 
@@ -68,17 +68,17 @@ place, use a new value, or move the stored value out first with NonCopyable.Move
 The ID links to an article on this site, with an example and the ways to fix it. Every ID is a warning by default, and a project can change the severity of any of them. These pages say "warning" whatever the severity is set to.
 
 > [!NOTE]
-> **A project that turns on the [updated memory safety rules](../rules/updated-memory-safety-rules.md) of C#** gets most of these reports as errors, which only code in an unsafe context can take on itself.
+> **Most projects use the current rules of C#, and get only warnings.** A project that turns on the [updated memory safety rules](../rules/updated-memory-safety-rules.md) gets an error for a report about a type that is unsafe to copy, one whose copy can free or reach memory twice. Only code in an unsafe context and a declaration marked `safe` or `unsafe` can take such an error on itself. Every other non-copyable type gets the same warnings as under the current rules.
 
 The IDs come in five groups:
 
 | IDs | What they warn about |
 |---|---|
 | SCA1001 to SCA1008 | Copies, such as by assignment, by return, by passing on, by boxing and by cloning |
-| SCA1010 to SCA1016 | Declarations that copy by themselves, such as an auto-property or an async member of a non-copyable struct, and a variable that is used after its value was handed over |
-| SCA1020 to SCA1025 | Generic code, containers that are converted to a type that hides what they hold, and code that was not built with the analyzer |
+| SCA1010 to SCA1017 | Declarations that copy by themselves, such as an auto-property or an async member of a non-copyable struct, a variable that is used after its value was handed over, and a struct that holds a value that is unsafe to copy and does not say so |
+| SCA1020 to SCA1026 | Generic code, containers that are converted to a type that hides what they hold, and code that was not built with the analyzer |
 | SCA1030 to SCA1033 | Containers: reading a value out of a list or a task that still holds it, returning or keeping one that is not yours |
-| SCA1040 to SCA1048 | Marks and [symbol list files](../guides/symbol-list.md) that are used wrongly, and code that the analyzer could not check |
+| SCA1040 to SCA1049 | Marks and [symbol list files](../guides/symbol-list.md) that are used wrongly, and code that the analyzer could not check |
 
 Every ID is in [All Diagnostics](../all-diagnostics.md).
 
@@ -100,13 +100,13 @@ A `readonly struct` cannot do that. A struct that your project takes out of the 
 
 ## What It Cannot See
 
-Ordinary C# code that is built with the analyzers gets a warning wherever it would copy a non-copyable value, even when the copy is made inside the framework or another library. What is left takes unsafe code, reflection, an API used against its documentation, or something that you vouched for. [What Is Not Covered](../rules/not-covered.md) goes through each.
+Ordinary C# code that is built with the analyzer gets a warning wherever it would copy a non-copyable value, even when the copy is made inside the framework or another library. What is left takes unsafe code, reflection, an API used against its documentation, or something that you vouched for. [What Is Not Covered](../rules/not-covered.md) goes through each.
 
 ## Next Steps
 
 Here is where to go from here:
 
-- [Getting Started](getting-started.md) - Install the analyzers and mark your first struct.
+- [Getting Started](getting-started.md) - Install the analyzer and mark your first struct.
 - [New and Stored Values](new-and-stored-values.md) - The one idea behind every warning.
 - [Why Am I Seeing This?](why-am-i-seeing-this.md) - If the warnings came with a library that you use.
 

@@ -54,6 +54,6 @@ foreach (LockGuard g in holder.GetGuardsFor("a")) { }      // SCA1030: a read fr
 holder.GetGuardsFor("a").Add(myLock.Enter());              // OK: used in place
 ```
 
-- **`[Borrowed]` is kept like the other marks:** see [Borrowed Mark](keeping-marks.md#borrowed-mark).
+Overrides and delegates must keep `[Borrowed]` like the other marks: see [Borrowed Mark](keeping-marks.md#borrowed-mark).
 
 </div>

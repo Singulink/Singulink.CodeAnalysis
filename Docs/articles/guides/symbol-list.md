@@ -4,31 +4,37 @@
 
 The symbol list tells the analyzer what it cannot see for itself in code that you cannot mark: which members of a library's generics make no copy, which structs are non-copyable, which assemblies to trust. It is made of the [built-in framework symbol list](../rules/framework-symbol-list.md), which the analyzer ships for the framework, and the symbol list files of the project. This page shows where the files go and the lines that you will use most.
 
-> [!NOTE]
-> **Most projects never write a symbol list file.** The framework is covered by the framework symbol list: its collections, tasks, spans, channels and the rest work with no file. A member that would copy or compare the values, such as `ToArray`, is left off on purpose, and using one with a non-copyable value gets a real warning. Your own code says what it needs with attributes, and so does a library that was built with the analyzers. A file is only for code that you cannot mark, and in that case the warning's message gives the line to add.
+### At a Glance
 
-You need a symbol list file when:
+- **A file named `NonCopyableSymbols.txt`** in the folder of the project is read with no further setup.
+- **One line per entry:** the documentation comment ID of a member, a static field or a type, with an optional marker after a semicolon.
+- **The message of SCA1020** gives the line to add.
+- **The analyzer ships the [built-in framework symbol list](../rules/framework-symbol-list.md) for the framework,** and all symbol list files are merged with it.
+
+> [!NOTE]
+> **Most projects never write a symbol list file.** The framework symbol list covers the framework's collections, tasks, spans, channels and the rest, and leaves off on purpose a member that would copy or compare the values, such as `ToArray`, which gets a real warning. Your own code says what it needs with attributes, and so does a library that was built with the analyzer. A file is only for code that you cannot mark, and the warning's message then gives the line to add.
+
+## When You Need a File
+
+A file is for one of these cases. Where a warning asks for a line, its message gives it:
 
 | Situation | Warning | The line, from the message |
 |---|---|---|
 | A generic of a library that is not marked is used with a non-copyable type, and the member makes no copy | [SCA1020](../diagnostics/sca1020.md) | ``M:ThirdParty.Bag`1.Add(`0)`` |
-| A member of an assembly that was not built with the analyzers takes a non-copyable value by reference or in a container, and keeps nothing | [SCA1024](../diagnostics/sca1024.md) | `M:ThirdParty.Leases.Inspect(ThirdParty.Lease@);borrows` |
+| A static field of such a generic is read or written, and the static initializers of its type make no copy | [SCA1020](../diagnostics/sca1020.md) | ``F:ThirdParty.Cache`1.Shared`` |
+| A member of an assembly that was not built with the analyzer takes a non-copyable value by reference or in a container, and keeps nothing | [SCA1024](../diagnostics/sca1024.md) | `M:ThirdParty.Leases.Inspect(ThirdParty.Lease@);borrows` |
 | Such an assembly hands out a container that nothing else holds | [SCA1030](../diagnostics/sca1030.md) | `M:ThirdParty.Leases.Create;new` |
-| An assembly that uses your structs cannot be built with the analyzers, and you vouch for it | [SCA1025](../diagnostics/sca1025.md) | `A:Contoso.Plugins;trusted` |
+| An assembly that uses your structs cannot be built with the analyzer, and you vouch for it | [SCA1025](../diagnostics/sca1025.md) | `A:Contoso.Plugins;trusted` |
 | A member takes a value only where it returns true, and the caller keeps the value where it returns false | [SCA1016](../diagnostics/sca1016.md), at the use where the member returned false | ``M:ThirdParty.Pool`1.TryReturn(`0);borrowswhen=false`` |
 | A struct that cannot be marked in its source must be non-copyable, or one that is non-copyable must not be | None | `T:ThirdParty.Handle;noncopyable`, `T:System.Runtime.InteropServices.GCHandle;copyable` |
+| A copy of such a struct can break memory safety, and its source does not say so | None | `T:ThirdParty.PinnedBlock;unsafetocopy` |
 | A base class of a library clones itself with `MemberwiseClone`, and a class of yours that derives from it holds a non-copyable value | None: you find it in the library's documentation or code | `T:Contoso.Document;clones` |
-
-### At a Glance
-
-- **A file named `NonCopyableSymbols.txt`** in the folder of the project is read with no further setup.
-- **One line per entry:** the documentation comment ID of a member or a type, with an optional marker after a semicolon.
-- **The message of SCA1020** gives the line to add.
-- **The analyzer ships the [built-in framework symbol list](../rules/framework-symbol-list.md) for the framework,** and all symbol list files are merged with it.
 
 ## Symbol List Files
 
-A project reads its own symbol list files and those that come with the libraries it uses, treats them all alike, and merges them with the [built-in framework symbol list](../rules/framework-symbol-list.md). Where two files disagree, the line that claims less applies: a project's file can tighten a line that came with a library, but not loosen it. The exceptions are `copyable` and `clones=complete` lines: see [Entries That Disagree](../rules/symbol-list-format.md#entries-that-disagree).
+A project reads its own symbol list files and those that come with the libraries it uses, and merges them with the [built-in framework symbol list](../rules/framework-symbol-list.md). Where two files disagree, the line that claims less applies: a project's file can tighten a line that came with a library, but not loosen it. The exceptions are `copyable` and `clones=complete` lines: see [Entries That Disagree](../rules/symbol-list-format.md#entries-that-disagree).
+
+A `copyable` line counts only in your project's own file. Whether a struct may be copied is the decision of the project that copies it, so a library's `copyable` line does nothing in the projects that use the library.
 
 A project adds files named `NonCopyableSymbols.txt` or `NonCopyableSymbols.<name>.txt`, whatever the case of the name. Such a file in the folder of the project is read with no further setup. A file in another folder is added as an additional file:
 
@@ -61,15 +67,30 @@ M:ThirdParty.Bag`1.Take;new
 
 Entries are exact per overload, with no wildcard. Your own generics mark their type parameters instead: see [Marking a Type Parameter](marking-a-type-parameter.md).
 
+## Adding a Static Field of a Library
+
+Reading or writing a static field of a generic type runs the static constructor and the static field initializers of the type, so it gets the same warning as a member, with a line that starts with `F:`:
+
+```text
+warning SCA1020: Reading or writing static field 'Cache<T>.Shared' runs the static constructor and the static field initializers of
+its type, which may copy non-copyable type 'LockGuard': type parameter 'T' is not marked [NonCopyable] and the field is not on the
+symbol list. Mark the type parameter, add 'F:ThirdParty.Cache`1.Shared' to a NonCopyableSymbols.txt file if that code makes no copy,
+or avoid the use.
+```
+
+Read the static constructor and the static field initializers of the type, and add the line where they make no copy of a value of its type arguments. The line takes no marker. The framework's own static fields, such as `ImmutableArray<T>.Empty`, are on the [built-in framework symbol list](../rules/framework-symbol-list.md#static-fields-of-generic-types) already. See [Static Fields](../rules/symbol-list-format.md#static-fields).
+
 ## Lines You Will Use Most
 
 | Line | Says |
 |---|---|
 | ``M:ThirdParty.Bag`1.Add(`0)`` | The member makes no copy. What it returns is new if the object and the arguments were new, and a copy if they were stored |
 | ``M:ThirdParty.Bag`1.Take;new`` | What the member hands out is always a new value, as for a member that takes it out |
+| ``F:ThirdParty.Cache`1.Shared`` | The static initializers of the field's type make no copy, so reading or writing the field is safe |
 | `M:ThirdParty.Native.GetAddress(ThirdParty.Handle);borrows` | The member reads a stored value during the call and keeps nothing of it |
 | ``M:ThirdParty.Pool`1.TryReturn(`0);borrowswhen=false`` | The member keeps nothing of the value where it returns false |
 | `T:ThirdParty.Handle;noncopyable` | The struct is non-copyable, though its source cannot be marked |
+| `T:ThirdParty.PinnedBlock;unsafetocopy` | As `noncopyable`, and a copy of the struct can break memory safety: see [Unsafe to Copy](marking-a-struct.md#unsafe-to-copy) |
 | `T:System.Runtime.InteropServices.GCHandle;copyable` | The struct is an ordinary struct for this project |
 | `A:Contoso.Plugins;trusted` | The assembly was not built with the analyzer, and makes no copy of the values that it gets at |
 | `T:Contoso.Document;clones` | The class clones its objects field by field, so a class that derives from it gets a warning for each field that holds a non-copyable value |
@@ -114,7 +135,7 @@ The line may stand in the project's symbol list file or in one that comes with t
 
 Write the type line as `clones=complete` only where the lines name every member that clones the object or hands it on. Such a line counts from any file, and a plain `clones` line elsewhere does not undo it: see [Clones](../rules/symbol-list-format.md#clones).
 
-A class of yours that derives from a class of a library that was not built with the analyzers gets the same warning on a field until a line says what the base class does. Where you know that the base class never clones its objects, say so with `T:Contoso.Document;clones=none`: see [SCA1009](../diagnostics/sca1009.md#a-base-class-that-is-not-known).
+A class of yours that derives from a class of a library that was not built with the analyzer gets the same warning on a field until a line says what the base class does. Where you know that the base class never clones its objects, say so with `T:Contoso.Document;clones=none`: see [SCA1009](../diagnostics/sca1009.md#a-base-class-that-is-not-known).
 
 ## Code Not Built With the Analyzer
 
@@ -128,6 +149,6 @@ See [Code Not Built With the Analyzer](../rules/unchecked-code.md).
 
 ## Built-in Non-copyable Types
 
-The [built-in framework symbol list](../rules/framework-symbol-list.md) makes some framework structs non-copyable, such as <xref:System.Runtime.InteropServices.GCHandle> and <xref:System.Threading.SpinLock>. The analyzer checks them in a project that references one of the two packages directly, but not in a project that gets the analyzers only through a library. See [Built-in Types](built-in-types.md).
+The [built-in framework symbol list](../rules/framework-symbol-list.md) makes some structs of the framework non-copyable, the built-in non-copyable types, such as <xref:System.Runtime.InteropServices.GCHandle> and <xref:System.Threading.SpinLock>. The analyzer checks them in a project that references one of the two packages directly, but not in a project that gets the analyzer only through a library. See [Built-in Non-copyable Types](built-in-types.md).
 
 </div>

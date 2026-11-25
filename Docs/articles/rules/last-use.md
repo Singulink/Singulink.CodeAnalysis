@@ -47,7 +47,7 @@ _guard = pair.guard;                     // OK: the last use of 'pair'
 
 #### Locals That Hold a Container
 
-A local that holds a container of a reference type, such as a `Task<LockGuard>` or a `List<LockGuard>`, has to meet a stricter test. It is a new container at its last use only if it passes the **stricter** of the two tests of [a local that the method owns](owned-locals.md). That test is the [first list](owned-locals.md#what-any-local-may-do), whatever the local holds. The extra uses that a local of guards may have and still be returned do not count here.
+A local that holds a container of a reference type, such as a `Task<LockGuard>` or a `List<LockGuard>`, has to meet a stricter test. It is a new container at its last use only if it passes the **stricter** of the two tests of [a local that the method owns](owned-locals.md): the [first list](owned-locals.md#what-any-local-may-do), whatever the local holds. The extra uses that a local of guards may have and still be returned do not count here.
 
 On top of those uses, the local may be awaited, and a view of it may be awaited or read where it is made, as in `await pending.ConfigureAwait(false)`. At its last use, each of these then reads from a new container:
 

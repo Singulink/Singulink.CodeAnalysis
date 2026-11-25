@@ -2,14 +2,14 @@
 
 # Getting Started
 
-This page adds the analyzers to a project, marks a first struct, shows the everyday code that is fine, and walks through a first warning.
+This page adds the analyzer to a project, marks a first struct, shows the everyday code that is fine, and walks through a first warning.
 
 ### Requirements
 
-The analyzers run inside the C# compiler, so what counts is the SDK that builds the project:
+The analyzer runs inside the C# compiler, so what counts is the SDK that builds the project:
 
 > [!IMPORTANT]
-> The analyzers need a C# project built with the .NET 10 SDK or later. They do not load in an older compiler. The target framework of the project does not matter.
+> The analyzer needs a C# project built with the .NET 10 SDK or later. It does not load in an older compiler. The target framework of the project does not matter.
 
 ## Installing
 
@@ -17,8 +17,8 @@ There are two packages:
 
 | Package | Contents |
 |---|---|
-| `Singulink.CodeAnalysis` | The attributes, such as <xref:Singulink.CodeAnalysis.NonCopyableAttribute>, and the <xref:Singulink.CodeAnalysis.NonCopyable> helpers. It brings the analyzers with it. |
-| `Singulink.CodeAnalysis.Analyzers` | The analyzers only, with no runtime assembly and no dependencies. It adds nothing to your build output. |
+| `Singulink.CodeAnalysis` | The attributes, such as <xref:Singulink.CodeAnalysis.NonCopyableAttribute>, and the <xref:Singulink.CodeAnalysis.NonCopyable> helpers. It brings the analyzer with it. |
+| `Singulink.CodeAnalysis.Analyzers` | The analyzer only, with no runtime assembly and no dependencies. It adds nothing to your build output. |
 
 Most projects install the first one:
 
@@ -32,9 +32,9 @@ A project that declares the attributes itself, to have no runtime dependency, in
 <PackageReference Include="Singulink.CodeAnalysis.Analyzers" Version="1.0.0" PrivateAssets="all" />
 ```
 
-The analyzers package is a development dependency, so `dotnet add package` and Visual Studio add it with `PrivateAssets="all"`, which keeps it to your own project. A library that wants the projects that use it checked too passes the analyzers on to them: see [Sharing Your Library](../guides/libraries.md).
+The analyzers package is a development dependency, so `dotnet add package` and Visual Studio add it with `PrivateAssets="all"`, which keeps it to your own project. A library that wants the projects that use it checked too passes the analyzer on to them: see [Sharing Your Library](../guides/libraries.md).
 
-In a project that references one of the packages directly, the analyzers also check some framework structs, such as <xref:System.Threading.SpinLock>: see [Built-in Types](../guides/built-in-types.md).
+In a project that references one of the packages directly, the analyzer also checks the [built-in non-copyable types](../guides/built-in-types.md), a few structs of the framework such as <xref:System.Threading.SpinLock>.
 
 ## Marking a First Struct
 
@@ -58,7 +58,7 @@ public struct LockGuard : IDisposable
 }
 ```
 
-From now on, you get a warning for every copy of a `LockGuard`, even where a collection, a task or generic code makes it. `[NonCopyable]` is one of six attributes; the others are for library authors, and [Marking a Struct](../guides/marking-a-struct.md#six-attributes) gives them all. There is nothing else to configure: the framework's collections and tasks are covered without any setup.
+Every copy of a `LockGuard` then gets a warning, even where a collection, a task or generic code makes it. `[NonCopyable]` is one of six attributes; the others are for library authors, and [Marking a Struct](../guides/marking-a-struct.md#six-attributes) gives them all. There is nothing else to configure: the framework's collections and tasks are covered without any setup.
 
 ## Using a Guard
 

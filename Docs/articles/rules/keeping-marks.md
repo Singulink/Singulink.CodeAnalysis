@@ -9,6 +9,7 @@ A mark is a promise to the callers of a member, and they may call it through an 
 | Mark | What stands for the member must |
 |---|---|
 | `[NonCopyable]` on a type parameter | Mark every type parameter that the member marks, and pass a marked type parameter only to one that is marked |
+| `UnsafeToCopy = false` on the mark of a type parameter | Not say it where the member's type parameter does not |
 | `[RequiresCopyable]` | Not have it where the member does not |
 | `[return: Borrowed]` | Not have it where the member does not |
 | `[Kept]` | Not have it where the member's parameter is not assumed to keep |
@@ -20,6 +21,7 @@ A mark is a promise to the callers of a member, and they may call it through an 
 
 - **A type parameter that is passed to a marked type parameter** of a base class or an interface must be marked too.
 - **An override or an implementation** must mark every type parameter that the member it overrides or implements marks, and must not be `[RequiresCopyable]` if that member is not.
+- **`UnsafeToCopy = false`** may stand on a type parameter of an override or an implementation only where the type parameter of the member that it overrides or implements says it too, or is not marked. A call through a member whose type parameter is marked can bind a type that is unsafe to copy, which the override's body is checked for with warnings only. A call through one whose type parameter is not marked gets a warning with any non-copyable type, so the override may mark its type parameter there, with `UnsafeToCopy = false` or without, and a plain mark over `UnsafeToCopy = false` is fine. The two parts of a partial method share the marks of their type parameters, so they cannot differ.
 - **A member that a class inherits and uses to implement an interface** follows the same rules, and the warning is on the class that brings the interface in.
 - **A replaced implementation** follows the same rules. That is an implementation in a derived class that names the interface again, with a member of its own or with one that hides an inherited member with `new`.
 - **A default implementation that a derived interface gives** for a member of its base interface follows the same rules as well.
@@ -30,6 +32,20 @@ interface IHolder<[NonCopyable] T> { void Hold(T value); }
 class Holder<T> : IHolder<T>                      // SCA1040: 'T' is passed to a marked type parameter
 {
     public void Hold(T value) { }
+}
+
+interface IStore { void Put<[NonCopyable] T>(ref T value); }
+
+class Store : IStore
+{
+    public void Put<[NonCopyable(UnsafeToCopy = false)] T>(ref T value) { }   // SCA1040: IStore.Put takes any type
+}
+
+interface IQueue { void Add<T>(ref T value); }
+
+class Queue : IQueue
+{
+    public void Add<[NonCopyable(UnsafeToCopy = false)] T>(ref T value) { }   // OK: a call of IQueue.Add with a guard gets SCA1020
 }
 ```
 

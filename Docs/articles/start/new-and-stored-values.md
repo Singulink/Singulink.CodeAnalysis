@@ -4,19 +4,9 @@
 
 Every warning of the analyzer comes down to one question: does something else still hold this value? This page explains the two answers. With them you can read most warnings and see how to fix them.
 
-### Problem in One Example
+### Two Kinds of Value
 
-A struct is copied every time it is assigned or passed by value. For most structs that does no harm. For a lock guard it does:
-
-```cs
-var guard = myLock.Enter();     // one guard, which holds the lock
-var copy = guard;               // now two guards hold the same lock
-
-guard.Dispose();                // SCA1016: releases the lock, and 'copy' still holds it
-copy.Dispose();                 // releases it again
-```
-
-Mark the struct with `[NonCopyable]` and you get a warning for every such copy. To tell a copy from a legitimate handover, the analyzer sorts every value into one of two kinds: **new** or **stored**.
+A struct is copied every time it is assigned or passed by value. For most structs that does no harm, but a copy of a lock guard leaves two guards that hold the same lock, as [What the Analyzer Does](what-it-does.md#why-a-copy-is-a-problem) shows. To tell such a copy from a legitimate hand-off, the analyzer sorts every value into one of two kinds: **new** or **stored**.
 
 ## New Values
 
@@ -72,7 +62,7 @@ _held = guard;                      // a copy, since 'guard' is read again below
 Log(guard.Id);                      // SCA1016: 'guard' is used after it was handed over
 ```
 
-The fix is usually to read what you need first, so that the handover is the last use:
+The fix is usually to read what you need first, so that the hand-off is the last use:
 
 ```cs
 var guard = myLock.Enter();
@@ -91,7 +81,7 @@ Some variables never become new at their last use, because something else can st
 The exact rule, with every case: [Last Use of a Variable](../rules/last-use.md).
 
 > [!TIP]
-> Where the handover cannot be the last use, as for a field, an array element, or a variable that is used again afterwards, move the value out with <xref:Singulink.CodeAnalysis.NonCopyable.Move*?displayProperty=nameWithType>. It hands the value over and leaves the default value behind. See [Moving Values](../guides/moving-values.md).
+> Where the hand-off cannot be the last use, as for a field, an array element, or a variable that is used again afterwards, move the value out with <xref:Singulink.CodeAnalysis.NonCopyable.Move*?displayProperty=nameWithType>. It hands the value over and leaves the default value behind. See [Moving Values](../guides/moving-values.md).
 
 ## Containers
 

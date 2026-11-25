@@ -19,7 +19,7 @@ catch { guard.Dispose(); throw; }
 
 ## Why the Catch Matters
 
-A `catch` that disposes the guard is a later use of the guard. So a handover inside the `try` is not the guard's last use, and is a copy. The warning is at the use in the `catch`:
+A `catch` that disposes the guard is a later use of the guard. So a hand-off inside the `try` is not the guard's last use, and is a copy. The warning is at the use in the `catch`:
 
 ```cs
 LockGuard guard = myLock.Enter();

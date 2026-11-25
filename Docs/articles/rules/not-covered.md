@@ -2,7 +2,7 @@
 
 # What Is Not Covered
 
-Ordinary C# code that is built with the analyzers gets a warning wherever it would copy a non-copyable value. That holds even when the copy is made inside the framework or another library.
+Ordinary C# code that is built with the analyzer gets a warning wherever it would copy a non-copyable value. That holds even when the copy is made inside the framework or another library.
 
 A few cases are left, and none of them comes up in ordinary code. Each either cannot be covered by any analyzer, or takes something that you would have to do on purpose. This page goes through them.
 
@@ -11,14 +11,14 @@ A few cases are left, and none of them comes up in ordinary code. Each either ca
 | What | How likely you are to meet it | What to do |
 |---|---|---|
 | [Unsafe code, pointers, reflection and `dynamic`](#code-that-steps-outside-the-languages-safety) | Only with code that steps outside the language's safety | Nothing new: these can break any guarantee of the language |
-| [Live views and value task sources](#apis-used-against-their-documentation) | Only if you ignore the API's documentation | Follow the documentation, as you would without the analyzers |
+| [Live views and value task sources](#apis-used-against-their-documentation) | Only if you ignore the API's documentation | Follow the documentation, as you would without the analyzer |
 | [A suppressed warning, a wrong symbol list entry, a `trusted` line](#what-you-vouched-for) | Only where you vouched for something | Vouch only for what you know to be true |
-| [Code that was built without the analyzers](#code-built-without-the-analyzers) | Only if a library was built without the analyzers and you vouched for it | Answer SCA1025 once, where it appears |
+| [Code that was built without the analyzer](#code-built-without-the-analyzer) | Only if a library was built without the analyzer and you vouched for it | Answer SCA1025 once, where it appears |
 | [Interceptors, and a framework or compiler newer than the tested ones](#rare-corners) | Rare | Know that the rules judge the method that is written at the call |
 
 ## Code That Steps Outside the Language's Safety
 
-The unsafe classes, pointers, reflection and `dynamic` can break any guarantee of the language, this one included. That is as true without the analyzers as with them. The analyzers warn about what they can see, as below, and leave the rest to the author.
+The unsafe classes, pointers, reflection and `dynamic` can break any guarantee of the language, this one included. That is as true without the analyzer as with it. The analyzer warns about what it can see, as below, and leave the rest to the author.
 
 #### Unsafe Classes
 
@@ -76,7 +76,7 @@ The same goes for the other ways to copy memory, such as <xref:System.Runtime.In
 
 ## APIs Used Against Their Documentation
 
-Some framework members hand out a view of a collection's own storage, and document that the collection must not change while the view is in use. A view that outlives such a change is a mistake with or without the analyzers. Code that follows the documentation of these members is covered.
+Some framework members hand out a view of a collection's own storage, and document that the collection must not change while the view is in use. A view that outlives such a change is a mistake with or without the analyzer. Code that follows the documentation of these members is covered.
 
 | Member | Its documentation says |
 |---|---|
@@ -91,28 +91,29 @@ Value tasks are the same. Two value tasks made from one source and token are one
 
 Where you tell the analyzer something, it takes your word:
 
-- **a suppressed warning**, and under the [updated memory safety rules](updated-memory-safety-rules.md) the unsafe context that lets you suppress it;
+- **a suppressed warning**, and under the [updated memory safety rules](updated-memory-safety-rules.md) the unsafe context or the `safe` or `unsafe` modifier that lets you suppress one about a type that is unsafe to copy;
+- **a struct that is not marked unsafe to copy,** though a copy of it can break memory safety: under the updated rules its copies get the ordinary warning, which any suppression reaches (see [Unsafe to Copy](../guides/marking-a-struct.md#unsafe-to-copy));
 - **a symbol list entry that is wrong**, such as an entry for a member that copies, for a member of a type that hands itself to another holder, or a `borrowswhen` line that lists an outcome in which the member does take the value (see [Symbol List Format](symbol-list-format.md#borrowswhen));
 - **a `clones=complete` line for a class whose `clones` lines leave a member out:** the marker says that the lines name every member that clones the object or hands it on (see [Clones](symbol-list-format.md#clones));
-- **a `borrows` or a `new` entry, or a `trusted` line,** for code that was built without the analyzers;
+- **a `borrows` or a `new` entry, or a `trusted` line,** for code that was built without the analyzer;
 - **a `clones=none` or a `trusted` line for a base class that does clone itself:** the line says that no code of the class, or of the assembly, clones the object (see [SCA1009](../diagnostics/sca1009.md#a-base-class-that-is-not-known)).
 
-## Code Built Without the Analyzers
+## Code Built Without the Analyzer
 
 A third-party library does not void the protection:
 
-- **A library that was built with the analyzers** is checked like your own code, in its own build, and its marks are trusted.
+- **A library that was built with the analyzer** is checked like your own code, in its own build, and its marks are trusted.
 - **The framework** is covered by the [built-in framework symbol list](framework-symbol-list.md).
 - **Any other assembly** cannot be handed a non-copyable value directly to copy it silently. Passed by reference, in a container, in a view or through a pointer, the use gets a warning until you vouch for the member (SCA1024). Passed through a generic, it gets a warning until the member is on the [symbol list](symbol-list-format.md) (SCA1020).
 - **A container that such an assembly hands out** counts as stored.
 - **A base class of such an assembly** may clone itself, and the analyzer cannot tell. A class of yours that derives from it gets a warning on each field that holds a non-copyable value, until a symbol list line says whether the base class clones itself ([SCA1009](../diagnostics/sca1009.md#a-base-class-that-is-not-known)).
-- **An assembly that was not built with the analyzers** is itself reported, once, if it uses your non-copyable types or can get at a non-copyable value through a member of your code ([SCA1025](../diagnostics/sca1025.md)).
+- **An assembly that was not built with the analyzer** is itself reported, once, if it uses your non-copyable types or can get at a non-copyable value through a member of your code ([SCA1025](../diagnostics/sca1025.md)).
 
-A library that uses non-copyable types is usually built with the analyzers. The attributes package brings them with it, and passes them on unless a library keeps them private (see [Sharing Your Library](../guides/libraries.md)).
+A library that uses non-copyable types is usually built with the analyzer. The attributes package brings it with it, and passes it on unless a library keeps it private (see [Sharing Your Library](../guides/libraries.md)).
 
 So for a copy to go unseen, three things have to come together:
 
-1. **The library was built without the analyzers.** They were turned off, the library that it uses kept them private, or it is written in another language.
+1. **The library was built without the analyzer.** It was turned off, the library that it uses kept it private, or it is written in another language.
 2. **Its code breaks the rule of `[NonCopyable]`:** it copies a value of the type.
 3. **Your project vouched for it** with a `trusted` or a `clones=none` line, or suppressed the warning about it (SCA1025 or SCA1009).
 
@@ -132,10 +133,10 @@ The [built-in framework symbol list](framework-symbol-list.md#classes-that-clone
 
 #### Compilers
 
-The analyzers need a compiler of version 5.0 or later, which is that of the .NET 10 SDK, and do not load in an older one. They are tested with the compilers of the .NET 10 and .NET 11 SDKs. With a newer SDK:
+The analyzer needs a compiler of version 5.0 or later, which is that of the .NET 10 SDK, and does not load in an older one. It is tested with the compilers of the .NET 10 and .NET 11 SDKs. With a newer SDK:
 
-- **New syntax that the analyzers do not know** gets a warning as a use that is not known to be safe.
-- **"Not known" covers** an operation of a kind that the analyzers have no judgment for, where it is used by value. It also covers a pattern of a kind that they have no judgment for, where it looks into a value of a non-copyable type.
-- **A copy that a newer compiler makes inside syntax that they already know** is covered once that SDK has been tested.
+- **New syntax that the analyzer does not know** gets a warning as a use that is not known to be safe.
+- **"Not known" covers** an operation of a kind that the analyzer has no judgment for, where it is used by value. It also covers a pattern of a kind that it has no judgment for, where it looks into a value of a non-copyable type.
+- **A copy that a newer compiler makes inside syntax that it already knows** is covered once that SDK has been tested.
 
 </div>

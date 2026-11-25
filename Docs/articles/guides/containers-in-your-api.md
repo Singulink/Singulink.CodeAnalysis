@@ -29,7 +29,7 @@ List<LockGuard> Build()
 }
 ```
 
-A container that the method created, or got from a call of checked code, is fine to return. Filling it is fine. So is passing it to a method that takes exactly the container's own type, does not mark the parameter `[Kept]`, and only uses it. The message says why a local is not the method's own. The exact test: [Locals That the Method Owns](../rules/owned-locals.md).
+A container that the method created, or got from a call of checked code, is fine to return. Filling it is fine, and so is passing it to a method that takes exactly the container's own type, does not mark the parameter `[Kept]`, and only uses it. The message says why a local is not the method's own. The exact test: [Locals That the Method Owns](../rules/owned-locals.md).
 
 > [!NOTE]
 > A container from a member marked `[return: Borrowed]`, or from code that was not built with the analyzer, is stored, and returning it gets a warning. See [Containers Handed Out by Unchecked Code](../rules/unchecked-code.md#containers-handed-out-by-unchecked-code).

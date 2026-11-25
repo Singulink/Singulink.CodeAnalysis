@@ -2,9 +2,11 @@
 
 # All Diagnostics
 
-Every warning of the analyzer has a diagnostic ID of the form `SCA1001`. Each kind of rule has its own thousand: the `SCA1000`s are the non-copyable rules. All are in the category Reliability, and each ID links to an article with an example and the ways to fix it. In a project that turns on the [updated memory safety rules](rules/updated-memory-safety-rules.md) of C#, most of them are errors.
+Every warning of the analyzer has a diagnostic ID of the form `SCA1001`. Each kind of rule has its own thousand: the `SCA1000`s are the non-copyable rules. All are in the category Reliability, and each ID links to an article with an example and the ways to fix it.
 
-Didn't add these analyzers yourself? See [Why Am I Seeing This?](start/why-am-i-seeing-this.md)
+Didn't add this analyzer yourself? See [Why Am I Seeing This?](start/why-am-i-seeing-this.md)
+
+In a project that turns on the [updated memory safety rules](rules/updated-memory-safety-rules.md) of C#, most IDs are errors for a type that is unsafe to copy: see [Errors and Warnings](rules/updated-memory-safety-rules.md#errors-and-warnings).
 
 ## Copies
 
@@ -31,6 +33,7 @@ Didn't add these analyzers yourself? See [Why Am I Seeing This?](start/why-am-i-
 | [SCA1014](diagnostics/sca1014.md) | A non-copyable struct has an `async` or iterator instance member that is not `readonly` |
 | [SCA1015](diagnostics/sca1015.md) | An `await` uses an awaiter of a non-copyable type |
 | [SCA1016](diagnostics/sca1016.md) | A variable is used after its value was handed over, so the hand-off copied the value |
+| [SCA1017](diagnostics/sca1017.md) | A struct holds a field of a type that is unsafe to copy, and its attribute does not say `UnsafeToCopy = true` |
 
 ## Generic and Unchecked Code
 
@@ -42,6 +45,7 @@ Didn't add these analyzers yourself? See [Why Am I Seeing This?](start/why-am-i-
 | [SCA1023](diagnostics/sca1023.md) | A container is converted to a type that hides what it holds |
 | [SCA1024](diagnostics/sca1024.md) | Code that was not built with the analyzer gets at a non-copyable value other than by value |
 | [SCA1025](diagnostics/sca1025.md) | A referenced assembly that was not built with the analyzer can use a non-copyable type |
+| [SCA1026](diagnostics/sca1026.md) | A type that is unsafe to copy is used for a type parameter marked `[NonCopyable(UnsafeToCopy = false)]` |
 
 ## Containers
 
@@ -65,5 +69,6 @@ Didn't add these analyzers yourself? See [Why Am I Seeing This?](start/why-am-i-
 | [SCA1046](diagnostics/sca1046.md) | `[NotNullRef]` where it does not count |
 | [SCA1047](diagnostics/sca1047.md) | `[NotNullRef]` on a method of the project, to verify and then suppress |
 | [SCA1048](diagnostics/sca1048.md) | A member that is nested too deeply for the analyzer, and was not checked |
+| [SCA1049](diagnostics/sca1049.md) | A non-copyable mark of the project sets `UnsafeToCopy` in its own code, which the analyzer does not read |
 
 </div>

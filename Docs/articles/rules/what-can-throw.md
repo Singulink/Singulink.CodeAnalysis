@@ -30,6 +30,16 @@ Two rules ask whether anything can throw: [the commit at the end of a try block]
 | A property, an indexer, an event, an `await`, any call | No: a call |
 | A store through a setter, an indexer or an event accessor | No: a call |
 
+`this` in a struct is such a reference however it is used, even where no field is named:
+
+```cs
+// In a struct, each of these counts as able to fail unless 'this' is known to refer to something:
+this = default;
+var copy = this;
+if (this is { State: 1 }) { }
+// ...and so does a use of a parameter of a primary constructor that the struct keeps, which is a field of 'this'.
+```
+
 #### Operators
 
 | Operation | Runs nothing? |

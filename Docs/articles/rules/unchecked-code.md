@@ -6,7 +6,7 @@ The analyzer checks the code of the project, and of every assembly that was buil
 
 ### At a Glance
 
-- **Your project, a library that was built with the analyzers, and the framework need nothing from you.** The rest of the rules are about any other assembly.
+- **Your project, a library that was built with the analyzer, and the framework need nothing from you.** The rest of the rules are about any other assembly.
 - **Passing a value by value is always fine:** the value is moved, as into any callee.
 - **A member that gets at a non-copyable value in any other way** gets a warning until a [symbol list entry](symbol-list-format.md) with `borrows` vouches for it (SCA1024).
 - **A container that such a member hands out counts as stored,** unless a symbol list entry marks the member `new`.
@@ -20,20 +20,20 @@ Most code that a project uses needs nothing from you:
 | Assembly | How it is treated | What you have to do |
 |---|---|---|
 | Your project | Checked | Nothing |
-| A library that was built with the analyzers | Checked in its own build, and its marks are trusted | Nothing |
+| A library that was built with the analyzer | Checked in its own build, and its marks are trusted | Nothing |
 | The framework | Covered by the [built-in framework symbol list](framework-symbol-list.md) | Nothing |
-| Any other assembly | Gets a warning where it touches a non-copyable value in a way that could copy it | Answer the warning where it appears: build the assembly with the analyzers, or vouch for the member or the assembly with one line |
+| Any other assembly | Gets a warning where it touches a non-copyable value in a way that could copy it | Answer the warning where it appears: build the assembly with the analyzer, or vouch for the member or the assembly with one line |
 
 The rest of this page gives the exact rules for the last row.
 
-**Checked code** is the compilation that is being analyzed, and every assembly that carries the marker of an analyzed build. **Unchecked code** is every other assembly: the framework, a library of a third party, and a project in the solution that turns the analyzers off.
+**Checked code** is the compilation that is being analyzed, and every assembly that carries the marker of an analyzed build. **Unchecked code** is every other assembly: the framework, a library of a third party, and a project in the solution that turns the analyzer off.
 
 ## Marker of an Analyzed Build
 
-The build files of the package add an assembly attribute to every project that runs the analyzers: an <xref:System.Reflection.AssemblyMetadataAttribute> with the key `Singulink.CodeAnalysis.Analyzed` and, as its value, the version of the analyzers that built the assembly, such as `0.7.0`.
+The build files of the package add an assembly attribute to every project that runs the analyzer: an <xref:System.Reflection.AssemblyMetadataAttribute> with the key `Singulink.CodeAnalysis.Analyzed` and, as its value, the version of the analyzer that built the assembly, such as `0.7.0`.
 
 - **A build that does not run analyzers gets no marker:** that is one with `RunAnalyzers` or `RunAnalyzersDuringBuild` set to `false`.
-- **A project with `GenerateAssemblyInfo` set to `false`** gets nothing from the item that the package adds, and writes the attribute itself, with the version of the analyzers that it is built with as the value:
+- **A project with `GenerateAssemblyInfo` set to `false`** gets nothing from the item that the package adds, and writes the attribute itself, with the version of the analyzer that it is built with as the value:
 
   ```cs
   [assembly: System.Reflection.AssemblyMetadata("Singulink.CodeAnalysis.Analyzed", "1.0.0")]
@@ -58,7 +58,7 @@ Marks that only restrict are honoured from anywhere, since a wrong one means mor
 
 ## Values Given to Unchecked Code
 
-Generic code goes by the [symbol list](symbol-list-format.md) as before. A member whose parameter mentions a type parameter that is not marked, or has a type parameter as its type, gets a warning where it is not on the symbol list (SCA1020). It keeps what it is given unless its entry is marked `borrows`: see [Code That Nothing Checks](what-keeping-follows.md#code-that-nothing-checks).
+Generic code goes by the [symbol list](symbol-list-format.md), as everywhere. A member whose parameter mentions a type parameter that is not marked, or has a type parameter as its type, gets a warning where it is not on the symbol list (SCA1020). It keeps what it is given unless its entry is marked `borrows`: see [Code That Nothing Checks](what-keeping-follows.md#code-that-nothing-checks).
 
 The rule here is for a member of unchecked code whose signature names a non-copyable type concretely. **Such a member that gets at a non-copyable value in any way other than by value needs a symbol list entry with `borrows`.** Without the entry its use gets a warning (SCA1024).
 
@@ -99,7 +99,7 @@ The rule covers every way in which a member gets the value:
 
 A member that the compiler calls for an operation, without the code naming it, is judged like the same member written out. That is a user-defined conversion of the elements of a `foreach`, a spread or a deconstruction, the conversions of a compound assignment, and the members of a `foreach`, an `await` and a pattern.
 
-#### The Non-copyable Type's Own Members
+#### Members of the Non-copyable Type Itself
 
 The members of the non-copyable type itself stay trusted with values of that type: with the receiver, and with a parameter of the type itself. `handle.Free()` on a struct of a library has to work.
 
@@ -120,7 +120,7 @@ The [built-in framework symbol list](framework-symbol-list.md) has the members o
 Lease first = ThirdParty.Leases.Create()[0];   // SCA1030 until a symbol list file has 'M:ThirdParty.Leases.Create;new'
 ```
 
-**An object of a class of unchecked code that derives from a container type, or implements one, is never new for the members that it inherits.** An example is `class Leases : List<Lease>` in such a library. Its own code decides what it holds, and nothing checks that code. No `new` entry changes that, and the message says so instead of suggesting one. This extends the rule for [a class that derives from a container on the symbol list](listed-members.md#classes-that-derive-from-a-container-on-the-symbol-list).
+**An object of a class of unchecked code that derives from a container type, or implements one, is never new for the members that it inherits.** An example is `class Leases : List<Lease>` in such a library, whose own code decides what it holds, and nothing checks that code. No `new` entry changes that, and the message says so instead of suggesting one. This extends the rule for [a class that derives from a container on the symbol list](listed-members.md#classes-that-derive-from-a-container-on-the-symbol-list).
 
 ## Unchecked Code Behind a Checked Type
 
@@ -140,7 +140,7 @@ Lease first = ThirdParty.Leases.Create()[0];   // SCA1030 until a symbol list fi
 
 **For each route, the unchecked code has to use the non-copyable type in its own code,** so its assembly has to reference the assembly that declares the type. That reference gets a warning, once for each unchecked assembly that the project references ([SCA1025](../diagnostics/sca1025.md)). It covers every route for a type that a project or a library declares, whether a `[NonCopyable]` mark makes it non-copyable or a `noncopyable` line for a type of checked code does.
 
-**Some values need no such reference:** a built-in non-copyable type (the framework declares them), a struct of unchecked code that only a `noncopyable` line makes non-copyable, and a value that is bound to a marked type parameter. For those, the unchecked code still needs a way to the value. The reference that gets the warning is then one to an assembly of checked code whose members let other code get at such a value: see [Values That Checked Code Lets Out](../diagnostics/sca1025.md#values-that-checked-code-lets-out).
+**Some values need no such reference:** a [built-in non-copyable type](../guides/built-in-types.md) (the framework declares them), a struct of unchecked code that only a `noncopyable` line makes non-copyable, and a value that is bound to a marked type parameter. For those, the unchecked code still needs a way to the value. The reference that gets the warning is then one to an assembly of checked code whose members let other code get at such a value: see [Values That Checked Code Lets Out](../diagnostics/sca1025.md#values-that-checked-code-lets-out).
 
 Build the assembly with the analyzer, or vouch for it with a line of a [symbol list file](symbol-list-format.md):
 

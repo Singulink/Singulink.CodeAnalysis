@@ -2,7 +2,7 @@
 
 # Commit at the End of a Try Block
 
-A `catch` that disposes a guard is a later use of the guard, so a handover inside the `try` block is normally not its [last use](last-use.md), and the `catch` gets a warning for using the guard after it (SCA1016). One shape is kept clean: "acquire, set up, commit, or dispose on failure". This page gives its exact rule.
+A `catch` that disposes a guard is a later use of the guard, so a hand-off inside the `try` block is normally not its [last use](last-use.md), and the `catch` gets a warning for using the guard after it (SCA1016). One shape is kept clean: "acquire, set up, commit, or dispose on failure". This page gives its exact rule.
 
 A hand-off to a member, such as `List<T>.Add`, is no commit. A member that throws may have taken the value, so a `catch` that uses the variable after the call gets the warning. Hand the value over after the `try` statement instead: see [Cleaning Up When Something Throws](../guides/cleanup-when-throwing.md#into-a-collection).
 
@@ -35,16 +35,7 @@ What cannot throw is the closed list in [What Counts as Able to Throw](what-can-
 
 #### Fields of This, in a Class
 
-In an instance member of a class, a read or a plain store of an instance field of `this` cannot throw, so a state flag or a second guard may follow the commit. That is not so for:
-
-| After the store | Why it can throw |
-|---|---|
-| A static field | Its first use can run the initializer of its type |
-| A field of another object | The object can be null |
-| An element of an array | The index can be out of range |
-| A property, or a value that takes a call to compute | A call can throw |
-| A read or a write through a `ref`, `in` or `out` parameter or a `ref` local | A reference can be null |
-| A field of `this` in a struct | `this` in a struct is such a reference |
+In an instance member of a class, a read or a plain store of an instance field of `this` cannot throw, so a state flag or a second guard may follow the commit. Other fields and references can throw, as [the closed list](what-can-throw.md#reads-and-stores) gives. A static field can run the initializer of its type, another object whose field is used can be null, the index of an element can be out of range, and a property is a call. A read or a write through a `ref`, `in` or `out` parameter, a `ref` local or `this` in a struct can meet a null reference.
 
 ```cs
 // In a class:
@@ -55,17 +46,7 @@ catch { guard.Dispose(); throw; }           // SCA1016: ...so the catch can stil
 
 #### This in a Struct
 
-`this` in a struct is a reference, however it is used:
-
-```cs
-// In a struct, after the commit, each of these counts as able to fail unless 'this' is known to refer to something:
-this = default;
-var copy = this;
-if (this is { State: 1 }) { }
-// ...and so does a use of a parameter of a primary constructor that the struct keeps, which is a field of 'this'.
-```
-
-The exception is a reference that is known to refer to something, and the commit itself is often the proof. After `_held = guard;` in a struct, `this` is known to refer to something, so `_isHeld = true;` may follow.
+`this` in a struct is a reference however it is used, so after the commit any use of it counts as able to fail: see [Reads and Stores](what-can-throw.md#reads-and-stores). The exception is a reference that is known to refer to something, and the commit itself is often the proof. After `_held = guard;` in a struct, `this` is known to refer to something, so `_isHeld = true;` may follow.
 
 ```cs
 public void Acquire()                       // in a struct

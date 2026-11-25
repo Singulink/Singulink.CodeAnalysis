@@ -69,7 +69,7 @@ LockGuard c = await Build<Task<LockGuard>>(x => x.Add(_pending));   // SCA1030
 
 A container that a member hands out by value, through a type that mentions the type parameter, is a stored container, whatever the object and the arguments of the call are. For a value of a non-copyable type nothing changes: a by-value result of checked code is a new value.
 
-#### The One Exception: a Pure Move
+#### One Exception: a Pure Move
 
 A [pure move](index.md#moved-from) hands out a new value where it moves a local that the calling method owns:
 

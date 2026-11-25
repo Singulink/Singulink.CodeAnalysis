@@ -127,7 +127,7 @@ Between the read and the reset, anything that fails leaves the value in two plac
 
 The analyzer goes by the order of evaluation, operation by operation, not by the order of the text.
 
-#### The One Store
+#### One Store of the Value
 
 The value that was read can be stored once, wherever it is going: a field, an element, or through a `ref` or `out` parameter. That store is allowed even where a store to the same target would otherwise count as able to fail. If it fails, the value is still only in the parameter.
 
@@ -164,15 +164,7 @@ static void ClearAndHand([MovedFrom] ref LockGuard a, ref LockGuard b, ref LockG
 }
 ```
 
-`this` in a struct counts as such a reference however it is used, even where no field is named:
-
-```cs
-// In a struct, between the read and the reset, each of these counts as able to fail:
-this = default;
-var copy = this;
-if (this is { State: 1 }) { }
-// ...and so does a use of a parameter of a primary constructor that the struct keeps, which is a field of 'this'.
-```
+`this` in a struct counts as such a reference however it is used, even where no field is named: see [Reads and Stores](what-can-throw.md#reads-and-stores).
 
 A reference that is known to refer to something is the exception. The usual proof is a check before the read:
 
@@ -202,13 +194,7 @@ void Take([MovedFrom] ref LockGuard value)
 }
 ```
 
-That does not hold for:
-
-| Target | Why it can fail |
-|---|---|
-| A static field | Its first use can run the static initializer of its type |
-| A field of another object | The object can be null |
-| A field of `this` in a struct | `this` is a reference, which can be null (see above) |
+That does not hold for a static field, whose first use can run the static initializer of its type, for a field of another object, which can be null, or for a field of `this` in a struct, which is a reference (see above).
 
 > [!NOTE]
 > The parameter can refer to a field of `this`. So reading a non-copyable value by value out of a field of `this` can take the same value a second time. That read gets a warning as the copy of a stored value (SCA1001), as it does anywhere.
@@ -236,15 +222,7 @@ The same goes for a `ref` local over such a reference. What a method may leave i
 
 #### Code Hidden in Simple Operations
 
-What looks like a read or a write of a local must run no other code. These run code that the method does not see, and count as calls:
-
-| Operation | Why it is a call |
-|---|---|
-| Concatenating a string with something that is not a string | It calls `ToString` |
-| A conversion of a tuple that converts its elements | Each element is converted |
-| A conversion from `dynamic` | The runtime binder runs |
-| A positional pattern on anything but a tuple, and `is ()` on anything but a tuple | It calls a member of the type, such as `Deconstruct` |
-| A store through a property, an indexer or an event | It calls the accessor |
+What looks like a read or a write of a local must run no other code. Some operations run code that the method does not see, and count as calls: a concatenation of a string with something that is not a string calls `ToString`, a conversion of a tuple converts its elements, and a conversion from `dynamic` runs the runtime binder. So do a positional pattern or `is ()` on anything but a tuple, which calls a member such as `Deconstruct`, and a store through a property, an indexer or an event.
 
 The full closed list, which [the commit at the end of a try block](commit.md) uses too, is in [What Counts as Able to Throw](what-can-throw.md).
 

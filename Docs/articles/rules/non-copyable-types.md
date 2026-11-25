@@ -22,9 +22,13 @@ The rules treat two kinds of type specially: non-copyable types, whose values mu
 - **A generic struct with a non-copyable type argument,** at any depth, because copying it copies what it stores: `ValueTask<LockGuard>`, `LockGuard?`, `(LockGuard, bool)`, `KeyValuePair<int, LockGuard>`.
 - **A struct that a [symbol list entry](symbol-list-format.md) names as non-copyable.**
 
+#### Unsafe to Copy
+
+A non-copyable type is also unsafe to copy where a copy of it can break memory safety: a struct marked `[NonCopyable(UnsafeToCopy = true)]` or named by an `unsafetocopy` line of a symbol list, a generic struct, a nullable or a tuple over one, and a type parameter marked `[NonCopyable]` whose mark does not say `UnsafeToCopy = false`. A struct that holds such a value in a field says so on its own attribute (SCA1017). The difference counts only under the [updated memory safety rules](updated-memory-safety-rules.md#types-that-are-unsafe-to-copy), where a report about such a type is an error. See [Unsafe to Copy](../guides/marking-a-struct.md#unsafe-to-copy).
+
 #### Built-in Non-copyable Types
 
-The [built-in framework symbol list](framework-symbol-list.md) names some framework structs, such as <xref:System.Threading.SpinLock> and <xref:System.Threading.Lock.Scope>. The analyzer checks them in a project that references one of the packages directly, and a project can [leave them out](msbuild-properties.md#built-in-non-copyable-types). All of them are listed in [Built-in Types](../guides/built-in-types.md).
+The [built-in framework symbol list](framework-symbol-list.md) makes some structs of the framework non-copyable, such as <xref:System.Threading.SpinLock> and <xref:System.Threading.Lock.Scope>. The analyzer checks them in a project that references one of the packages directly, and a project can [leave them out](msbuild-properties.md#built-in-non-copyable-types). All of them are listed in [Built-in Non-copyable Types](../guides/built-in-types.md).
 
 ## Containers
 

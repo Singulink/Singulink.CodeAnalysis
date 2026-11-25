@@ -2,7 +2,7 @@
 
 # Marking a Struct
 
-A struct whose instances each own something, such as a lock, a handle or a rented buffer, is marked `[NonCopyable]`. This page shows the two ways to get the attribute, and the mistakes in declaring one that the analyzer warns about.
+A struct whose instances each own something, such as a lock, a handle or a rented buffer, is marked `[NonCopyable]`. This page shows the two ways to get the attribute, the mistakes in declaring one that the analyzer warns about, and how to say that a copy of a struct is unsafe.
 
 ### At a Glance
 
@@ -10,6 +10,8 @@ A struct whose instances each own something, such as a lock, a handle or a rente
 |---|---|---|
 | Use the attribute from the package | `Singulink.CodeAnalysis` | The six attributes, `NonCopyable.Move` and the two null checks |
 | Declare the attributes yourself | `Singulink.CodeAnalysis.Analyzers` only | No runtime dependency; you write your own move and checks |
+
+Most structs need only `[NonCopyable]`. A struct whose copy can free, unpin or reach memory twice also says `UnsafeToCopy = true`: see [Unsafe to Copy](#unsafe-to-copy).
 
 ## Six Attributes
 
@@ -48,7 +50,10 @@ The analyzer recognizes its attributes by their full name: the namespace `Singul
 namespace Singulink.CodeAnalysis;
 
 [AttributeUsage(AttributeTargets.Struct | AttributeTargets.GenericParameter, Inherited = false)]
-internal sealed class NonCopyableAttribute : Attribute;
+internal sealed class NonCopyableAttribute : Attribute
+{
+    public bool UnsafeToCopy { get; set; }
+}
 
 [AttributeUsage(
     AttributeTargets.Method | AttributeTargets.Constructor | AttributeTargets.Property | AttributeTargets.Event,
@@ -68,7 +73,9 @@ internal sealed class KeptAttribute : Attribute;
 internal sealed class NotNullRefAttribute : Attribute;
 ```
 
-Declare only the ones that you use. This works across assemblies: a struct that a referenced assembly marks with its own internal attribute is non-copyable in your code as well.
+Declare only the ones that you use. The analyzer reads the arguments of an attribute and never calls it, so your `NonCopyableAttribute` needs only a settable `bool` property named `UnsafeToCopy` for `UnsafeToCopy = true` or `UnsafeToCopy = false` to count. Leave the property out where no struct of the project is [unsafe to copy](#unsafe-to-copy) and no type parameter says `UnsafeToCopy = false`.
+
+This works across assemblies: a struct that a referenced assembly marks with its own internal attribute is non-copyable in your code as well, and unsafe to copy where that attribute says so.
 
 Such a project also writes for itself what the package has besides the attributes:
 
@@ -105,6 +112,70 @@ This holds for `NonCopyableAttribute` only: a class that derives from one of the
 A library that is already published, with its guards marked by a `NonCopyableAttribute` of another namespace, such as `Microsoft.CodeAnalysis`, still works: on a struct of a referenced assembly, the analyzer recognizes that attribute in any namespace.
 
 The exact rules: [How the Attributes Are Recognized](../rules/attribute-recognition.md).
+
+## Unsafe to Copy
+
+A copy of most non-copyable structs breaks the logic of the program: a lock is released twice, or a count goes down twice. A copy of some breaks memory safety. Ask one question of your struct: **would a copy free, unpin or reach memory twice, or after it is gone?** Where the answer is yes, say so:
+
+```cs
+using System.Runtime.InteropServices;
+using Singulink.CodeAnalysis;
+
+[NonCopyable(UnsafeToCopy = true)]
+public struct NativeBuffer : IDisposable
+{
+    private nint _memory;
+
+    public static NativeBuffer Allocate(int size) => new() { _memory = Marshal.AllocHGlobal(size) };
+
+    public void Dispose()
+    {
+        Marshal.FreeHGlobal(_memory);
+        _memory = 0;
+    }
+}
+```
+
+A copy of `NativeBuffer` frees the memory a second time, or reads it after the other copy freed it. Some examples of each side:
+
+| Struct | Unsafe to copy? | What a copy does |
+|---|---|---|
+| A lock guard | No | Releases the lock twice: a logic error |
+| An array rented from `ArrayPool<T>` | No | Returns the array twice, so two later renters can share it. That shares data, but every access stays inside a managed array |
+| A block of native memory that `Dispose` frees | Yes | Frees the memory twice, or reads it after it is freed |
+| A `GCHandle` that pins an array, with a pointer into it | Yes | Unpins the array while the pointer is still in use |
+
+Under the current memory safety rules the property changes nothing: every copy of a non-copyable struct gets the same warning. Under the [updated memory safety rules](../rules/updated-memory-safety-rules.md) a copy of a struct that is unsafe to copy is an error, which only an unsafe context or a declaration marked `safe` or `unsafe` can answer for. A copy of any other non-copyable struct gets the ordinary warning there, as under the current rules.
+
+A nullable, a tuple or a generic struct over such a type is unsafe to copy as well, such as `NativeBuffer?` or `(NativeBuffer, int)`. Nothing needs to say so: the analyzer reads it from the type arguments.
+
+#### A Struct That Holds One
+
+A struct that holds a value that is unsafe to copy in a field is unsafe to copy too, since a copy of it copies the field. Say so on its own attribute. The analyzer reads it from the declaration of the struct and never works it out from the fields, so without the property each such field gets a warning (SCA1017):
+
+```cs
+[NonCopyable]
+public struct Session
+{
+    private NativeBuffer _buffer;               // SCA1017: a copy of Session copies the buffer
+}
+
+[NonCopyable(UnsafeToCopy = true)]
+public struct OwnedSession
+{
+    private NativeBuffer _buffer;               // OK
+}
+```
+
+Until the struct says so, it is what its attribute says: a copy of `Session` is a plain non-copyable copy. What each kind of field asks of the struct:
+
+| Field | Asks of the struct |
+|---|---|
+| `NativeBuffer`, `NativeBuffer?`, `(NativeBuffer, int)`, or another struct that is unsafe to copy | `UnsafeToCopy = true` |
+| `NativeBuffer[]`, a class, or a `List<NativeBuffer>` | Nothing: the field holds the value by reference |
+| A type parameter of the struct, or a type over one such as `T?` | Nothing: each constructed type of the struct is judged by its type arguments |
+
+A struct with such a field that is not marked `[NonCopyable]` at all gets SCA1010, whose message names `[NonCopyable(UnsafeToCopy = true)]`, so one edit fixes both. Under the current memory safety rules SCA1017 is an ordinary warning; under the updated rules it is an error.
 
 ## Next Steps
 

@@ -43,5 +43,5 @@
   - name: Symbol List
     href: symbol-list.md
 
-  - name: Built-in Types
+  - name: Built-in Non-copyable Types
     href: built-in-types.md

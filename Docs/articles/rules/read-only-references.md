@@ -58,9 +58,6 @@ string text = "held by " + guard;            // OK if 'ToString' is readonly or 
 (_maybe ?? throw new InvalidOperationException()).Dispose();   // SCA1006: and a '??'
 ((LockGuard)_maybe).Dispose();               // SCA1006: the cast unwraps a copy out of the nullable
 if (_buffer is [var first, ..]) { }          // OK if the length and the indexer are readonly; SCA1003 if they are not
-if (stack.Peek().IsHeld) { }                 // OK if 'IsHeld' is readonly: the copy that 'Peek' hands out is only read
-int id = _leases[i].Id;                      // OK: reads a field of the copy
-_leases[i].Dispose();                        // SCA1030: disposes the copy that the indexer hands out
 ```
 
 #### What a Member on the Symbol List Hands Out
@@ -69,7 +66,8 @@ What a member on the [symbol list](symbol-list-format.md) hands out of a stored 
 
 ```cs
 int id = _leases[i].Id;                              // OK: reads a field of the copy
-_leases[i].Dispose();                                // SCA1030: disposes the copy
+if (stack.Peek().IsHeld) { }                         // OK if 'IsHeld' is readonly: the copy that 'Peek' hands out is only read
+_leases[i].Dispose();                                // SCA1030: disposes the copy that the indexer hands out
 LockGuard g = _pending.GetAwaiter().GetResult();     // SCA1030: the stored task still holds the result
 ```
 
@@ -88,7 +86,7 @@ if (NonCopyable.Move(ref _maybe) is { } held)        // OK: the field is emptied
 
 **An argument for an `in` or `ref readonly` parameter that is not a variable is passed by value.** The compiler copies it into a temporary and passes a reference to that, so the method holds a second instance for the length of the call.
 
-The analyzer treats such an argument like one passed by value: a new value is fine, and a stored one gets a warning (SCA1003). A variable is passed by reference, as before: a local, a parameter, a field, an element, or what a reference refers to.
+The analyzer treats such an argument like one passed by value: a new value is fine, and a stored one gets a warning (SCA1003). A variable is still passed by reference: a local, a parameter, a field, an element, or what a reference refers to.
 
 These arguments are not variables:
 
@@ -120,7 +118,9 @@ A parameter of a primary constructor that a member uses is a field even in an in
 
 #### Switch Statements
 
-In a build that is not optimised, the compiler copies the value of every `switch` statement. The analyzer does not depend on the configuration: a warning that came and went with it would be worse than a strict one. Use an `is` pattern or a `switch` expression with no `when`, or move the value into the `switch`. A `switch` expression with a `when` gets the same warning. The message says which of the two it is, a `switch` statement or a `switch` expression with a `when`, and names the rewrite.
+In a build that is not optimised, the compiler copies the value of every `switch` statement. The analyzer does not depend on the configuration: a warning that came and went with it would be worse than a strict one. A `switch` expression with a `when` gets the same warning.
+
+Use an `is` pattern or a `switch` expression with no `when`, or move the value into the `switch`. The message says which of the two it is, a `switch` statement or a `switch` expression with a `when`, and names the rewrite.
 
 #### Parts of a Value
 

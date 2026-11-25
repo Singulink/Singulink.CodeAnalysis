@@ -13,7 +13,7 @@ A guard is handed on by moving it, not by copying it. Most of the time the move 
 | A field, an array element, a `ref` parameter, a captured variable | Move it out with `NonCopyable.Move(ref x)` |
 | A `using` variable or a `readonly` field | You cannot: something else still owns the value |
 
-## The Last Use Moves
+## Moving at the Last Use
 
 Nothing can use a local after its last use, so the analyzer treats that last use as a move:
 
@@ -24,7 +24,7 @@ _held = guard;                      // OK: the last use
 Log(id);
 ```
 
-A `catch` or a `finally` that can still run also uses the variable after that point. So does the next pass of a loop, for a variable declared outside the loop. A handover in either place is not the last use: see [Cleaning Up When Something Throws](cleanup-when-throwing.md).
+A `catch` or a `finally` that can still run also uses the variable after that point. So does the next pass of a loop, for a variable declared outside the loop. A hand-off in either place is not the last use: see [Cleaning Up When Something Throws](cleanup-when-throwing.md).
 
 > [!NOTE]
 > Some variables are never moved at their last use, because something else can still reach them, for example a captured variable or a `using` variable. All of them: [Variables That Are Never Moved From](../rules/last-use.md#variables-that-are-never-moved-from).
@@ -76,6 +76,6 @@ A project that declares the attributes itself has no `NonCopyable.Move`, and wri
 
 ## Turning the Move at the Last Use Off
 
-A project that wants every handover written out can turn the move at the last use off. Then only a move by hand hands a value over: see [Turning Off the Move on the Last Use](../rules/msbuild-properties.md#turning-off-the-move-on-the-last-use).
+A project that wants every hand-off written out can turn the move at the last use off. Then only a move by hand hands a value over: see [Turning Off the Move on the Last Use](../rules/msbuild-properties.md#turning-off-the-move-on-the-last-use).
 
 </div>

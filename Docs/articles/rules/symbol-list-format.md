@@ -44,11 +44,17 @@ M:ThirdParty.Pool`1.TryReturn(`0);borrowswhen=false
 M:ThirdParty.Map`2.Add(`0,`1);for=TValue
 M:ThirdParty.Map`2.Remove(`0,`1@);new;for=TValue
 
+# A static field of a generic type: the static initializers of the type make no copy
+F:ThirdParty.Cache`1.Shared
+
 # view: copying the struct does not copy the elements
 T:ThirdParty.Slice`1;view
 
 # noncopyable: a struct that cannot be marked in its source
 T:ThirdParty.Handle;noncopyable
+
+# unsafetocopy: as noncopyable, and a copy of the struct can break memory safety
+T:ThirdParty.PinnedBlock;unsafetocopy
 
 # copyable: a struct that the framework symbol list or a library makes non-copyable, and that this project copies on purpose
 T:System.Runtime.InteropServices.GCHandle;copyable
@@ -82,8 +88,10 @@ T:Contoso.Page;clones=none
 | An instance property of a class, of type <xref:System.Threading.Tasks.Task`1> | `owned` | The task belongs to the object alone |
 | A method that returns `bool` | `borrowswhen=true` or `borrowswhen=false` | Safe to use; keeps nothing of a value where it returned that |
 | A member | `for=T1,T2` | The entry vouches only for these type parameters |
+| A static field of a generic type (`F:`) | none, or `for=T1,T2` alone | Reading or writing the field is safe: the static initializers of its type make no copy. See [Static Fields](#static-fields) |
 | A struct (`T:`) | `view` | Copying the struct copies no elements |
 | A struct (`T:`) | `noncopyable` | The struct is a non-copyable type |
+| A struct (`T:`) | `unsafetocopy` | The struct is a non-copyable type, and a copy of it can break memory safety |
 | A struct (`T:`) | `copyable` | The struct is an ordinary struct for the project |
 | An assembly (`A:` and its simple name) | `trusted` | The unchecked assembly makes no copy of what it gets at |
 | A generic class or interface (`T:`) | `erasable` | No base type or interface hands out a value of its type arguments |
@@ -159,7 +167,7 @@ What the line covers:
 
 - **A method that is called by its name** and returns `bool`, `Task<bool>` or `ValueTask<bool>`. A constructor, an operator, a conversion and an accessor cannot have the marker.
 - **Values only.** The marker covers each parameter that the method takes by value whose type in the method's definition is a struct or a type parameter that can be a struct. With `for=` after the marker, it covers only the type parameters that `for=` names. Unlike `borrows`, it says nothing about a container that the method is given, and it has no effect on the [`[Kept]` check](keeping-containers.md).
-- **Not a stored value.** A field or an element that is passed by value to such a method gets a warning as before, since where the method takes it there are two. The marker helps a local or a by-value parameter, at its [last use](last-use.md).
+- **Not a stored value.** A field or an element that is passed by value to such a method still gets a warning, since where the method takes it there are two. The marker helps a local or a by-value parameter, at its [last use](last-use.md).
 
 How to write it:
 
@@ -179,9 +187,29 @@ A struct marked `view` copies no elements when it is copied, as <xref:System.Spa
 
 A struct marked `noncopyable` is a non-copyable type.
 
+A `noncopyable` line for a struct that its `[NonCopyable]` attribute makes non-copyable already has no effect and gets a warning (SCA1042). So does one for a struct that its attribute makes unsafe to copy, which is non-copyable as well. A line for a type of the [built-in framework symbol list](framework-symbol-list.md) gets no warning: one file can serve a project that [leaves the built-in non-copyable types out](../guides/built-in-types.md), where the line makes the type non-copyable. The line also has an effect where a `copyable` line takes the struct out.
+
+#### Unsafetocopy
+
+A struct marked `unsafetocopy` is a non-copyable type, as with `noncopyable`, and a copy of it can break memory safety, as `[NonCopyable(UnsafeToCopy = true)]` says: see [Unsafe to Copy](../guides/marking-a-struct.md#unsafe-to-copy). An entry has one of the two markers. Under the current memory safety rules they do the same, and under the [updated memory safety rules](updated-memory-safety-rules.md) a copy of a struct marked `unsafetocopy` is an error.
+
+| Line | Effect |
+|---|---|
+| `unsafetocopy` for a library's struct that is only `[NonCopyable]` | The struct is unsafe to copy in this project |
+| `unsafetocopy` for a struct that has no attribute | The struct is non-copyable, and unsafe to copy |
+| `unsafetocopy` for a struct that its attribute marks unsafe to copy | No change, and a warning (SCA1042) |
+| `noncopyable` for a struct that its attribute marks unsafe to copy | No change, and a warning (SCA1042): the struct stays unsafe to copy |
+| `noncopyable` or `unsafetocopy` for a struct that the framework symbol list marks unsafe to copy | No change where the project includes the built-in non-copyable types, and no warning, since a project that leaves them out needs the line |
+| `copyable` for a struct that is unsafe to copy | The struct is an ordinary struct, as `copyable` makes any struct |
+
+Nothing makes a struct that is unsafe to copy plain non-copyable. Only `copyable` takes it out, and then it is no non-copyable type at all.
+
 #### Copyable
 
 A struct marked `copyable` is an ordinary struct for this project, even though the [built-in framework symbol list](framework-symbol-list.md) or a referenced library makes it non-copyable. Use it for one of the [built-in non-copyable types](../guides/built-in-types.md) that the project copies on purpose, or for a library's struct that another analyzer's attribute marks.
+
+> [!NOTE]
+> **A `copyable` line counts only in a file of your project.** It says that your project copies the struct on purpose, which only your project can decide. The same line in a file that comes with a package does nothing, and gets no warning, in the projects that use the package. In the library's own build it is a file of the project, and counts there.
 
 Everything that depends on the struct changes with it. A struct with a field of it, a tuple or a `Nullable` of it, a `List<T>` of it, and a marked type parameter bound to it are all ordinary types too. Nothing that the analyzer guarantees holds for them.
 
@@ -201,7 +229,7 @@ The line turns off two warnings for the assembly: SCA1025, and SCA1009 on a fiel
 
 #### Clones
 
-A class marked `clones` has code of its own that clones its objects field by field with <xref:System.Object.MemberwiseClone>. A class of the project that derives from it, at any depth, gets a warning on each field that holds a non-copyable value (SCA1009), since the clone copies the field. One line covers the class, every class that derives from it, and the generic classes that derive from it, where a non-copyable type is bound to them: see [SCA1009](../diagnostics/sca1009.md).
+A class marked `clones` has code of its own that clones its objects field by field with <xref:System.Object.MemberwiseClone>. A class of the project that derives from it, at any depth, gets a warning on each field that holds a non-copyable value (SCA1009), since the clone copies the field. One line covers the class, every class that derives from it, and the generic classes that derive from it, where a non-copyable type is bound to them: see [Base Classes That Clone Themselves](declarations.md#base-classes-that-clone-themselves).
 
 ```text
 # Document of a library clones itself in its Copy method
@@ -218,10 +246,10 @@ sealed class PinnedDocument : Contoso.Document
 
 | Question | Answer |
 |---|---|
-| Where can the line stand? | In any symbol list file: the project's own, and one that comes with a library. It counts whether or not the class's assembly was built with the analyzers, since it only adds warnings |
+| Where can the line stand? | In any symbol list file: the project's own, and one that comes with a library. It counts whether or not the class's assembly was built with the analyzer, since it only adds warnings |
 | Can another line take it away? | No. A line for the same class in another file does not turn it off, and a `clones=none` line for the class gets a warning and is left out (SCA1042). Suppress the warning where a class is never cloned |
 | What if one file says `clones=complete` and another `clones` alone? | `clones=complete` applies. A plain `clones` line says nothing about completeness. Where the lines miss a member, add a `clones` line for that member, in any file |
-| May the class be the project's own? | Yes, where its own code clones its objects by a means that the analyzer does not see. A call of `MemberwiseClone` in the project gets SCA1005 and SCA1008 as before |
+| May the class be the project's own? | Yes, where its own code clones its objects by a means that the analyzer does not see. A call of `MemberwiseClone` in the project still gets SCA1005 and SCA1008 |
 | Which classes of the framework have it? | Every one that clones itself: see [Classes That Clone Themselves](framework-symbol-list.md#classes-that-clone-themselves) |
 
 A method, a property or an event marked `clones` clones its object, or the object that it is given, or hands it to code that can. For an event, adding a handler and removing one both count, and the analyzer warns at each. Two examples are `M:System.Globalization.CultureInfo.Clone` and `P:System.Drawing.Printing.PrinterSettings.DefaultPageSettings`, whose page settings refer back to the printer settings. The built-in framework symbol list has a line for each public or protected member of the framework that clones or hands its object on, through other members included.
@@ -240,22 +268,22 @@ A use of a member marked `clones` gets a warning with no advice to add a line, b
 > [!WARNING]
 > `clones=complete` vouches that the `clones` lines name **every** member that clones the object or hands it to other code, even one that only gives it to a visitor interface, a registry or a wrapper. The analyzer cannot check that. Without `complete`, the analyzer judges each member by its own line: the safe choice when you cannot vouch for all of them.
 
-Take a use of a member that no line names, on an object whose class binds a non-copyable type. It gets a warning unless the class's line says `clones=complete`. With `clones=complete`, it gets a warning only where the member's signature shows that it can hand the object on: see [Uses](../diagnostics/sca1009.md#uses).
+Take a use of a member that no line names, on an object whose class binds a non-copyable type. It gets a warning unless the class's line says `clones=complete`. With `clones=complete`, it gets a warning only where the member's signature shows that it can hand the object on: see [Uses](declarations.md#uses).
 
-A member line names a member that another assembly can call, and that clones the object or hands it on directly or through another member. A private or internal member is not imported where the library is referenced, so a line for it has no effect there and gets SCA1042: name the member that calls it instead. A `clones` line for an override also puts the warning on the members of its base class, which can run it: see [Overrides That a Base Class Runs](../diagnostics/sca1009.md#overrides-that-a-base-class-runs).
+A member line names a member that another assembly can call, and that clones the object or hands it on directly or through another member. A private or internal member is not imported where the library is referenced, so a line for it has no effect there and gets SCA1042: name the member that calls it instead. A `clones` line for an override also puts the warning on the members of its base class, which can run it: see [Overrides That a Base Class Runs](declarations.md#overrides-that-a-base-class-runs).
 
-A class can sit between the class that clones itself and the object's own class. Where it is of a library that was not built with the analyzers, it takes a type line of its own for its own members, such as ``T:Contoso.TaggedDocument`1;clones=complete``. The class above it already has a `clones` line, but this line is not redundant, so it gets no SCA1042 warning for having no effect.
+A class can sit between the class that clones itself and the object's own class. Where it is of a library that was not built with the analyzer, it takes a type line of its own for its own members, such as ``T:Contoso.TaggedDocument`1;clones=complete``. The class above it already has a `clones` line, but this line is not redundant, so it gets no SCA1042 warning for having no effect.
 
-A library that is built with the analyzers gets SCA1008 for each member of its own such class that another assembly can call and that clones its object without a line. The warnings help it complete the file that it ships, before it writes `clones=complete` on the type line. It is not a proof: a member that clones through a private helper, or hands the object on, needs its line all the same. For a library that is not built with the analyzers, the lines are your statement, as every line is.
+A library that is built with the analyzer gets SCA1008 for each member of its own such class that another assembly can call and that clones its object without a line. The warnings help it complete the file that it ships, before it writes `clones=complete` on the type line. It is not a proof: a member that clones through a private helper, or hands the object on, needs its line all the same. For a library that is not built with the analyzer, the lines are your statement, as every line is.
 
 Two other lines are for such a class:
 
-- **A member line with no marker** says that the member never hands the object itself to other code. It answers two warnings: the one for a member whose signature shows that it can hand the object on, and the one for any member of a class whose line does not say `clones=complete`. It vouches for everything that the member does, what it calls included, and not for an override of it.
+- **A member line with no marker** says that the member never hands the object itself to other code. It answers two warnings: the one for a member whose signature shows that it can hand the object on, and the one for any member of a class whose line does not say `clones=complete`. It vouches for everything that the member does, what it calls included. It does not vouch for an override of it, or for an [override that it runs](declarations.md#overrides-that-a-base-class-runs) in a class below the class that clones itself.
 - **`borrows`,** for a member that receives the object as an argument, says that it uses the object during the call and keeps nothing of it. A member on the list with no marker that receives a value as a type that hides it, as `List<object>.Add` does, keeps it, and the conversion gets its warning.
 
 A member line with no marker gets no warning for having no effect: it can still be what lets a container of an unmarked generic through (SCA1023).
 
-**A class marked `clones=none` never clones its objects,** and neither does a class above it. The line is for a base class of a library that was not built with the analyzers, where nothing else tells the analyzer what the class does. Without it, a class of the project that derives from such a class gets a warning on each field that holds a non-copyable value: see [SCA1009](../diagnostics/sca1009.md#a-base-class-that-is-not-known).
+**A class marked `clones=none` never clones its objects,** and neither does a class above it. The line is for a base class of a library that was not built with the analyzer, where nothing else tells the analyzer what the class does. Without it, a class of the project that derives from such a class gets a warning on each field that holds a non-copyable value: see [SCA1009](../diagnostics/sca1009.md#a-base-class-that-is-not-known).
 
 The analyzer cannot check the line, so write it only for a class whose code you know. Where a `clones` line names the class or a class above it, that line applies, and the `clones=none` line gets a warning.
 
@@ -268,7 +296,30 @@ A generic class or interface marked `erasable` has no base type or interface tha
 #### What May Be on the Symbol List
 
 - **A member may be on the symbol list** if it makes no copy of a non-copyable value other than the one it hands out. A member that moves values inside its container, like a `List<T>` that grows, qualifies. One that leaves two live instances, like `ToArray` or `CopyTo`, does not.
+- **A static field of a generic type may be on the symbol list** if the static constructor and the static field initializers of its type make no copy of a value of its type arguments.
 - **The symbol list is for code you cannot change.** Your own generics mark their type parameters instead.
+
+#### Static Fields
+
+Reading or writing a static field of a generic type runs the static constructor and the static field initializers of the type, with the type arguments of the use. That code can copy a value of a type argument, so the analyzer counts such a use as it counts a call of a member of the type. With a non-copyable type bound to a type parameter that is not marked, the use gets a warning (SCA1020) unless a line names the field.
+
+```text
+F:ThirdParty.Cache`1.Shared
+```
+
+```cs
+ThirdParty.Cache<LockGuard>.Shared = myLock.Enter();     // OK with the line; SCA1020 without it
+string name = ThirdParty.Cache<LockGuard>.Name;          // OK: a constant runs no code
+```
+
+The line says that the static constructor and the static field initializers of the type make no copy of a value of its type arguments. Read them first: the analyzer takes the line on trust.
+
+| Question | Answer |
+|---|---|
+| Which fields take a line? | A static field, other than a constant, of a generic type or of a type nested in one |
+| Which markers fit? | None. `for=` can follow the ID, as on a member. A read of a field gets the value that the field holds, so `new` cannot fit, and a field takes no argument for `borrows` to speak of |
+| What about a static property, method or event? | It is a member like any other, and its own line covers the static initializers of its type as well |
+| Does a line for any other field do something? | No. A line for an instance field, a constant, or a static field of a type that is not generic gets a warning (SCA1042), since reading or writing such a field runs no code with the type arguments of the use |
 
 #### Members of Extension Blocks
 
@@ -284,7 +335,7 @@ An entry that names something the project does not reference is ignored, so one 
 
 | Line | Warning when |
 |---|---|
-| `noncopyable` | It names no type |
+| `noncopyable`, `unsafetocopy` | It names no type, or a struct that is what the line says already |
 | A line that cannot be parsed | Always; it is then ignored |
 | `copyable` | It has no effect |
 | `trusted` | It has no effect |
@@ -294,18 +345,20 @@ An entry that names something the project does not reference is ignored, so one 
 | A member line with no marker, `new`, `borrows`, `drains` or `owned` | A `clones` line names the member; the line is left out |
 | A member line for a member that the framework symbol list names | It names the member for a type parameter that the framework symbol list leaves out, lists an outcome of `borrowswhen` that the framework symbol list does not, or says `borrows` where the framework symbol list says `borrowswhen` or no marker: see [Entries That Disagree](#entries-that-disagree) |
 | `borrowswhen` | An outcome is not `true` or `false`; the line is taken without it |
+| A field line (`F:`) | It names an instance field, a constant, or a static field of a type that is neither generic nor nested in a generic type |
 
-- **A `noncopyable` line that names no type** gets a warning because a mistyped ID would leave the type copyable in a build that looks clean. A project that does not reference the type should take the line out of its file.
+- **A `noncopyable` or `unsafetocopy` line that names no type** gets a warning because a mistyped ID would leave the type copyable in a build that looks clean. A project that does not reference the type should take the line out of its file.
+- **A `noncopyable` or `unsafetocopy` line for a struct that is what it says already** by its attribute has no effect. A line of a file that came in a package gets this warning only in the library's own build. A line for a type of the framework symbol list gets none, since a project that leaves the built-in non-copyable types out needs it.
 - **A `copyable` line has no effect** in the cases that [Copyable](#copyable) gives.
 - **A `trusted` line has no effect** for an assembly that the project does not reference, for the project's own, and for one that was built with the analyzer. Nor does it where the line answers nothing: the assembly gets no SCA1025, and no class of the project that derives from one of its classes holds a non-copyable value in a field.
-- **A `clones=none` line has no effect** for a class of the project, of the framework or of a library that was built with the analyzers, since the analyzer already knows what those do. Nor does it for a class that is static or sealed, since no class can derive from it, or where a `clones` line names the class or a class above it.
+- **A `clones=none` line has no effect** for a class of the project, of the framework or of a library that was built with the analyzer, since the analyzer already knows what those do. Nor does it for a class that is static or sealed, since no class can derive from it, or where a `clones` line names the class or a class above it.
 - **A `clones` line has no effect** for a class that is static, or sealed and not generic, since no class can derive from it and no type can be bound to it. A line that names no type, no method, no property or no event gets a warning as a `noncopyable` line does, since a mistyped ID would leave the fields of every derived class with no warning. A line that repeats one of the built-in framework symbol list, or that names a class whose base class has a line, gets no warning: it has its effect already, and with `clones=complete` it covers the members of the class.
 
 A line cannot be parsed if it has:
 
 - an ID that cannot be a documentation comment ID, such as one with a parenthesis that is not closed;
 - a `for=` that names a type parameter which the member does not have, or one that fits more than one type parameter of the member and of the types that contain it;
-- a marker on something that it does not fit (see the table below);
+- a marker on something that it does not fit (see the table below), or any marker on a field line;
 - `clones=complete` or `clones=none` on a method, a property or an event, a value of `clones` other than `complete` or `none`, or `complete` or `none` written as a marker of its own;
 - a `borrowswhen` with no outcome, an empty outcome, an outcome listed twice, or both `true` and `false`;
 - a marker that the analyzer does not know: the whole line is ignored;
@@ -314,7 +367,7 @@ A line cannot be parsed if it has:
 
 | Marker | Fits only |
 |---|---|
-| `view`, `noncopyable`, `copyable` | A struct |
+| `view`, `noncopyable`, `unsafetocopy`, `copyable` | A struct |
 | `erasable` | A generic class or interface |
 | `clones` | A class, a method, a property or an event |
 | `clones=complete`, `clones=none` | A class |
@@ -325,17 +378,19 @@ A line cannot be parsed if it has:
 
 #### Entries That Disagree
 
-Where two entries for the same ID disagree, the one that claims less applies, whether they are in two symbol list files or in a file and the [built-in framework symbol list](framework-symbol-list.md). A file that comes with a library counts like the project's own:
+Where two entries for the same ID disagree, the one that claims less applies, whether they are in two symbol list files or in a file and the [built-in framework symbol list](framework-symbol-list.md). A file that comes with a library counts like the project's own, except for a `copyable` line, which counts only in the project's own file:
 
 | Entries | What applies |
 |---|---|
 | `noncopyable` and `view` | `noncopyable` |
+| `unsafetocopy` and `noncopyable` or `view`, in two files or in a file and the framework symbol list | `unsafetocopy`: a line that says a copy can break memory safety only makes the analyzer stricter |
 | No marker and `new`, `borrows`, `drains`, `owned` or `borrowswhen` | No marker |
 | `borrows` and `borrowswhen` | The `borrowswhen` line |
 | Two `borrowswhen` lines | The outcome that both list: `false` and `false` give `false`, and `false` and `true` give no marker |
 | Two `for=` limits | Only the type parameters that both name |
-| `copyable` and the framework symbol list | `copyable`, since that is what it is for |
-| `copyable` and `noncopyable` of the same type, in two symbol list files | `noncopyable` |
+| `copyable` in a file of the project, and the framework symbol list or an attribute | `copyable`, since that is what it is for |
+| `copyable` in a file that comes with a package | Nothing: the line does nothing in a project that uses the package |
+| `copyable` and `noncopyable` or `unsafetocopy` of the same type, in two symbol list files | `noncopyable` or `unsafetocopy` |
 | `clones` and any other line for the same class | Both: `clones` is kept apart, and nothing takes it away |
 | `clones` and a line that says the same method makes no copy | `clones`: the other line is left out, with a warning |
 | `clones=complete` and `clones` alone, for the same class | `clones=complete`: a plain `clones` line says nothing about completeness, and nothing takes `complete` away |
@@ -356,7 +411,7 @@ A `borrows` line whose `for=` leaves out a type parameter that the framework sym
 
 Take a member that the framework symbol list names with `for=`. A line of a file that names it for a type parameter that the `for=` leaves out, or names it with no `for=`, would add nothing. The analyzer leaves such a line out and warns about it (SCA1042). Where code uses the member, the warning says which type parameters the list names it for, and gives no line to add.
 
-#### The Owned Marker Is Taken on Trust
+#### Owned Entries Are Taken on Trust
 
 An `owned` entry is a promise about the whole type, and the analyzer takes it on trust. The task is made with the object, no constructor takes it from somewhere else, and nothing but the property hands it out. The analyzer checks one part of it: that the object is created with no argument that carries a non-copyable type. That check finds nothing to look at where the type is not generic.
 

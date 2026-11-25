@@ -2,17 +2,17 @@
 
 # Why Am I Seeing This?
 
-Your build shows `SCA` warnings, and you never added these analyzers. This page explains where they came from, what they check in your project and what to do about them.
+Your build shows `SCA` warnings, and you never added this analyzer. This page explains where it came from, what it checks in your project and what to do about the warnings.
 
-## Where the Analyzers Came From
+## Where the Analyzer Came From
 
-A library whose public API has structs that must not be copied, such as lock guards or handles, can bring the analyzers with it. The projects that use the library then get a warning when they copy those structs, because such a copy can release a lock twice or free a handle twice.
+A library whose public API has structs that must not be copied, such as lock guards or handles, can bring the analyzer with it. The projects that use the library then get a warning when they copy those structs, because such a copy can release a lock twice or free a handle twice.
 
-The analyzers reach projects further down the chain as well. If you reference a package that depends on such a library, you get the analyzers too. See [Sharing Your Library](../guides/libraries.md) for how a library passes them on.
+The analyzer reaches projects further down the chain as well. If you reference a package that depends on such a library, you get the analyzer too. See [Sharing Your Library](../guides/libraries.md) for how a library passes it on.
 
 ## What They Check in Your Project
 
-The analyzers check the types that the library marked. Even with nothing marked in your own code, you get a warning where your code copies one of the library's structs, or a collection or a task that holds one:
+The analyzer checks the types that the library marked. Even with nothing marked in your own code, you get a warning where your code copies one of the library's structs, or a collection or a task that holds one:
 
 ```cs
 // LockGuard comes from the library, and _guards is a List<LockGuard> field
@@ -21,7 +21,7 @@ _guards.Add(myLock.Enter());                 // OK: a new guard moves into the l
 LockGuard first = _guards[0];                // SCA1030: a copy, and the list still holds the guard
 ```
 
-In a project that gets the analyzers only through a library, the analyzers do not check the framework structs that they otherwise treat as non-copyable, such as <xref:System.Runtime.InteropServices.GCHandle>: see [Built-in Types](../guides/built-in-types.md).
+In a project that gets the analyzer only through a library, the analyzer does not check the [built-in non-copyable types](../guides/built-in-types.md), such as <xref:System.Runtime.InteropServices.GCHandle>, which it checks in a project that references the package itself.
 
 #### Warnings Where Nothing Is Copied
 
@@ -32,7 +32,7 @@ Four IDs are about code that can copy such a struct without a visible copy. So t
 | [SCA1007](../diagnostics/sca1007.md) | Any use of <xref:System.Runtime.CompilerServices.RuntimeHelpers.GetObjectValue*?displayProperty=nameWithType>, which clones a boxed struct field by field | Use the object as it is |
 | [SCA1008](../diagnostics/sca1008.md) | <xref:System.Object.MemberwiseClone> in a class that another assembly can derive from, where a derived class could hold a non-copyable value | Seal the class, copy the fields yourself, or suppress the warning and either document the rule for derived classes or ship a `clones` line for the class |
 | [SCA1009](../diagnostics/sca1009.md) | A field that holds a non-copyable value in a class that derives from a class that clones itself, such as <xref:System.Text.Encoding>, and a non-copyable type bound to a generic class that derives from one | Hold the value in an object of a class that your class refers to |
-| [SCA1025](../diagnostics/sca1025.md) | A referenced assembly that uses the library's structs and was not built with the analyzers. In a project that got the analyzers only through a library, this is a message and not a warning | Build that assembly with the analyzers, or vouch for it with a `trusted` line in a symbol list file (see [Symbol List](../guides/symbol-list.md)) |
+| [SCA1025](../diagnostics/sca1025.md) | A referenced assembly that uses the library's structs and was not built with the analyzer. In a project that got the analyzer only through a library, this is a message and not a warning | Build that assembly with the analyzer, or vouch for it with a `trusted` line in a symbol list file (see [Symbol List](../guides/symbol-list.md)) |
 
 ## What to Do About a Warning
 
@@ -59,7 +59,7 @@ catch
 [Correct Code That Still Gets a Warning](../guides/correct-code-with-warnings.md) shows the usual cases.
 
 > [!NOTE]
-> **In a project that turns on the updated memory safety rules of C#,** most reports are errors, and only code in an unsafe context can suppress one. See [Updated Memory Safety Rules](../rules/updated-memory-safety-rules.md).
+> **In a project that turns on the updated memory safety rules of C#,** a report about a type that is unsafe to copy is an error, and only code in an unsafe context or a declaration marked `safe` or `unsafe` can suppress one. A report about any other non-copyable type is the same warning as under the current rules. See [Updated Memory Safety Rules](../rules/updated-memory-safety-rules.md).
 
 #### Turning a Rule Down
 

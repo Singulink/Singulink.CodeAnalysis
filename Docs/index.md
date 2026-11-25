@@ -14,7 +14,7 @@ Moving a value is not a copy, because one instance is left afterwards. A local t
 <xref:Singulink.CodeAnalysis.NonCopyable.Move*?displayProperty=nameWithType> takes a value out of a field and leaves the field empty. See
 [Moving Values](articles/guides/moving-values.md).
 
-The analyzers check only what is marked, and there are no style or opinion rules. All the rules so far, the SCA1000s, are about non-copyable
+The analyzer checks only what is marked, and there are no style or opinion rules. All the rules so far, the SCA1000s, are about non-copyable
 structs.
 
 **Singulink.CodeAnalysis** is part of the **Singulink Libraries** collection. Visit https://github.com/Singulink/ to see our full list of publicly
@@ -22,14 +22,14 @@ available libraries and other open-source projects.
 
 ### Installation
 
-The analyzers come in two packages on NuGet:
+The analyzer comes in two packages on NuGet:
 
-- `Singulink.CodeAnalysis` - the attributes and the <xref:Singulink.CodeAnalysis.NonCopyable> helpers, which bring the analyzers with them.
-- `Singulink.CodeAnalysis.Analyzers` - the analyzers only, for a project that declares the attributes itself.
+- `Singulink.CodeAnalysis` - the attributes and the <xref:Singulink.CodeAnalysis.NonCopyable> helpers, which bring the analyzer with them.
+- `Singulink.CodeAnalysis.Analyzers` - the analyzer only, for a project that declares the attributes itself.
 
-In a project that references one of the two packages directly, the analyzers also treat some framework structs as non-copyable, such as
-<xref:System.Runtime.InteropServices.GCHandle> and <xref:System.Threading.SpinLock>. In a project that gets the analyzers only through a
-library, they do not. See [Built-in Types](articles/guides/built-in-types.md).
+In a project that references one of the two packages directly, the analyzer also checks the built-in non-copyable types, a few structs of
+the framework such as <xref:System.Runtime.InteropServices.GCHandle> and <xref:System.Threading.SpinLock>. In a project that gets the
+analyzer only through a library, it does not. See [Built-in Non-copyable Types](articles/guides/built-in-types.md).
 
 **Requirements**: C# projects built with the .NET 10 SDK or later.
 
@@ -38,7 +38,7 @@ library, they do not. See [Built-in Types](articles/guides/built-in-types.md).
 Here are some additional links to get you started:
 
 - [What the Analyzer Does](articles/start/what-it-does.md) - Visit here first. It opens Start Here, a few short pages to read in order.
-- [Why Am I Seeing This?](articles/start/why-am-i-seeing-this.md) - For a project that got the analyzers through a library that it uses.
+- [Why Am I Seeing This?](articles/start/why-am-i-seeing-this.md) - For a project that got the analyzer through a library that it uses.
 - [New and Stored Values](articles/start/new-and-stored-values.md) - The one distinction that every rule comes down to.
 - [All Diagnostics](articles/all-diagnostics.md) - Every ID, each with an article on what the warning means and how to fix it.
 - [API Documentation](api/Singulink.CodeAnalysis.yml) - Browse the attributes and the helpers here.

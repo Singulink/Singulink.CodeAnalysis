@@ -43,7 +43,7 @@ When a call returns, it proves every argument that it passed to a parameter mark
 
 #### Plain Store
 
-A plain store to what the reference refers to, or to an instance field of it, proves it. A compound assignment and an increment on a built-in type are a read and a store, so they prove it too.
+A plain store to what the reference refers to, or to an instance field of it, proves it. A compound assignment and an increment on a [simple type](what-can-throw.md#operators) are a read and a store, so they prove it too.
 
 ```cs
 static void Reset([MovedFrom] ref LockGuard from, ref LockGuard to, ref int count)
@@ -162,24 +162,10 @@ That statement proves nothing of `second`. So an assignment, an increment or a c
 
 Being known to refer to something changes nothing else:
 
-- A by-value read of a non-copyable value, or of a [container](non-copyable-types.md#containers) of one, through another reference between the read and the reset of a `[MovedFrom]` parameter gets a warning as before. If the two references refer to the same variable, the read is a second read of the same value.
-- A call, an element and a member of an object count as able to throw as before.
+- A by-value read of a non-copyable value, or of a [container](non-copyable-types.md#containers) of one, through another reference between the read and the reset of a `[MovedFrom]` parameter still gets a warning. If the two references refer to the same variable, the read is a second read of the same value.
+- A call, an element and a member of an object still count as able to throw.
 
-The commit itself is often a proof. After `_held = guard;` in a struct, `this` is known to refer to something, so a flag may follow it:
-
-```cs
-public void Acquire()                       // in a struct
-{
-    LockGuard guard = _lock.Enter();
-    try
-    {
-        Prepare();
-        _held = guard;                      // the commit; also a store through 'this'
-        _isHeld = true;                     // OK: 'this' is known to refer to something
-    }
-    catch { guard.Dispose(); throw; }
-}
-```
+The commit itself is often a proof: after `_held = guard;` in a struct, `this` is known to refer to something, so a flag may follow it. See [This in a Struct](commit.md#this-in-a-struct).
 
 ## NotNullRef Mark
 
@@ -204,7 +190,7 @@ The mark also gets a warning (SCA1046):
 - on a by-value parameter, where it says nothing;
 - on a method that the compiler can leave out of a build: one that is `[Conditional]`, or a partial method with no body. A check that is there in one build and not in the next proves nothing.
 
-#### The Mark Is a Promise
+#### A Mark Taken on Trust
 
 The analyzer does not check the method. The mark is a claim by its author, like a [symbol list entry](symbol-list-format.md): the analyzer looks at no body, and knows no method by its name. So every mark that a project declares gets one warning where the attribute stands (SCA1047). The author suppresses that warning there once the method is verified and tested.
 

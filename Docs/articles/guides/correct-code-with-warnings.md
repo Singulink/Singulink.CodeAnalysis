@@ -90,8 +90,10 @@ return await winner;
 
 ## Under the Updated Memory Safety Rules
 
-In a project that turns on the [updated memory safety rules](../rules/updated-memory-safety-rules.md) of C#, these reports are errors, and a
-`#pragma` alone does not suppress them. Put the code that is reported in an unsafe context first, and suppress the warning there:
+In a project that turns on the [updated memory safety rules](../rules/updated-memory-safety-rules.md) of C#, these reports are the same
+warnings as above for most types, and the `#pragma` above suppresses them. For a type that is unsafe to copy, one whose copy can free or
+reach memory twice, they are errors, and a `#pragma` alone does not suppress them. Put the code that is reported in an unsafe context
+first, and suppress the warning there:
 
 ```cs
 catch

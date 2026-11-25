@@ -54,7 +54,7 @@ dotnet_diagnostic.SCA1023.severity = none
 
 ## Move at the Last Use
 
-A local or a by-value parameter is a new value [where it is used for the last time](../rules/last-use.md). A project that wants every handover of a value written out turns that off in the project file:
+A local or a by-value parameter is a new value [where it is used for the last time](../rules/last-use.md). A project that wants every hand-off of a value written out turns that off in the project file:
 
 ```xml
 <PropertyGroup>
@@ -64,18 +64,19 @@ A local or a by-value parameter is a new value [where it is used for the last ti
 
 Then only `NonCopyable.Move` hands a value over. What else that turns off, and how to set it in a configuration file: [Turning Off the Move on the Last Use](../rules/msbuild-properties.md#turning-off-the-move-on-the-last-use).
 
-The built-in framework structs have a property of their own: see [Built-in Types](built-in-types.md).
+The built-in non-copyable types have a property of their own: see [Built-in Non-copyable Types](built-in-types.md).
 
 ## Under the Updated Memory Safety Rules
 
-A project that turns on the updated memory safety rules of C# gets most reports as errors, and only code in an unsafe context can take one on itself:
+A project that turns on the updated memory safety rules of C# gets every report about a non-copyable type as under the current rules, with one exception. A report about a type that is unsafe to copy, one whose copy can free or reach memory twice, is an error. Only code in an unsafe context and a declaration marked `safe` or `unsafe` can take such a report on itself:
 
 | To turn down | Write |
 |---|---|
 | One report on code that is correct | `unsafe(...)` around the expression that is reported, such as `unsafe(lease).Dispose();`, or an `unsafe` block around the statement, and `#pragma warning disable` with the reason |
-| A plain warning: SCA1042, SCA1045, SCA1047, and SCA1025 | As under the current rules |
+| One report at a declaration that is correct | `safe` on the declaration, in a project that allows unsafe code, and `#pragma warning disable` with the reason. See [Marking a Declaration](../rules/updated-memory-safety-rules.md#marking-a-declaration) |
+| A report about a type that is not unsafe to copy, and a plain warning: SCA1042, SCA1045, SCA1047, SCA1049, and SCA1025 | As under the current rules |
 | Every error of the project | `NonCopyableErrorsAsWarnings` set to `true`, which makes the analyzer report as under the current rules |
 
-`.editorconfig`, `.globalconfig`, `NoWarn` and `[SuppressMessage]` have no effect on an error. In an unsafe context, all of them but `[SuppressMessage]` turn the warning off. See [Updated Memory Safety Rules](../rules/updated-memory-safety-rules.md#suppressing-the-warning).
+`.editorconfig`, `.globalconfig`, `NoWarn` and `[SuppressMessage]` have no effect on an error. In an unsafe context and at a marked declaration, all of them but `[SuppressMessage]` turn the warning off. See [Updated Memory Safety Rules](../rules/updated-memory-safety-rules.md#suppressing-the-warning).
 
 </div>
