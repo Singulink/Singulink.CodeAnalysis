@@ -10,6 +10,10 @@ A lock guard, a handle or a pooled buffer is a struct where each instance owns s
 - a value passed through generic code;
 - the copies that the compiler makes by itself for patterns, iterators and read-only references.
 
+Moving a value is not a copy, because one instance is left afterwards. A local that you pass on and do not use again moves, and
+<xref:Singulink.CodeAnalysis.NonCopyable.Move*?displayProperty=nameWithType> takes a value out of a field and leaves the field empty. See
+[Moving Values](articles/guides/moving-values.md).
+
 The analyzers check only what is marked, and there are no style or opinion rules. All the rules so far, the SCA1000s, are about non-copyable
 structs.
 

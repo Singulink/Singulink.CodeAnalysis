@@ -11,6 +11,10 @@ release the same lock or free the same handle. Mark such a struct with `[NonCopy
 where the copy is easy to miss: a read out of a list or a task, a value passed through generic code, and the copies that the compiler makes
 by itself for patterns, iterators and read-only references.
 
+Moving a value is not a copy, because one instance is left afterwards. A local that you pass on and do not use again moves, and
+`NonCopyable.Move` takes a value out of a field and leaves the field empty. See
+[Moving Values](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/guides/moving-values.html).
+
 The analyzers check only what is marked, and there are no style or opinion rules. All the rules so far, the
 [SCA1000s](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/all-diagnostics.html), are about non-copyable structs.
 
