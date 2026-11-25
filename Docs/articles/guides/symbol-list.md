@@ -94,6 +94,7 @@ Read the static constructor and the static field initializers of the type, and a
 | `T:System.Runtime.InteropServices.GCHandle;copyable` | The struct is an ordinary struct for this project |
 | `A:Contoso.Plugins;trusted` | The assembly was not built with the analyzer, and makes no copy of the values that it gets at |
 | `T:Contoso.Document;clones` | The class clones its objects field by field, so a class that derives from it gets a warning for each field that holds a non-copyable value |
+| ``T:ThirdParty.Index`2.KeyList;erasable;for=TPayload`` | No base type or interface of the class hands out a payload, so converting it to one of them hides no payload |
 
 The other markers (`drains`, `owned`, `for=`, `view`, `erasable`), what each entry may be put on, and what happens where two entries disagree: [Symbol List Format](../rules/symbol-list-format.md). What the analyzer ships for .NET's own libraries is on the [built-in framework symbol list](../rules/framework-symbol-list.md).
 

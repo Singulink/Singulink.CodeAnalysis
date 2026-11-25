@@ -109,19 +109,34 @@ The method uses `writer` after an `await`, so the parameter needs `[Kept]`, or i
 
 ## Dictionary Keys
 
-<xref:System.Collections.Generic.Dictionary`2.Keys?displayProperty=nameWithType> is on the built-in framework symbol list with its collection and its enumerator, which read no value. A conversion of the key collection to `IEnumerable<TKey>`, such as the one that LINQ makes, still gets a warning (SCA1023), since the type of the collection names the value type. How to release every value of a dictionary: [Dictionaries](../guides/collections.md#dictionaries).
+<xref:System.Collections.Generic.Dictionary`2.Keys?displayProperty=nameWithType> is on the built-in framework symbol list with its collection and its enumerator, which read no value, so a loop over the keys of a dictionary is clean. The key collection is marked `erasable;for=TValue`: its interfaces hand out keys, and none of its code reads a value. So `byKey.Keys.ToList()` and any other conversion of the keys to `IEnumerable<TKey>` is clean as well. How to release every value of a dictionary: [Dictionaries](../guides/collections.md#dictionaries).
+
+This holds whatever the key is. A dictionary with a key of a non-copyable type gets [SCA1020](../diagnostics/sca1020.md) for the key at each use, since the list names its members for the values only. Converting its keys to `IEnumerable<TKey>` adds nothing to that, and converting them to an untyped collection, such as `IEnumerable`, hides the keys alone, so its warning is about the key type:
+
+```cs
+var byKey = new Dictionary<LockGuard, NativeBuffer>();  // SCA1020 for LockGuard
+IEnumerable<LockGuard> keys = byKey.Keys;               // SCA1020 for LockGuard, and nothing for the conversion
+IEnumerable untyped = byKey.Keys;                       // SCA1020, and SCA1022 about LockGuard only
+```
+
+The value collection is marked `erasable;for=TKey` in the same way, and `Lazy<T, TMetadata>` is `erasable;for=TMetadata`. The one other object that the interfaces of the key and value collections hand out is the lock object of `ICollection.SyncRoot`: see [APIs Used Against Their Documentation](not-covered.md#apis-used-against-their-documentation). The key and value collections of `SortedDictionary<TKey, TValue>`, `OrderedDictionary<TKey, TValue>` and `ReadOnlyDictionary<TKey, TValue>` have no such line: their code reads whole entries, or that of whatever dictionary they wrap. A conversion of one of them that hides a non-copyable type gets a warning (SCA1023).
+
+<xref:System.Collections.Generic.Dictionary`2.Values?displayProperty=nameWithType> is on it with its collection and its enumerator, which hand out each value by value, as the enumerator of a list does. A loop over the values of a stored dictionary gets one warning for the copy (SCA1030).
 
 ## Collections, Tasks and Views
 
 | Type | On the built-in framework symbol list |
 |---|---|
 | <xref:System.Collections.Generic.List`1>, <xref:System.Collections.Generic.Queue`1>, <xref:System.Collections.Generic.Stack`1> | adding, taking out, peeking, enumerating and the capacity; for a list also removing a range and reversing in place |
-| <xref:System.Collections.Generic.Dictionary`2> | for the value: the constructors with a comparer, lookups, the capacity, `Keys`, and the alternate lookup |
+| <xref:System.Collections.Generic.Dictionary`2> | for the value: the constructors with a comparer, lookups, the capacity, `Keys`, `Values` and its count, and the alternate lookup |
 | <xref:System.Collections.Generic.PriorityQueue`2> | for the element: everything but what enqueues a sequence or removes by comparing elements |
 | <xref:System.Collections.Generic.LinkedList`1>, <xref:System.Collections.Generic.LinkedListNode`1> | adding, removing and walking nodes, `ValueRef`, and `Value` as a read by value |
 | <xref:System.Collections.Generic.SortedList`2> | for the value: everything but `ContainsValue`, `IndexOfValue`, `Values` and the copying constructors |
 | <xref:System.Collections.Frozen.FrozenDictionary`2> | for the value: the lookups, `GetValueRefOrNullRef` and the alternate lookup |
 | <xref:System.Collections.Concurrent.ConcurrentDictionary`2>, the channels, the concurrent collections | as above |
+| <xref:System.Collections.Immutable.ImmutableArray`1> | making one that is empty or has one element, its length, an element by value or by reference, a span over it, enumerating it, and a builder's `Add`, `Count` and `MoveToImmutable` |
+| <xref:System.Collections.Immutable.ImmutableList`1>, <xref:System.Collections.Immutable.ImmutableDictionary`2> | the count |
+| <xref:System.Collections.Generic.EqualityComparer`1.Default?displayProperty=nameWithType>, <xref:System.Collections.Generic.Comparer`1.Default?displayProperty=nameWithType>, <xref:System.Linq.Enumerable.Empty*?displayProperty=nameWithType> | getting them: they hold no value. What a comparer is given is judged where it is called |
 | <xref:System.Runtime.CompilerServices.StrongBox`1> | the constructors; its `Value` is a field, which is reached in place |
 | <xref:System.Threading.Tasks.Task`1>, <xref:System.Threading.Tasks.TaskFactory`1>, <xref:System.Threading.Tasks.ValueTask`1>, <xref:System.Threading.Tasks.TaskCompletionSource`1> | making and completing a task with one result, and reading it |
 | <xref:System.Span`1>, <xref:System.Memory`1>, <xref:System.ArraySegment`1>, <xref:System.Buffers.ReadOnlySequence`1>, <xref:System.Buffers.IBufferWriter`1>, <xref:System.Buffers.ArrayBufferWriter`1>, <xref:System.Buffers.MemoryManager`1> | the views and the members that hand out a view |
@@ -219,7 +234,8 @@ These cannot be on the built-in framework symbol list, by design:
 |---|---|
 | <xref:System.Collections.Generic.HashSet`1>, <xref:System.Collections.Generic.SortedSet`1>, <xref:System.Collections.Generic.SortedDictionary`2> | They compare what they hold. The last gives each pair that a lookup passes, value included, to its comparer by value |
 | <xref:System.Lazy`1>, <xref:System.Threading.ThreadLocal`1>, <xref:System.Threading.AsyncLocal`1> | They hand out a copy at every read and have no access by reference |
-| The members of the immutable collections, LINQ, <xref:System.Array.Resize*?displayProperty=nameWithType>, <xref:System.Array.Copy*?displayProperty=nameWithType>, <xref:System.Collections.Generic.Dictionary`2.Values?displayProperty=nameWithType>, the making of a frozen dictionary | They copy |
+| The members of the immutable collections that make a new collection, LINQ's operators, <xref:System.Array.Resize*?displayProperty=nameWithType>, <xref:System.Array.Copy*?displayProperty=nameWithType>, `CopyTo` of the values of a dictionary, the making of a frozen dictionary | They copy |
+| The members of the immutable collections that look an element up, such as `Contains` and `IndexOf` | They compare what they hold |
 | <xref:System.Runtime.InteropServices.CollectionsMarshal.SetCount*?displayProperty=nameWithType> | It can turn a removed element back into an element of the list |
 
 > [!TIP]

@@ -11,7 +11,7 @@ A few cases are left, and none of them comes up in ordinary code. Each either ca
 | What | How likely you are to meet it | What to do |
 |---|---|---|
 | [Unsafe code, pointers, reflection and `dynamic`](#code-that-steps-outside-the-languages-safety) | Only with code that steps outside the language's safety | Nothing new: these can break any guarantee of the language |
-| [Live views and value task sources](#apis-used-against-their-documentation) | Only if you ignore the API's documentation | Follow the documentation, as you would without the analyzer |
+| [Live views, value task sources and lock objects](#apis-used-against-their-documentation) | Only if you ignore the API's documentation | Follow the documentation, as you would without the analyzer |
 | [A suppressed warning, a wrong symbol list entry, a `trusted` line](#what-you-vouched-for) | Only where you vouched for something | Vouch only for what you know to be true |
 | [Code that was built without the analyzer](#code-built-without-the-analyzer) | Only if a library was built without the analyzer and you vouched for it | Answer SCA1025 once, where it appears |
 | [Interceptors, and a framework or compiler newer than the tested ones](#rare-corners) | Rare | Know that the rules judge the method that is written at the call |
@@ -47,6 +47,7 @@ LockGuard copy = *pointer;                    // SCA1001: a copy of the guard th
 Take(pointer[1]);                             // SCA1003: the same for an element
 pointer->Dispose();                           // OK: the guard is used in place
 ref LockGuard reference = ref *pointer;       // OK: a reference, not a copy
+LockGuard* address = &guard;                  // OK: the address of the variable, not a copy
 
 LockGuard* second = pointer;                  // no warning: the pointer is copied, not the guard, and nothing tracks who owns the guard now
 Buffer.MemoryCopy(pointer, target, size, size);   // no warning: the bytes of the guard are copied, and no rule sees that
@@ -86,6 +87,8 @@ Some framework members hand out a view of a collection's own storage, and docume
 | <xref:System.Runtime.InteropServices.ImmutableCollectionsMarshal.AsMemory*?displayProperty=nameWithType> | No remark, but it gives the builder's own storage in the same way, so the same care applies |
 
 Value tasks are the same. Two value tasks made from one source and token are one operation consumed twice, and <xref:System.Threading.Tasks.ValueTask`1> documents that an instance "may only be awaited once", and that otherwise "the results are undefined". The read of the result inside such a source gets a warning, which you suppress there: see [Value Task Sources](listed-members.md#value-task-sources).
+
+The lock object of a dictionary's keys or values is the dictionary itself on .NET: <xref:System.Collections.ICollection.SyncRoot?displayProperty=nameWithType> of `map.Keys` hands it out, as an object to synchronize access with. Code that casts that object back to the dictionary reaches the values through the keys, which the analyzer treats as holding keys only, and the analyzer does not follow it.
 
 ## What You Vouched For
 
@@ -138,5 +141,7 @@ The analyzer needs a compiler of version 5.0 or later, which is that of the .NET
 - **New syntax that the analyzer does not know** gets a warning as a use that is not known to be safe.
 - **"Not known" covers** an operation of a kind that the analyzer has no judgment for, where it is used by value. It also covers a pattern of a kind that it has no judgment for, where it looks into a value of a non-copyable type.
 - **A copy that a newer compiler makes inside syntax that it already knows** is covered once that SDK has been tested.
+
+Code that does not compile, as an editor shows it while you type, gets the compiler's errors and no such warning: it cannot run. The rest of the member is checked as usual.
 
 </div>

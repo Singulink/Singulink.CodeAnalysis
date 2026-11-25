@@ -23,7 +23,7 @@ The analyzer recognizes its attributes **by their full name: the namespace `Sing
 
 This works across assemblies. A struct that a referenced assembly marks with its own internal attribute is non-copyable in your code as well, and the same holds for the other five attributes.
 
-The analyzer reads the arguments of an attribute and never calls it. So a `NonCopyableAttribute` that a project declares itself needs only a settable `bool` property named `UnsafeToCopy` for `UnsafeToCopy = true` or `UnsafeToCopy = false` to count. The analyzer also reads an argument for a `bool` parameter of its constructor named `unsafeToCopy`, in any case. Without either the value cannot be written, and the project's structs and type parameters have the default: see [Marking a Struct](../guides/marking-a-struct.md#unsafe-to-copy).
+The analyzer reads the arguments of an attribute and never calls it. So a `NonCopyableAttribute` that a project declares itself needs only a settable `bool` property or a public `bool` field named `UnsafeToCopy` for `UnsafeToCopy = true` or `UnsafeToCopy = false` to count. The analyzer also reads an argument for a `bool` parameter of its constructor named `unsafeToCopy`, in any case. Without either the value cannot be written, and the project's structs and type parameters have the default: see [Marking a Struct](../guides/marking-a-struct.md#unsafe-to-copy).
 
 ## Namespace Is Part of the Name
 
@@ -97,10 +97,10 @@ The analyzer reads `UnsafeToCopy` where a mark is applied, and never the code of
 | `[NativeHandle(UnsafeToCopy = true)]` | Unsafe to copy |
 | `[NativeHandle(unsafeToCopy: true)]` or `[NativeHandle(true)]`, for a `bool` parameter of the constructor named `unsafeToCopy` | Unsafe to copy |
 
-A mark that sets the value in its own code is read as if it did not set it. That is a constructor that sets `UnsafeToCopy = true`, an initializer of the property, or `: base(unsafeToCopy: true)`, so a struct marked with it counts as plain non-copyable.
+A mark that sets the value in its own code is read as if it did not set it. That is a constructor that sets `UnsafeToCopy = true`, an initializer of the property or field, or `: base(unsafeToCopy: true)`, so a struct marked with it counts as plain non-copyable.
 
 > [!WARNING]
-> **Such code gets a warning where the attribute class is declared (SCA1049).** Take the value as a `bool` parameter named `unsafeToCopy` and set the property from it, or pass the parameter on to the base class:
+> **Such code gets a warning where the attribute class is declared (SCA1049).** Take the value as a `bool` parameter named `unsafeToCopy` and set the property or field from it, or pass the parameter on to the base class:
 >
 > ```cs
 > internal sealed class NativeHandleAttribute : NonCopyableAttribute

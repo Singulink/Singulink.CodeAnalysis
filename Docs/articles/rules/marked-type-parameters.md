@@ -112,19 +112,22 @@ Most projects use the current memory safety rules of C#, where this section chan
 | `UnsafeToCopy` on the type parameter's `[NonCopyable]` | Inside the generic | What the generic takes |
 |---|---|---|
 | Not written, or `= true` | The type parameter is unsafe to copy: a report about it is an error | Any non-copyable type |
-| `= false` | The type parameter is a plain non-copyable type: a report about it is the ordinary warning | Only types that are not unsafe to copy |
+| `= false` | The type parameter is a plain non-copyable type: a report about it is the ordinary warning | Only types through which no value that is unsafe to copy can be reached |
 
 ```cs
 public struct Owner<[NonCopyable] T> { private T _value; }                         // errors inside, takes any type
 public struct Scoped<[NonCopyable(UnsafeToCopy = false)] T> { private T _value; }  // warnings inside
 
-var a = new Scoped<LockGuard>();      // OK
-var b = new Scoped<NativeBuffer>();   // SCA1026: Scoped<T> does not take a type that is unsafe to copy
+var a = new Scoped<LockGuard>();            // OK
+var b = new Scoped<NativeBuffer>();         // SCA1026: Scoped<T> does not take a type that is unsafe to copy
+var c = new Scoped<List<NativeBuffer>>();   // SCA1026: nor a container of one
+var d = new Scoped<List<LockGuard>>();      // OK
 ```
 
 Use `UnsafeToCopy = false` for a generic that is meant for plain non-copyable types, such as lock guards, where an ordinary warning that you can suppress fits a copy better than an unsafe context does.
 
-- **A type parameter of the generic around the use** counts as unsafe to copy, since it can stand for any type, unless it says `UnsafeToCopy = false` itself. A type parameter that is not marked is a copyable type there, and is judged where its own generic is used.
+- **Containers count by what other code can reach.** Inside the generic, a value of the type parameter that is handed to other code gets the ordinary warning as well, so the generic does not take a container of a type that is unsafe to copy, a tuple that carries one, or a delegate over one. A container of a plain non-copyable type is taken.
+- **A type parameter of the generic around the use** counts as unsafe to copy, since it can stand for any type, unless it says `UnsafeToCopy = false` itself, and so does a container of it. A type parameter that is not marked is a copyable type there, and is judged where its own generic is used.
 - **Every way to the code of the generic counts:** a member of the generic that is used with the type, a static field of the generic, a base type or an interface, a type that the `new()` constraint lets a generic create, and a struct over the type that is boxed. So does `Scoped<NativeBuffer>` given to other generic code, at any depth of its type arguments, as in `List<Scoped<NativeBuffer>>`: that code can run its members, such as `ToString`, `Equals` and a static abstract member. A struct that holds it in a field runs its `Equals` and `GetHashCode` too. See [SCA1026](../diagnostics/sca1026.md).
 - **Naming the type gets no warning,** as in a field, a parameter or a local of type `Scoped<NativeBuffer>` or `List<Scoped<NativeBuffer>>`, `typeof` and `default`: none of them runs code of the generic. A member that is used on the value does.
 - **An override or an implementation** may say `UnsafeToCopy = false` only where the member that it overrides or implements says it too, or leaves the type parameter unmarked (SCA1040). See [Keeping Marks](keeping-marks.md#marks-on-type-parameters).

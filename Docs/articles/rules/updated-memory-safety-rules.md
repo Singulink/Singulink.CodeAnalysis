@@ -50,6 +50,20 @@ A struct that holds a `NativeBuffer` in a field says so with `UnsafeToCopy = tru
 
 A report about a container, such as a `List<NativeBuffer>`, a `NativeBuffer[]` or a task of one, is about the values that it holds. An array or a class holds its values by reference, so a `NativeBuffer[]` field asks nothing of the struct that declares it, while the array itself is a container of such values.
 
+What counts of a value depends on what a report says happens to it:
+
+| The report says | What counts |
+|---|---|
+| A value is copied | What the copy duplicates: the value and what it holds inline, through tuples, nullable types and structs. A list or a delegate that rides along is not duplicated, so what it holds does not count |
+| Other code gets at a value or a container | Everything that code can reach: the value, what it holds inline, and the values of the lists, arrays and delegates that it carries, at any depth. A member that is not on the symbol list, a conversion or a box that hides the type, and a method that keeps a container are such reports |
+
+A `(LockGuard, Func<NativeBuffer>)` is a plain non-copyable value. A copy of it duplicates the guard and only a reference to the delegate, so the copy gets the ordinary warning. A box of it lets other code reach the delegate, so the report of what the box hides is an error:
+
+```cs
+var copy = _job;        // SCA1001, the ordinary warning, for a field of type (LockGuard, Func<NativeBuffer>)
+object boxed = _job;    // SCA1004, the ordinary warning, and SCA1023, an error
+```
+
 A report that involves several non-copyable types is an error where any of them is unsafe to copy, and its message names that one, whatever comes first in your code. A member of `Pair<LockGuard, NativeBuffer>` that is not on the symbol list, and `MemberwiseClone` in a class with a field of each, both get an error about `NativeBuffer`. Where one use breaks two rules, each gets its report: a `foreach` over a stored `Dictionary<LockGuard, NativeBuffer>` gets a warning for the key, since the framework symbol list names its members for the values only, and an error for the copy of each value.
 
 #### Reports That Are Errors for Any Type
@@ -60,7 +74,7 @@ A few reports are about no single type, and they are errors whatever the types o
 |---|---|
 | SCA1007 | A call of `RuntimeHelpers.GetObjectValue`, which clones any boxed struct |
 | SCA1008 | `MemberwiseClone` in a class that another assembly can derive from, and a member of such a class that clones without a `clones` line |
-| SCA1023, SCA1031, SCA1033, SCA1040, SCA1041 | A report about what a generic hands out or keeps, or about a mark of a type parameter, `[RequiresCopyable]` or a generic move, where a caller can bind any type |
+| SCA1023, SCA1031, SCA1033, SCA1040, SCA1041 | A report about what a generic hands out or keeps, or about a mark of a type parameter, `[RequiresCopyable]` or a generic move, where a caller can bind any type. A value of a type parameter marked `UnsafeToCopy = false` that is hidden or handed out by a delegate gets the ordinary warning, since such a type parameter takes no container of a type that is unsafe to copy |
 | SCA1040, SCA1041 | A `[MovedFrom]`, `[Kept]` or `[return: Borrowed]` mark on a parameter or a return value whose type mentions a type parameter, other than one marked `UnsafeToCopy = false` |
 | SCA1044 | An attribute of the analyzer that is `[Conditional]` |
 | SCA1046 | A `[NotNullRef]` mark that does not count |

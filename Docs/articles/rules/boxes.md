@@ -10,7 +10,8 @@ A box holds one value. A new value moves into it, and a stored value is copied i
 |---|---|
 | Boxing a new value | OK: the value moves into the box |
 | Boxing a stored value | SCA1004: it boxes a copy |
-| Boxing a generic struct that is non-copyable only through its type arguments, such as a tuple | SCA1023, even for a new value |
+| Boxing a generic struct that is non-copyable only through its type arguments, such as a tuple | SCA1023, even for a new value, and SCA1004 as well for a stored one |
+| Boxing any other generic struct whose type arguments carry a container, such as a `Scoped<List<LockGuard>>` | SCA1023, even for a new value, and SCA1004 as well for a stored one |
 | Taking a value out of a box, in any way | SCA1001 |
 | A bare type test, such as `box is LockGuard` | OK: it copies nothing |
 | A pattern on a `union` | SCA1001 at every match: a union is a box |
@@ -35,14 +36,36 @@ Boxing a generic struct that is non-copyable only through its type arguments get
 
 A `LockGuard?` boxes as the guard itself and is not affected, and neither is a struct whose type parameter is marked `[NonCopyable]`.
 
+## Structs Whose Type Arguments Carry a Container
+
+A box hides a container that the type arguments of a generic struct carry, as a conversion of the container to `object` does. Other code can reach the container through the box, with a later cast or reflection. So boxing such a struct gets a warning (SCA1023), even for a new value and even where the code of the struct is checked:
+
+```cs
+[NonCopyable]
+public struct Scoped<[NonCopyable] T> { public T Value; }
+
+object a = new Scoped<List<LockGuard>>();   // SCA1023: the box hides the list
+object b = new Scoped<LockGuard>();         // OK: the value moves into the box
+```
+
+The warning is an error under the [updated memory safety rules](updated-memory-safety-rules.md) where the container holds a type that is unsafe to copy.
+
 ## Boxing a Stored Value
 
-Boxing a stored value copies it and gets a warning (SCA1004), whether a conversion, `as` or a pattern does it. A bare type test boxes nothing that can be used.
+Boxing a stored value copies it and gets a warning (SCA1004), whether a conversion, `as`, a pattern or a `foreach` does it. A bare type test boxes nothing that can be used.
 
 ```cs
 if (_guard is IDisposable d) { }             // SCA1004: 'd' is a boxed copy of the field
 if (_guard is IDisposable) { }               // OK: a bare type test
 ```
+
+Where the box also hides what the value holds, as for a stored tuple, that gets its own warning as well. Each warning has its own fix, so neither hides the other:
+
+```cs
+object both = _pair;                         // SCA1004 and SCA1023, for a field of type (LockGuard, int)
+```
+
+A stored value of a type parameter marked `[NonCopyable]` gets both too, since a container can be bound to it.
 
 ## Taking a Value Out of a Box
 

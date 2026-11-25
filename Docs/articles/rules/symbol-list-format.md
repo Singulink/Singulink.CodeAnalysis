@@ -62,6 +62,9 @@ T:System.Runtime.InteropServices.GCHandle;copyable
 # erasable: no base type or interface of the type hands out a value of its type arguments
 T:ThirdParty.Promise`1;erasable
 
+# erasable;for=: the same, for the type arguments of these type parameters only
+T:ThirdParty.Index`2;erasable;for=TPayload
+
 # trusted: an assembly that was not built with the analyzer, and whose code makes no copy of the non-copyable values that it gets at
 A:Contoso.Plugins;trusted
 
@@ -88,6 +91,7 @@ T:Contoso.Page;clones=none
 | An instance property of a class, of type <xref:System.Threading.Tasks.Task`1> | `owned` | The task belongs to the object alone |
 | A method that returns `bool` | `borrowswhen=true` or `borrowswhen=false` | Safe to use; keeps nothing of a value where it returned that |
 | A member | `for=T1,T2` | The entry vouches only for these type parameters |
+| A generic class or interface (`T:`) | `erasable;for=T1,T2` | No base type or interface hands out a value of these type parameters |
 | A static field of a generic type (`F:`) | none, or `for=T1,T2` alone | Reading or writing the field is safe: the static initializers of its type make no copy. See [Static Fields](#static-fields) |
 | A struct (`T:`) | `view` | Copying the struct copies no elements |
 | A struct (`T:`) | `noncopyable` | The struct is a non-copyable type |
@@ -179,6 +183,8 @@ How to write it:
 
 `for=T1,T2` goes after the marker, if any. The entry vouches only for these type parameters of the member or of its containing types. When a non-copyable type is bound to any other type parameter, the member counts as not on the symbol list.
 
+On a type, `for=` follows `erasable` only, and names type parameters of the type or of its containing types: see [Erasable](#erasable).
+
 #### View
 
 A struct marked `view` copies no elements when it is copied, as <xref:System.Span`1> does. It is a container and not a non-copyable type.
@@ -209,7 +215,7 @@ Nothing makes a struct that is unsafe to copy plain non-copyable. Only `copyable
 A struct marked `copyable` is an ordinary struct for this project, even though the [built-in framework symbol list](framework-symbol-list.md) or a referenced library makes it non-copyable. Use it for one of the [built-in non-copyable types](../guides/built-in-types.md) that the project copies on purpose, or for a library's struct that another analyzer's attribute marks.
 
 > [!NOTE]
-> **A `copyable` line counts only in a file of your project.** It says that your project copies the struct on purpose, which only your project can decide. The same line in a file that comes with a package does nothing, and gets no warning, in the projects that use the package. In the library's own build it is a file of the project, and counts there.
+> **A `copyable` line counts only in a file of your project.** It says that your project copies the struct on purpose, which only your project can decide. The same line in a file that comes with a package does nothing, and gets no warning, in the projects that use the package. In the library's own build it is a file of the project, and counts there. A file comes with a package wherever NuGet put the package: in the global packages folder, in a fallback folder, or in the packages folder of a project that uses `packages.config`.
 
 Everything that depends on the struct changes with it. A struct with a field of it, a tuple or a `Nullable` of it, a `List<T>` of it, and a marked type parameter bound to it are all ordinary types too. Nothing that the analyzer guarantees holds for them.
 
@@ -291,6 +297,15 @@ The analyzer cannot check the line, so write it only for a class whose code you 
 
 A generic class or interface marked `erasable` has no base type or interface that hands out a value of its type arguments. So a container of the type may be converted to one of them. See [Variance and Erasable Types](variance-and-erasable-types.md).
 
+With `for=`, the line says so for the type parameters that it names, of the type or of a type that contains it. A conversion to a base type or an interface then hides nothing of what is bound to them, and is judged by the other type arguments alone:
+
+```text
+# The keys of an index hand out keys and never a payload
+T:ThirdParty.Index`2.KeyList;erasable;for=TPayload
+```
+
+Write the line only where the code behind those base types and interfaces never copies such a value either: a conversion hands the object to that code. The framework symbol list marks the key collection of a `Dictionary<TKey, TValue>` this way: see [Dictionary Keys](framework-symbol-list.md#dictionary-keys).
+
 ## Rules for Entries
 
 #### What May Be on the Symbol List
@@ -357,7 +372,8 @@ An entry that names something the project does not reference is ignored, so one 
 A line cannot be parsed if it has:
 
 - an ID that cannot be a documentation comment ID, such as one with a parenthesis that is not closed;
-- a `for=` that names a type parameter which the member does not have, or one that fits more than one type parameter of the member and of the types that contain it;
+- a `for=` that names a type parameter which the member or the type does not have, or one that fits more than one type parameter of it and of the types that contain it;
+- a `for=` on a type with a marker other than `erasable`;
 - a marker on something that it does not fit (see the table below), or any marker on a field line;
 - `clones=complete` or `clones=none` on a method, a property or an event, a value of `clones` other than `complete` or `none`, or `complete` or `none` written as a marker of its own;
 - a `borrowswhen` with no outcome, an empty outcome, an outcome listed twice, or both `true` and `false`;
@@ -388,6 +404,7 @@ Where two entries for the same ID disagree, the one that claims less applies, wh
 | `borrows` and `borrowswhen` | The `borrowswhen` line |
 | Two `borrowswhen` lines | The outcome that both list: `false` and `false` give `false`, and `false` and `true` give no marker |
 | Two `for=` limits | Only the type parameters that both name |
+| Two `erasable` lines of a type with `for=` limits | Erasable for the type parameters that both name, and for none where they name none in common |
 | `copyable` in a file of the project, and the framework symbol list or an attribute | `copyable`, since that is what it is for |
 | `copyable` in a file that comes with a package | Nothing: the line does nothing in a project that uses the package |
 | `copyable` and `noncopyable` or `unsafetocopy` of the same type, in two symbol list files | `noncopyable` or `unsafetocopy` |
@@ -409,7 +426,7 @@ M:System.Threading.Channels.ChannelWriter`1.TryWrite(`0);borrows
 
 A `borrows` line whose `for=` leaves out a type parameter that the framework symbol list covers gets no such warning, since it takes the entry away for that type parameter.
 
-Take a member that the framework symbol list names with `for=`. A line of a file that names it for a type parameter that the `for=` leaves out, or names it with no `for=`, would add nothing. The analyzer leaves such a line out and warns about it (SCA1042). Where code uses the member, the warning says which type parameters the list names it for, and gives no line to add.
+Take a member that the framework symbol list names with `for=`. A line of a file that names it for a type parameter that the `for=` leaves out, or names it with no `for=`, would add nothing. The analyzer leaves such a line out and warns about it (SCA1042). Where code uses the member, the warning says which type parameters the list names it for, and gives no line to add. An `erasable` line of a type that the framework symbol list marks `erasable` for some type parameters only is treated the same way.
 
 #### Owned Entries Are Taken on Trust
 

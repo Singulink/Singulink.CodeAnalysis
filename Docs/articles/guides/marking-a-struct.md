@@ -73,7 +73,7 @@ internal sealed class KeptAttribute : Attribute;
 internal sealed class NotNullRefAttribute : Attribute;
 ```
 
-Declare only the ones that you use. The analyzer reads the arguments of an attribute and never calls it, so your `NonCopyableAttribute` needs only a settable `bool` property named `UnsafeToCopy` for `UnsafeToCopy = true` or `UnsafeToCopy = false` to count. Leave the property out where no struct of the project is [unsafe to copy](#unsafe-to-copy) and no type parameter says `UnsafeToCopy = false`.
+Declare only the ones that you use. The analyzer reads the arguments of an attribute and never calls it, so your `NonCopyableAttribute` needs only a settable `bool` property or a public `bool` field named `UnsafeToCopy` for `UnsafeToCopy = true` or `UnsafeToCopy = false` to count. Leave it out where no struct of the project is [unsafe to copy](#unsafe-to-copy) and no type parameter says `UnsafeToCopy = false`.
 
 This works across assemblies: a struct that a referenced assembly marks with its own internal attribute is non-copyable in your code as well, and unsafe to copy where that attribute says so.
 

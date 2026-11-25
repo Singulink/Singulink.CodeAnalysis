@@ -53,9 +53,14 @@ int[] keys = [.. byKey.Keys];                            // OK: the keys only
 foreach (int k in keys) { if (byKey.Remove(k, out var each)) each.Dispose(); }
 ```
 
-Do not call LINQ on `byKey.Keys`. LINQ takes the key collection as a plain `IEnumerable<int>`, but the collection's own type, `Dictionary<int, LockGuard>.KeyCollection`, names `LockGuard`. So `byKey.Keys.ToList()` gets a warning (SCA1023). Copy the keys with `[.. byKey.Keys]`, as above.
+`byKey.Keys.ToList()` works as well. The key collection hands out keys and nothing else, so LINQ may take it as a plain `IEnumerable<int>`.
 
-Any use of `byKey.Values` gets a warning (SCA1020): it would copy every guard, and it is not on the [symbol list](symbol-list.md).
+`byKey.Values` hands out each guard by value while the dictionary keeps it, as a list's enumerator does. So a loop over it gets a warning, and its count does not:
+
+```cs
+int count = byKey.Values.Count;                          // OK
+foreach (var each in byKey.Values) each.Dispose();       // SCA1030: each is a copy, and the dictionary keeps the guard
+```
 
 ## Stacks, Queues and Channels
 

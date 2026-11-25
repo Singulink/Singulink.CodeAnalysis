@@ -45,7 +45,7 @@ In a project that turns on the [updated memory safety rules](rules/updated-memor
 | [SCA1023](diagnostics/sca1023.md) | A container is converted to a type that hides what it holds |
 | [SCA1024](diagnostics/sca1024.md) | Code that was not built with the analyzer gets at a non-copyable value other than by value |
 | [SCA1025](diagnostics/sca1025.md) | A referenced assembly that was not built with the analyzer can use a non-copyable type |
-| [SCA1026](diagnostics/sca1026.md) | A type that is unsafe to copy is used for a type parameter marked `[NonCopyable(UnsafeToCopy = false)]` |
+| [SCA1026](diagnostics/sca1026.md) | A type that is unsafe to copy, or a container of one, is used for a type parameter marked `[NonCopyable(UnsafeToCopy = false)]` |
 
 ## Containers
 

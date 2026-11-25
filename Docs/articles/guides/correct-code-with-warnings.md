@@ -2,7 +2,7 @@
 
 # Correct Code That Still Gets a Warning
 
-Three shapes of correct code get a warning all the same. The analyzer follows a value through one method at a time, and it assumes that a value passed by value is gone, so it cannot see that these are right. This page gives the clean form or the suppression for each.
+Four shapes of correct code get a warning all the same. The analyzer follows a value through one method at a time, and it assumes that a value passed by value is gone, so it cannot see that these are right. This page gives the clean form or the suppression for each.
 
 ### At a Glance
 
@@ -11,6 +11,7 @@ Three shapes of correct code get a warning all the same. The analyzer follows a 
 | An `async` helper that fills a container which its caller awaits | Let the `async` method make the container and return it |
 | Handing a value over in a `try` block and keeping it where the receiver throws before it takes the value | Suppress the warning where it stands, with the reason |
 | A race between two tasks that hold a guard | Suppress the warning where it stands, with the reason |
+| A generic that names a deeper construction of itself in its base list | Keep non-copyable types out of it, or suppress the warning where it stands |
 
 > [!NOTE]
 > Suppress one warning at the place where it stands, with a comment that says why the code is right. Do not turn the rule down for the project: that would hide every real copy that the rule warns about as well.
@@ -87,6 +88,24 @@ lost.Dispose();
 return await winner;
 #pragma warning restore SCA1030
 ```
+
+## Generic That Expands Itself
+
+A generic can name a deeper construction of itself in its base list, as `Node<T>` does below. To see what such a type holds, the analyzer follows its interfaces, and meets a new type at every step: `Node<Node<T>>`, then `Node<Node<Node<T>>>`. It stops after 512 types, or at a type with more than 512 parts, and takes the answer that gets a warning. A generic over a tuple of itself, such as `IEquatable<Node<(T, T)>>`, doubles its parts at every step and reaches that limit after a few.
+
+```cs
+class Node<T> : IEquatable<Node<Node<T>>>
+{
+    public bool Equals(Node<Node<T>>? other) => false;
+}
+
+void Compare(Node<LockGuard> node)
+{
+    IEquatable<Node<Node<LockGuard>>> equatable = node;   // SCA1023, though the interface still shows LockGuard
+}
+```
+
+Under the updated memory safety rules a report about such a type is an error, even where it holds only a plain lock guard. Keep non-copyable types out of a generic like this, or suppress the warning where it stands, with the reason.
 
 ## Under the Updated Memory Safety Rules
 
