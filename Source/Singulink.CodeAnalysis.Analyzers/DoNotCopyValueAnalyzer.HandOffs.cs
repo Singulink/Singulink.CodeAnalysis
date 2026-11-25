@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Diagnostics;
 using Microsoft.CodeAnalysis.Operations;
@@ -33,21 +34,182 @@ public sealed partial class DoNotCopyValueAnalyzer
 
         // Every recursion of the analyzer stops with this exception before the stack runs out. The rest of the member is then not
         // checked, which is reported at the member, and the next member is checked as usual. No other exception is caught.
+        bool isTooDeep = false;
+
         try
         {
             walker.Walk();
         }
         catch (InsufficientExecutionStackException)
         {
+            isTooDeep = true;
+        }
+
+        // A catch block runs on top of the frames that ran out of stack, so the member is reported once the handler has left them.
+        if (isTooDeep)
+        {
             foreach (var diagnostic in walker.Diagnostics)
                 context.ReportDiagnostic(diagnostic);
 
-            context.ReportDiagnostic(severities.Create(Rules.NestedTooDeeply, GetMemberLocation(context), Display(context.OwningSymbol)));
+            // The report is strict only where the member's code involves a value that is unsafe to copy, or where that cannot be told.
+            var subject = FindValueUnsafeToCopy(context, types) switch {
+                { Found: false } => Subject.NoUnsafeToCopy,
+                { Type: var type } => Subject.Of(type),
+            };
+
+            context.ReportDiagnostic(severities.CreateAbout(Rules.NestedTooDeeply, subject, GetMemberLocation(context), Display(context.OwningSymbol)));
             return;
         }
 
         foreach (var diagnostic in MoveReportsOfHandOffs(context, severities, types, allowsImplicitMoves, walker))
             context.ReportDiagnostic(diagnostic);
+    }
+
+    /// <summary>
+    /// Finds a value of a type that is unsafe to copy in the code of a member that is nested too deeply to be checked, for the severity of
+    /// its report: the type of an operation, of a symbol that an operation names (a member, its parameters and type arguments, a local, a
+    /// parameter of a lambda or of a local function, an operator) and of a parameter or the result of the member. An instance member of a
+    /// struct holds a value of the struct as well. The walk keeps a stack of its own, so it does not run out of stack however deep the
+    /// code is.
+    /// </summary>
+    /// <remarks>
+    /// What a rule with no type would report is found as well, with no type, since the value that it is about can be of any type: a call
+    /// of MemberwiseClone, which copies the fields of a class below, and of RuntimeHelpers.GetObjectValue, a call of a member that a
+    /// 'clones' line names, a value of a type parameter converted to a type that hides what is bound to it, a delegate made from a function
+    /// over a marked type parameter or with a [MovedFrom] parameter, and the code of a generic move.
+    /// </remarks>
+    /// <returns>
+    /// Whether such a value was found, with its type, or found as true with no type where the walk could not give an answer.
+    /// </returns>
+    private static (bool Found, ITypeSymbol? Type) FindValueUnsafeToCopy(OperationBlockAnalysisContext context, NonCopyableTypes types)
+    {
+        try
+        {
+            // The class of the member is no value that its code holds: what it reads of its own object is an operation of the walk.
+            if (FindInSignature(context.OwningSymbol) is { } ofMember)
+                return (true, ofMember);
+
+            if (context.OwningSymbol is { IsStatic: false, ContainingType: { TypeKind: TypeKind.Struct } owner } && types.IsAboutUnsafeToCopy(owner))
+                return (true, owner);
+
+            if (context.OwningSymbol is IMethodSymbol owningMethod && NonCopyableTypes.IsGenericPureMove(owningMethod.OriginalDefinition))
+                return (true, null);
+
+            var pending = new Stack<IOperation>(context.OperationBlocks);
+
+            while (pending.Count > 0)
+            {
+                context.CancellationToken.ThrowIfCancellationRequested();
+                var operation = pending.Pop();
+
+                if (types.IsAboutUnsafeToCopy(operation.Type))
+                    return (true, operation.Type);
+
+                if (GetSymbolOf(operation) is { } symbol && FindInSymbol(symbol) is { } ofSymbol)
+                    return (true, ofSymbol);
+
+                if (operation is IPatternOperation pattern && types.IsAboutUnsafeToCopy(pattern.NarrowedType))
+                    return (true, pattern.NarrowedType);
+
+                if (IsAboutAnyType(operation))
+                    return (true, null);
+
+                foreach (var child in operation.ChildOperations)
+                    pending.Push(child);
+            }
+
+            return (false, null);
+        }
+
+        // Whatever stops the walk leaves the report strict. Only a cancellation of the build goes on.
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return (true, null);
+        }
+
+        // A symbol that the code uses: its signature, and the type that declares it, since a generic type over a type that is unsafe to
+        // copy holds one.
+        ITypeSymbol? FindInSymbol(ISymbol symbol) =>
+            FindInSignature(symbol) ?? (types.IsAboutUnsafeToCopy(symbol.ContainingType) ? symbol.ContainingType : null);
+
+        ITypeSymbol? FindInSignature(ISymbol symbol)
+        {
+            switch (symbol)
+            {
+                case IMethodSymbol method:
+                    if (types.IsAboutUnsafeToCopy(method.ReturnType))
+                        return method.ReturnType;
+
+                    foreach (var typeArgument in method.TypeArguments)
+                    {
+                        if (types.IsAboutUnsafeToCopy(typeArgument))
+                            return typeArgument;
+                    }
+
+                    return FindInParameters(method.Parameters);
+
+                case IPropertySymbol property:
+                    return types.IsAboutUnsafeToCopy(property.Type) ? property.Type : FindInParameters(property.Parameters);
+
+                case IFieldSymbol field:
+                    return types.IsAboutUnsafeToCopy(field.Type) ? field.Type : null;
+
+                case IEventSymbol @event:
+                    return types.IsAboutUnsafeToCopy(@event.Type) ? @event.Type : null;
+
+                case ILocalSymbol local:
+                    return types.IsAboutUnsafeToCopy(local.Type) ? local.Type : null;
+
+                default:
+                    return null;
+            }
+        }
+
+        ITypeSymbol? FindInParameters(ImmutableArray<IParameterSymbol> parameters)
+        {
+            foreach (var parameter in parameters)
+            {
+                if (types.IsAboutUnsafeToCopy(parameter.Type))
+                    return parameter.Type;
+            }
+
+            return null;
+        }
+
+        // An operation that a rule with no type would report, which the walk counts as a value of any type.
+        bool IsAboutAnyType(IOperation operation) => operation switch {
+            IInvocationOperation { TargetMethod: var method } => NonCopyableWalker.IsMemberwiseClone(method) || NonCopyableWalker.IsGetObjectValue(method) || types.IsCloningMember(method),
+            IMethodReferenceOperation { Method: var method } => NonCopyableWalker.IsMemberwiseClone(method) || NonCopyableWalker.IsGetObjectValue(method) || types.IsCloningMember(method),
+            IPropertyReferenceOperation { Property: var property } => types.IsCloningMember(property),
+            IEventReferenceOperation { Event: var @event } => types.IsCloningMember(@event),
+            IConversionOperation conversion => types.HidesTypeParameter(conversion.Operand.Type, conversion.Type),
+            IPatternOperation pattern => types.HidesTypeParameter(pattern.InputType, pattern.NarrowedType),
+            IDelegateCreationOperation { Target: var target } => GetFunctionOf(target) is { } function &&
+                (NonCopyableTypes.MentionsMarkedTypeParameter(function.ReturnType, out _) || function.Parameters.Any(NonCopyableTypes.IsMovedFrom)),
+            _ => false,
+        };
+
+        static IMethodSymbol? GetFunctionOf(IOperation target) => target switch {
+            IMethodReferenceOperation reference => reference.Method,
+            IAnonymousFunctionOperation function => function.Symbol,
+            _ => null,
+        };
+
+        static ISymbol? GetSymbolOf(IOperation operation) => operation switch {
+            IInvocationOperation invocation => invocation.TargetMethod,
+            IObjectCreationOperation creation => creation.Constructor,
+            IMemberReferenceOperation reference => reference.Member,
+            IVariableDeclaratorOperation declarator => declarator.Symbol,
+            IDeclarationPatternOperation { DeclaredSymbol: { } declared } => declared,
+            IAnonymousFunctionOperation function => function.Symbol,
+            ILocalFunctionOperation function => function.Symbol,
+            IUnaryOperation { OperatorMethod: { } method } => method,
+            IBinaryOperation { OperatorMethod: { } method } => method,
+            ICompoundAssignmentOperation { OperatorMethod: { } method } => method,
+            IIncrementOrDecrementOperation { OperatorMethod: { } method } => method,
+            IConversionOperation { OperatorMethod: { } method } => method,
+            _ => null,
+        };
     }
 
     /// <summary>

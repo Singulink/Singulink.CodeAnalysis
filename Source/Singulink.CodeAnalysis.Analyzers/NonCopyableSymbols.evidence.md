@@ -9,7 +9,8 @@ words what is on the list, and the [Symbol List Format](../../Docs/articles/rule
 it: the members that are listed, the members that are not, and the reason for each. The areas are awaiting and tasks; spans, memory
 and arrays; marshal and unsafe helpers; atomic helpers; collections; channels and concurrent collections; interfaces; generic structs;
 and opaque and untyped sinks. The remaining sections cover the types that are non-copyable or views, the members that receive a
-container or a value and keep nothing of it, the classes that clone themselves, and the validation of the entries. Every table says
+container or a value and keep nothing of it, the static fields of generic types, the classes that clone themselves, and the validation of
+the entries. Every table says
 what `NonCopyableSymbols.txt` says, and a member that is added to the list or changed gets its evidence in the entry of its type.
 
 **Which runtime source was read.** dotnet/runtime `d757c03be2c39968bca1db2ce9349fce8f1463a3`, as [Runtime Source](#runtime-source) says. The
@@ -1449,6 +1450,13 @@ Besides `SpinLock` and `GCHandle`, the list marks these structs `noncopyable` (e
 
 Checked and not marked:
 
+Of the eleven, five are marked `unsafetocopy`, since a copy can break memory safety, and six stay `noncopyable`, since a copy only breaks the logic of the program. Read in the IL of `System.Private.CoreLib` of .NET 11.0.0, decompiled:
+
+- `GCHandle.Free` exchanges the struct's own `_handle` with zero and frees the slot that the old value names (`InternalFree`); `GCHandle<T>.Dispose`, `PinnedGCHandle<T>.Dispose` and `WeakGCHandle<T>.Dispose` read `_handle`, set it to zero and free the slot. Nothing checks that the slot is still the one that was allocated, so the `Free` or `Dispose` of a copy frees a slot that the runtime may have given to another object since, or unpins memory that a pointer from `AddrOfPinnedObject` or `PinnedGCHandle<T>.GetAddressOfObjectData` still points into. `GCHandle<T>.Target` returns `Unsafe.As<T>(GCHandle.InternalGet(handle))`, so a copy that is read after its slot went to another object hands out that object as a `T`. All four are `unsafetocopy`.
+- `MemoryHandle.Dispose` frees its `GCHandle` field where it is allocated and calls `Unpin` on its `IPinnable` field, so the `Dispose` of a copy frees and unpins a second time, while the `Pointer` of the other copy may still point into the memory. `unsafetocopy`.
+- `DefaultInterpolatedStringHandler.Clear`, which `ToStringAndClear` calls, returns the `char[]` that the handler rented from `ArrayPool<char>.Shared`, so a copy returns the same array twice, and two later renters can share it. That corrupts data but reaches no invalid memory: the array is managed and kept alive by every reference to it, and the span of a copy points into it. It is the closest call of the list, and stays `noncopyable`.
+- `SpinLock`, `Lock.Scope`, `AsyncFlowControl`, `DispatcherProcessingDisabled` and `ManualResetValueTaskSourceCore<T>`: a copy exits a lock, restores a flow or subtracts from a count twice, or holds a result and a continuation in two places. `noncopyable`.
+
 - **Left copyable:** `ValueTask<T>`, `Nullable<T>`, `KeyValuePair`, `ValueTuple` and `List<T>.Enumerator`. These are generic structs that hold `T` inline, so they are already non-copyable over a non-copyable `T` (see [Non-copyable Types](../../Docs/articles/rules/non-copyable-types.md)), and they are not views.
 - **Not marked `noncopyable`:**
   - `CancellationTokenRegistration`: copies dispose idempotently, by id.
@@ -1622,6 +1630,31 @@ The row of `TryWrite` covers each of the five writers of the framework's channel
 The other members of the list that return `bool` and take a value by value that is not a key are the ones in the table above.
 
 **A note for a maintainer.** A member that throws may have taken the value, and some members of the list do throw after they have taken it. `TryWrite` and `WriteAsync` of a channel are two: the callback for dropped items of a bounded or rendezvous channel runs outside the lock and lets its exception through, and a reader that is completed with the item runs its continuation at once where the channel allows synchronous continuations, with no `try` around it (BoundedChannel.cs:363-455, 515-620; RendezvousChannel.cs:303-330; AsyncOperation.cs:190-285).
+
+## Static Fields of Generic Types
+
+Reading or writing a static field of a generic type runs the static constructor of the type with the type arguments of the use, and with it the initializers of its static fields. An `F:` line says that this code makes no copy of a value of the type arguments. `FrameworkScanTests` finds every public or protected static field, other than a constant, of a type that is generic or nested in a generic type, in the shared frameworks of .NET 10 and .NET 11 and in the .NET Framework 4.8.1, and fails for one with no line. It finds the same 11 fields in 10.0.14 and 11.0.0, and one in the .NET Framework 4.8.1, `XmlQuerySequence<T>.Empty`, which .NET has as well. Every type parameter counts, also one that is constrained to a class, since a container can be bound to it: that adds `EndpointMetadataComparer<TMetadata>.Default`.
+
+**How it was read.** The source of each type, on the branch `release/10.0` of dotnet/runtime and of dotnet/aspnetcore (read 25 November 2026), and the IL of its static constructor in the implementation assemblies of 10.0.14 and 11.0.0, which is the same in both, and of 4.8.9363 for `System.Data.SqlXml`. The IL lists every static field of the type and every initializer, also those of other partial files. A type that the static constructor reaches whose own static constructor then runs with the same type arguments is read too.
+
+| Field | What the static constructor does | What it reaches | Source |
+|---|---|---|---|
+| `ImmutableArray<T>.Empty` | `new ImmutableArray<T>(new T[0])`: an empty array | Nothing else | ImmutableArray_1.Minimal.cs:44 |
+| `ImmutableDictionary<TKey, TValue>.Empty` | `new ImmutableDictionary<TKey, TValue>()`, and the delegate `s_FreezeBucketAction` | `Comparers.Get` with `EqualityComparer<TKey>.Default` and `EqualityComparer<TValue>.Default`, whose `Comparers.Default` holds the two comparers; `SortedInt32KeyNode<HashBucket>.EmptyNode`, made by a constructor that only sets `_frozen` | ImmutableDictionary_2.cs:25-71, ImmutableDictionary_2.Comparers.cs:151-160, SortedInt32KeyNode.cs:27, 66-69 |
+| `ImmutableHashSet<T>.Empty` | `new ImmutableHashSet<T>(SortedInt32KeyNode<HashBucket>.EmptyNode, EqualityComparer<T>.Default, 0)`, and the delegate `s_FreezeBucketAction` | `Freeze` of the empty node, which is frozen already and does nothing; `GetHashBucketEqualityComparer`, which hands out a comparer of buckets made from the comparer of `T` | ImmutableHashSet_1.cs:27-79, 991-1005, SortedInt32KeyNode.cs:244-250 |
+| `ImmutableList<T>.Empty` | `new ImmutableList<T>()`, which takes `Node.EmptyNode` | `Node.EmptyNode`, made by a constructor that only sets `_frozen` | ImmutableList_1.cs:24, 34, ImmutableList_1.Node.cs:22, 68-72 |
+| `ImmutableSortedDictionary<TKey, TValue>.Empty` | `new ImmutableSortedDictionary<TKey, TValue>(null, null)`: `Comparer<TKey>.Default`, `EqualityComparer<TValue>.Default` and `Node.EmptyNode` | `Node.EmptyNode`, as above | ImmutableSortedDictionary_2.cs:24, 51-56, ImmutableSortedDictionary_2.Node.cs:22, 62-66 |
+| `ImmutableSortedSet<T>.Empty` | `new ImmutableSortedSet<T>(null)`: `Node.EmptyNode` and `Comparer<T>.Default` | `Node.EmptyNode`, as above | ImmutableSortedSet_1.cs:39, 55-59, ImmutableSortedSet_1.Node.cs:21, 67-71 |
+| `ReadOnlySequence<T>.Empty` | `new ReadOnlySequence<T>(Array.Empty<T>())`, which keeps the empty array as its start and its end | `Array.Empty<T>()`, an empty array | ReadOnlySequence.cs:26, 113-122 |
+| `XmlQuerySequence<T>.Empty` | `new XmlQuerySequence<T>()`: `new T[16]`, an array of default values; on the .NET Framework also `typeof(XPathItem)` into a second static field | Nothing else | Lib/System.Private.Xml/src/System/Xml/Xsl/Runtime/XmlQuerySequence.cs:24, 68-71, and the IL of 4.8.1 |
+| `NullLogger<T>.Instance` | `new NullLogger<T>()`, whose constructor only calls that of `object` | Nothing else | Lib/Microsoft.Extensions.Logging.Abstractions/src/NullLoggerT.cs:17 |
+| `EventCallback<TValue>.Empty` | `new EventCallback<TValue>(null, (Action)(() => { }))`, which stores the two references | The class of the lambda's cache, whose static constructor makes its one instance | aspnetcore src/Components/Components/src/EventCallbackOfT.cs:16 |
+| `FeatureReference<T>.Default` | `new FeatureReference<T>(default(T), -1)`: a default `T`, made in a local by `initobj` and moved into the field `_feature`, the one use of the local | Nothing else | aspnetcore src/Extensions/Features/src/FeatureReference.cs:15-24 |
+| `EndpointMetadataComparer<TMetadata>.Default` | `new DefaultComparer<TMetadata>()`, whose constructor only calls that of its base class | Nothing else | aspnetcore src/Http/Routing/src/Matching/EndpointMetadataComparer.cs:81 |
+
+`EqualityComparer<T>.Default` and `Comparer<T>.Default` make a comparer for the type with reflection and hold no value of it. So no static constructor above copies a value of its type arguments: what it makes is an empty collection, an empty array, a default value that is moved once, or an object that holds no such value.
+
+`XmlQuerySequence<T>` is public in the implementation assembly `System.Private.Xml` of .NET, and no reference assembly of .NET has it, so no project for .NET can name it. Its line is marked `# netfx`: it resolves in the reference assembly `System.Data.SqlXml` of the .NET Framework 4.8.1, and the scan of .NET is answered by the same line.
 
 ## Classes That Clone Themselves
 

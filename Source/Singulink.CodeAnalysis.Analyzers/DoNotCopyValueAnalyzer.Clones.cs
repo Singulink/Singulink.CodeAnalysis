@@ -101,14 +101,14 @@ public sealed partial class DoNotCopyValueAnalyzer
             context.SemanticModel.GetDeclaredSymbol(declaration, context.CancellationToken) is not INamedTypeSymbol { BaseType: { } baseType } ||
             SymbolEqualityComparer.Default.Equals(baseType, baseType.OriginalDefinition) ||
             !SymbolEqualityComparer.Default.Equals(context.SemanticModel.GetSymbolInfo(first.Type, context.CancellationToken).Symbol, baseType) ||
-            types.FindCloningBinding(baseType) is not { } binding)
+            types.PreferUnsafeToCopy(types.FindCloningBinding(baseType), baseType) is not { } binding)
         {
             return;
         }
 
         object?[] arguments = [binding.Type, binding.Bound, binding.Cloning];
         WithoutNullableAnnotations(arguments);
-        context.ReportDiagnostic(severities.Create(Rules.CloningBinding, first.Type.GetLocation(), arguments));
+        context.ReportDiagnostic(severities.Create(Rules.CloningBindingInBaseList, first.Type.GetLocation(), arguments));
     }
 
     // A field as a message names it: "field 'Guard'" by the property that it backs, and "parameter 'g'" for the field that holds a

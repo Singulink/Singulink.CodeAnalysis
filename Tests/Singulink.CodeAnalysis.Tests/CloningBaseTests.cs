@@ -517,6 +517,9 @@ public class CloningBaseTests
         if (!suppressed)
             test.ExpectedDiagnostics.Add(Verify.MemberwiseCloneCall(1, "GuardedCulture", "Guard", "G"));
 
+        // A class of another assembly that derives from GuardedCulture can hold a value of any type, which is a report of its own.
+        test.ExpectedDiagnostics.Add(Verify.MemberwiseCloneOfOpenClass(2, "GuardedCulture"));
+
         return test.RunAsync();
     }
 

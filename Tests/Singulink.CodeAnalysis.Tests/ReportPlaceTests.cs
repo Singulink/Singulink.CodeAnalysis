@@ -158,12 +158,49 @@ public class ReportPlaceTests
             .Replace("#7:", "#17:", StringComparison.Ordinal)}}
         }
 
+        {{Sources.AsUnsafeToCopy(Pair)}}
+
+        {{Sources.UnsafeGuard}}
+        """,
+        [
+            .. Expected.Select(result => result.AsError()),
+            Verify.CopyByAssignment(10, "Guard"),
+            Verify.CopyByAssignmentIntoVariable(11, "Guard", "guard"),
+            Verify.CopyByAssignment(12, "Guard"),
+            Verify.CopyByAssignmentIntoForEachVariable(13, "Guard", "guard"),
+            Verify.CopyByAssignmentIntoVariable(14, "Guard", "guard"),
+            Verify.CopyByAssignmentForDeconstruct(15, "Pair", "Pair.Deconstruct(out int, out int)"),
+            Verify.Boxing(16, "Guard", "object"),
+            Verify.CopyByAssignmentOutOfBox(17, "Guard", "object"),
+        ]);
+
+    // With a plain non-copyable type each of the copies is the ordinary warning under the updated rules, in unsafe(...) and outside it.
+    [TestMethod]
+    public Task Copy_OfAPlainTypeIsTheOrdinaryWarningUnderTheUpdatedRules() => Verify.UpdatedRulesAsync(
+        $$"""
+        class C
+        {
+            {{Members}}
+
+        {{Code}}
+        }
+
+        class InUnsafeExpressions
+        {
+            {{Members}}
+
+        {{Code.Replace("{|#", "unsafe({|#", StringComparison.Ordinal).Replace("|}", "|})", StringComparison.Ordinal).Replace("#0:", "#10:", StringComparison.Ordinal)
+            .Replace("#1:", "#11:", StringComparison.Ordinal).Replace("#2:", "#12:", StringComparison.Ordinal).Replace("#3:", "#13:", StringComparison.Ordinal)
+            .Replace("#4:", "#14:", StringComparison.Ordinal).Replace("#5:", "#15:", StringComparison.Ordinal).Replace("#6:", "#16:", StringComparison.Ordinal)
+            .Replace("#7:", "#17:", StringComparison.Ordinal)}}
+        }
+
         {{Pair}}
 
         {{Sources.Guard}}
         """,
         [
-            .. Expected.Select(result => result.AsError()),
+            .. Expected,
             Verify.CopyByAssignment(10, "Guard"),
             Verify.CopyByAssignmentIntoVariable(11, "Guard", "guard"),
             Verify.CopyByAssignment(12, "Guard"),
@@ -211,7 +248,7 @@ public class ReportPlaceTests
 
         {{Pool}}
 
-        {{Sources.Guard}}
+        {{Sources.UnsafeGuard}}
         """,
         [
             .. ExpectedOfUsings.Select(result => result.AsError()),

@@ -204,11 +204,11 @@ public class SafeListTests
         // A line that cannot be parsed is reported in the file that has it.
         test.ExpectedDiagnostics.Add(new DiagnosticResult(DiagnosticIds.SafeListLine, DiagnosticSeverity.Warning)
             .WithSpan(LibraryFile, 3, 1, 3, 13)
-            .WithMessage("This line of the symbol list file cannot be parsed: expected a documentation comment ID that starts with 'M:', 'P:', 'E:' or 'T:', or the name of an assembly after 'A:'"));
+            .WithMessage("This line of the symbol list file cannot be parsed: expected a documentation comment ID that starts with 'M:', 'P:', 'E:', 'F:' or 'T:', or the name of an assembly after 'A:'"));
 
         test.ExpectedDiagnostics.Add(new DiagnosticResult(DiagnosticIds.SafeListLine, DiagnosticSeverity.Warning)
             .WithSpan(SecondLibraryFile, 2, 1, 2, 24)
-            .WithMessage("This line of the symbol list file cannot be parsed: unknown marker 'unknown'; the markers are 'new', 'borrows', 'drains', 'owned', 'borrowswhen', 'view', 'noncopyable', 'copyable', 'erasable' and 'clones', and 'trusted' for an assembly"));
+            .WithMessage("This line of the symbol list file cannot be parsed: unknown marker 'unknown'; the markers are 'new', 'borrows', 'drains', 'owned', 'borrowswhen', 'view', 'noncopyable', 'unsafetocopy', 'copyable', 'erasable' and 'clones', and 'trusted' for an assembly"));
 
         return test.RunAsync();
     }
@@ -289,7 +289,7 @@ public class SafeListTests
            M:Bag`1.Peek   ;   new    # white space is allowed around the parts
 
         Bag`1.Take
-        F:Bag`1._items
+        X:Bag`1._items
         M:
         T:Bag`1
         T:Bag`1.Handle;new
@@ -310,14 +310,14 @@ public class SafeListTests
         M:Bag`1..Take
         T:Bag`1(System.Int32);view
         """,
-        Verify.SafeListLine(5, 1, 11, "expected a documentation comment ID that starts with 'M:', 'P:', 'E:' or 'T:', or the name of an assembly after 'A:'"),
-        Verify.SafeListLine(6, 1, 15, "expected a documentation comment ID that starts with 'M:', 'P:', 'E:' or 'T:', or the name of an assembly after 'A:'"),
-        Verify.SafeListLine(7, 1, 3, "expected a documentation comment ID that starts with 'M:', 'P:', 'E:' or 'T:', or the name of an assembly after 'A:'"),
-        Verify.SafeListLine(8, 1, 8, "a type needs the marker 'view', 'noncopyable', 'copyable', 'erasable' or 'clones'; there is no entry for every member of a type"),
-        Verify.SafeListLine(9, 1, 19, "the marker 'new' is for a member; a type takes 'view', 'noncopyable', 'copyable', 'erasable' or 'clones'"),
+        Verify.SafeListLine(5, 1, 11, "expected a documentation comment ID that starts with 'M:', 'P:', 'E:', 'F:' or 'T:', or the name of an assembly after 'A:'"),
+        Verify.SafeListLine(6, 1, 15, "expected a documentation comment ID that starts with 'M:', 'P:', 'E:', 'F:' or 'T:', or the name of an assembly after 'A:'"),
+        Verify.SafeListLine(7, 1, 3, "expected a documentation comment ID that starts with 'M:', 'P:', 'E:', 'F:' or 'T:', or the name of an assembly after 'A:'"),
+        Verify.SafeListLine(8, 1, 8, "a type needs the marker 'view', 'noncopyable', 'unsafetocopy', 'copyable', 'erasable' or 'clones'; there is no entry for every member of a type"),
+        Verify.SafeListLine(9, 1, 19, "the marker 'new' is for a member; a type takes 'view', 'noncopyable', 'unsafetocopy', 'copyable', 'erasable' or 'clones'"),
         Verify.SafeListLine(10, 1, 18, "the marker 'view' is for a type; a member takes 'new', 'borrows', 'drains', 'owned', 'borrowswhen', 'clones' or no marker"),
         Verify.SafeListLine(11, 1, 25, "the marker 'noncopyable' is for a type; a member takes 'new', 'borrows', 'drains', 'owned', 'borrowswhen', 'clones' or no marker"),
-        Verify.SafeListLine(12, 1, 18, "unknown marker 'safe'; the markers are 'new', 'borrows', 'drains', 'owned', 'borrowswhen', 'view', 'noncopyable', 'copyable', 'erasable' and 'clones', and 'trusted' for an assembly"),
+        Verify.SafeListLine(12, 1, 18, "unknown marker 'safe'; the markers are 'new', 'borrows', 'drains', 'owned', 'borrowswhen', 'view', 'noncopyable', 'unsafetocopy', 'copyable', 'erasable' and 'clones', and 'trusted' for an assembly"),
         Verify.SafeListLine(13, 1, 21, "an entry has one marker, which 'for=' can follow"),
         Verify.SafeListLine(14, 1, 14, "a documentation comment ID has no white space"),
         Verify.SafeListLine(16, 1, 27, "'for=' is for a member"),
@@ -412,10 +412,12 @@ public class SafeListTests
         // As a user file the built-in list reports every line that cannot be parsed, every 'for=' name that its member does not have and every
         // 'erasable' that is not on a generic class or interface. Its 'clones' lines name classes of the desktop pack as well. A 'clones'
         // line that names nothing gets a warning in a user file, so the lines marked "# netfx" are read on the .NET Framework below.
+        // The built-in non-copyable types are left out, since a line that marks one of them as what the built-in list says it is has no
+        // effect in a user file otherwise, and gets a warning for it.
         var asUserFile = new Verify.Test {
             TestCode = "class C { }",
             ReferenceAssemblies = Verify.Test.NetReferenceAssemblies.AddPackages([new PackageIdentity("Microsoft.WindowsDesktop.App.Ref", "10.0.0")]),
-        };
+        }.WithBuildProperty("NonCopyableIncludeBuiltInTypes", "false");
 
         string[] lines = list.Split('\n');
         asUserFile.TestState.AdditionalFiles.Add((Verify.ListFileName, string.Join("\n", lines.Select(l => IsNetFrameworkLine(l) ? string.Empty : l))));
@@ -429,7 +431,7 @@ public class SafeListTests
             TestCode = "class C { }",
             ReferenceAssemblies = FrameworkScanTests.NetFrameworkReferencePackage,
             CompilerDiagnostics = CompilerDiagnostics.None,
-        };
+        }.WithBuildProperty("NonCopyableIncludeBuiltInTypes", "false");
 
         netFrameworkAsUserFile.TestState.AdditionalFiles.Add((Verify.ListFileName, string.Join("\n", lines.Where(IsNetFrameworkLine))));
         netFrameworkAsUserFile.TestState.AdditionalReferences.AddRange((await FrameworkScanTests.GetNetFrameworkReferenceAssembliesAsync()).Where(r => Path.GetFileName(r.Display) is not "mscorlib.dll"));
@@ -475,8 +477,8 @@ public class SafeListTests
                 unresolved.Add(id);
         }
 
-        Assert.AreEqual(893, count);
-        Assert.AreEqual(13, netFrameworkCount);
+        Assert.AreEqual(905, count);
+        Assert.AreEqual(14, netFrameworkCount);
         Assert.IsEmpty(unresolved, "Entries that do not name one public symbol of their framework: " + string.Join(", ", unresolved));
         Assert.IsEmpty(onNet, "Entries marked \"# netfx\" that name a symbol of .NET 10 or .NET 11: " + string.Join(", ", onNet));
 
@@ -669,9 +671,9 @@ public class SafeListTests
         var descriptors = new DoNotCopyValueAnalyzer().SupportedDiagnostics;
 
         string[] ids = [
-            "SCA1001", "SCA1002", "SCA1003", "SCA1004", "SCA1005", "SCA1006", "SCA1007", "SCA1008", "SCA1009", "SCA1010", "SCA1011", "SCA1012", "SCA1013", "SCA1014", "SCA1015", "SCA1016", "SCA1020", "SCA1021",
-            "SCA1022", "SCA1023", "SCA1024", "SCA1025", "SCA1030", "SCA1031", "SCA1032", "SCA1033", "SCA1040", "SCA1041", "SCA1042", "SCA1043", "SCA1044", "SCA1045",
-            "SCA1046", "SCA1047", "SCA1048",
+            "SCA1001", "SCA1002", "SCA1003", "SCA1004", "SCA1005", "SCA1006", "SCA1007", "SCA1008", "SCA1009", "SCA1010", "SCA1011", "SCA1012", "SCA1013", "SCA1014", "SCA1015", "SCA1016", "SCA1017", "SCA1020", "SCA1021",
+            "SCA1022", "SCA1023", "SCA1024", "SCA1025", "SCA1026", "SCA1030", "SCA1031", "SCA1032", "SCA1033", "SCA1040", "SCA1041", "SCA1042", "SCA1043", "SCA1044", "SCA1045",
+            "SCA1046", "SCA1047", "SCA1048", "SCA1049",
         ];
 
         CollectionAssert.AreEquivalent(ids, descriptors.Select(d => d.Id).Distinct().ToArray());
@@ -814,7 +816,7 @@ public class SafeListTests
         Verify.CopyOfStoredValue(1, "'List<Guard>.Add(Guard)' receives", "Guard"),
         Verify.CopyOfStoredValue(2, "'GCHandle.ToIntPtr(GCHandle)' receives", "System.Runtime.InteropServices.GCHandle"),
         Verify.SafeListBorrowsBeyondBuiltIn(3, 52, "M:System.Collections.Generic.List`1.Add(`0)", "with no marker"),
-        Verify.SafeListLine(5, 1, 16, "the marker 'borrows' is for a member; a type takes 'view', 'noncopyable', 'copyable', 'erasable' or 'clones'"),
+        Verify.SafeListLine(5, 1, 16, "the marker 'borrows' is for a member; a type takes 'view', 'noncopyable', 'unsafetocopy', 'copyable', 'erasable' or 'clones'"),
         Verify.SafeListLine(6, 1, 54, "an entry has one marker, which 'for=' can follow"));
 
     private static string ReadBuiltInList()
@@ -1367,7 +1369,7 @@ public class SafeListTests
         Verify.SafeListLine(4, 1, 24, DrainsIsForASequence),
         Verify.SafeListLine(5, 1, 25, DrainsIsForASequence),
         Verify.SafeListLine(6, 1, 24, DrainsIsForASequence),
-        Verify.SafeListLine(9, 1, 16, "the marker 'drains' is for a member; a type takes 'view', 'noncopyable', 'copyable', 'erasable' or 'clones'"),
+        Verify.SafeListLine(9, 1, 16, "the marker 'drains' is for a member; a type takes 'view', 'noncopyable', 'unsafetocopy', 'copyable', 'erasable' or 'clones'"),
         Verify.SafeListLine(10, 1, 44, DrainsIsForASequence));
 
     private const string DrainsIsForASequence = "the marker 'drains' is for a method that returns a sequence, an IEnumerable<T> or an IAsyncEnumerable<T>";
@@ -1942,5 +1944,147 @@ public class SafeListTests
         test.TestState.AdditionalFiles.Add(("Second/NonCopyableSymbols.txt", "T:System.Runtime.InteropServices.GCHandle;noncopyable"));
         test.ExpectedDiagnostics.Add(Verify.CopyByAssignment(0, "System.Runtime.InteropServices.GCHandle"));
         return test.RunAsync();
+    }
+
+    // A 'noncopyable' or 'unsafetocopy' line for a type that already is what it says by its attribute has no effect, and the project
+    // that owns the file gets a warning for it. A type that is unsafe to copy is non-copyable as well. A project that gets the file from a
+    // package has nothing to fix. An 'unsafetocopy' line for a type that is only non-copyable has an effect, and gets nothing. The
+    // attribute of a library counts in any namespace. A line for a type of the built-in framework symbol list gets nothing in any
+    // project: the same file can serve a project that leaves the built-in types out, where the line is needed.
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task NonCopyableLine_ForATypeThatAlreadyIsWhatItSaysGetsAWarningInTheBuildThatOwnsTheFile(bool inPackage)
+    {
+        var library = await Verify.CompileLibraryAsync(
+            Verify.Test.NetReferenceAssemblies,
+            """
+            namespace Microsoft.CodeAnalysis
+            {
+                internal sealed class NonCopyableAttribute : System.Attribute { }
+            }
+
+            namespace Lib
+            {
+                [Microsoft.CodeAnalysis.NonCopyable]
+                public struct Foreign { }
+
+                public struct Plain { }
+            }
+            """,
+            analyzed: true,
+            "Lib");
+
+        string path = inPackage ? "/packages/lib/1.0.0/build/NonCopyableSymbols.Lib.txt" : Verify.ListFileName;
+
+        var test = new Verify.Test {
+            TestCode = """
+                using Singulink.CodeAnalysis;
+
+                [NonCopyable]
+                struct Own { }
+
+                [NonCopyable(UnsafeToCopy = true)]
+                struct OwnUnsafe { }
+                """,
+        };
+
+        test.TestState.AdditionalReferences.Add(library);
+        test.TestState.AnalyzerConfigFiles.Add(("/.globalconfig", "is_global = true" + "\n" + "build_property.NuGetPackageRoot = /packages/" + "\n"));
+        test.TestState.AdditionalFiles.Add((
+            path,
+            """
+            T:Own;noncopyable
+            T:OwnUnsafe;noncopyable
+            T:OwnUnsafe;unsafetocopy
+            T:Lib.Foreign;noncopyable
+            T:System.Threading.SpinLock;noncopyable
+            T:System.Runtime.InteropServices.GCHandle;noncopyable
+            T:System.Runtime.InteropServices.GCHandle;unsafetocopy
+            T:Own;unsafetocopy
+            T:Lib.Foreign;unsafetocopy
+            T:System.Threading.SpinLock;unsafetocopy
+            T:Lib.Plain;noncopyable
+            """));
+
+        if (!inPackage)
+        {
+            test.ExpectedDiagnostics.Add(Verify.SafeListNonCopyableHasNoEffect(1, 18, "T:Own", "non-copyable", "its attribute marks it non-copyable already"));
+            test.ExpectedDiagnostics.Add(Verify.SafeListNonCopyableHasNoEffect(
+                2, 24, "T:OwnUnsafe", "non-copyable", "its attribute marks it unsafe to copy, which makes it non-copyable as well"));
+            test.ExpectedDiagnostics.Add(Verify.SafeListNonCopyableHasNoEffect(3, 25, "T:OwnUnsafe", "unsafe to copy", "its attribute marks it unsafe to copy already"));
+            test.ExpectedDiagnostics.Add(Verify.SafeListNonCopyableHasNoEffect(4, 26, "T:Lib.Foreign", "non-copyable", "its attribute marks it non-copyable already"));
+        }
+
+        await test.RunAsync();
+    }
+
+    // Where the project leaves out the built-in non-copyable types, a line for one of them makes it what the line says, and gets nothing.
+    // So does a line for a type that a 'copyable' line of any file takes out, since the line wins over it. A 'copyable' line that has no
+    // effect itself, for a struct that the project declares, leaves the type as its attribute says.
+    [TestMethod]
+    public async Task NonCopyableLine_ThatPutsATypeBackHasAnEffect()
+    {
+        var library = await Verify.CompileLibraryAsync(
+            Verify.Test.NetReferenceAssemblies, "namespace Lib { [Singulink.CodeAnalysis.NonCopyable] public struct Guard { } }", analyzed: true, "Lib");
+
+        var test = new Verify.Test {
+            TestCode = """
+                using Singulink.CodeAnalysis;
+
+                [NonCopyable]
+                struct Own { }
+                """,
+        }.WithBuildProperty("NonCopyableIncludeBuiltInTypes", "false");
+
+        test.TestState.AdditionalReferences.Add(library);
+        test.TestState.AdditionalFiles.Add((
+            Verify.ListFileName,
+            """
+            T:System.Threading.SpinLock;noncopyable
+            T:System.Runtime.InteropServices.GCHandle;unsafetocopy
+            T:Lib.Guard;noncopyable
+            T:Own;noncopyable
+            """));
+
+        test.TestState.AdditionalFiles.Add(("Second/NonCopyableSymbols.txt", "T:Lib.Guard;copyable\nT:Own;copyable"));
+        test.ExpectedDiagnostics.Add(Verify.SafeListNonCopyableHasNoEffect(4, 18, "T:Own", "non-copyable", "its attribute marks it non-copyable already"));
+        test.ExpectedDiagnostics.Add(new DiagnosticResult(DiagnosticIds.SafeListLine, DiagnosticSeverity.Warning)
+            .WithSpan("Second/NonCopyableSymbols.txt", 2, 1, 2, 15)
+            .WithMessage(
+                "This line of the symbol list file marks 'T:Own' as copyable. It has no effect, because the project declares the type itself, " +
+                "so take its [NonCopyable] attribute off instead."));
+
+        await test.RunAsync();
+    }
+
+    // A 'copyable' line of a file that came in a package takes nothing out, so it gives a 'noncopyable' line of the project's file no
+    // effect either: a line for a type that its attribute makes non-copyable already gets its warning, as with no 'copyable' line.
+    [TestMethod]
+    public async Task CopyableLine_OfAPackageGivesANonCopyableLineNoEffect()
+    {
+        var library = await Verify.CompileLibraryAsync(
+            Verify.Test.NetReferenceAssemblies, "namespace Lib { [Singulink.CodeAnalysis.NonCopyable] public struct Guard { } }", analyzed: true, "Lib");
+
+        var test = new Verify.Test {
+            TestCode = """
+                class C
+                {
+                    Lib.Guard _guard;
+
+                    void M()
+                    {
+                        var guard = {|#0:_guard|};
+                    }
+                }
+                """,
+        }.WithBuildProperty("NuGetPackageRoot", "/packages/");
+
+        test.TestState.AdditionalReferences.Add(library);
+        test.TestState.AdditionalFiles.Add(("/packages/lib/1.0.0/build/NonCopyableSymbols.Lib.txt", "T:Lib.Guard;copyable"));
+        test.TestState.AdditionalFiles.Add((Verify.ListFileName, "T:Lib.Guard;noncopyable"));
+        test.ExpectedDiagnostics.Add(Verify.CopyByAssignment(0, "Lib.Guard"));
+        test.ExpectedDiagnostics.Add(Verify.SafeListNonCopyableHasNoEffect(1, 24, "T:Lib.Guard", "non-copyable", "its attribute marks it non-copyable already"));
+        await test.RunAsync();
     }
 }

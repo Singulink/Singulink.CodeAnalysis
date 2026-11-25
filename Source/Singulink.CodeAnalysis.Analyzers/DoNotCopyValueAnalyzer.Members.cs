@@ -22,6 +22,9 @@ public sealed partial class DoNotCopyValueAnalyzer
         // The methods, local functions and lambdas with a 'yield' whose parameters have been checked.
         private HashSet<IMethodSymbol>? _iterators;
 
+        // The places where a binding that a type parameter does not take has been reported, with the binding.
+        private HashSet<(SyntaxTree Tree, TextSpan Span, string TypeParameter, string Argument)>? _bindingsNotTakenReported;
+
         /// <summary>
         /// Reports the combination of delegates whose type has a by-value parameter of a non-copyable type: every target of a
         /// delegate with several targets gets a copy of its own of the argument.
@@ -31,14 +34,17 @@ public sealed partial class DoNotCopyValueAnalyzer
             if (type is not INamedTypeSymbol { TypeKind: TypeKind.Delegate, DelegateInvokeMethod: { } invoke })
                 return;
 
+            // The report names a parameter whose type is unsafe to copy where there is one, which makes it strict.
+            ITypeSymbol? copied = null;
+
             foreach (var parameter in invoke.Parameters)
             {
-                if (parameter.RefKind is RefKind.None && types.IsNonCopyableType(parameter.Type))
-                {
-                    Report(Rules.DelegatesCombined, syntax, type, parameter.Type);
-                    return;
-                }
+                if (parameter.RefKind is RefKind.None && types.IsNonCopyableType(parameter.Type) && (copied is null || types.IsLessUnsafe(copied, parameter.Type)))
+                    copied = parameter.Type;
             }
+
+            if (copied is not null)
+                Report(Rules.DelegatesCombined, syntax, type, copied);
         }
 
         /// <summary>
@@ -340,7 +346,8 @@ public sealed partial class DoNotCopyValueAnalyzer
 
         /// <summary>
         /// Reports the use of a member of a generic with a non-copyable type or a container bound to a type parameter that is not marked, unless the
-        /// member is on the safe list, and the use of a member that requires a copyable type.
+        /// member is on the safe list, and the use of a member that requires a copyable type. A static field is such a member: reading or writing
+        /// it runs the static initializers of its type.
         /// </summary>
         private MemberUse CheckMemberUse(SyntaxNode syntax, ISymbol? member)
         {
@@ -348,7 +355,26 @@ public sealed partial class DoNotCopyValueAnalyzer
                 return default;
 
             var use = types.GetUse(member);
+            ReportBrokenRule(syntax, use);
 
+            if (!use.AlsoBroken.IsDefault)
+            {
+                foreach (var alsoBroken in use.AlsoBroken)
+                    ReportBrokenRule(syntax, alsoBroken);
+            }
+
+            if (use.NotTaken is { } notTaken)
+                ReportBindingNotTaken(syntax, use.Definition ?? NonCopyableTypes.GetListDefinition(member), notTaken);
+
+            CheckUncheckedInbound(syntax, member);
+            return use;
+        }
+
+        /// <summary>
+        /// Reports the rule that the use of a member breaks by its kind, if it breaks one.
+        /// </summary>
+        private void ReportBrokenRule(SyntaxNode syntax, MemberUse use)
+        {
             switch (use.Kind)
             {
                 case MemberUseKind.UnlistedNonCopyable when use.ListedFor is not null && !types.IsCloningMember(use.Definition!):
@@ -356,13 +382,16 @@ public sealed partial class DoNotCopyValueAnalyzer
                     break;
 
                 case MemberUseKind.UnlistedNonCopyable:
-                    // A type parameter that is marked in an assembly that was not built with the analyzer cannot be marked any better.
+                    // A type parameter that is marked in an assembly that was not built with the analyzer cannot be marked any better. A
+                    // static field has a text of its own, which says what the use runs.
+                    bool isField = use.Definition is IFieldSymbol;
+
                     Report(
                         types.IsCloningMember(use.Definition!)
                             ? Rules.UnlistedMemberThatClones
                             : NonCopyableTypes.HasUncountedNonCopyableMark(use.TypeParameter!)
-                                ? Rules.UnlistedMemberOfUncheckedCode
-                                : Rules.UnlistedMember,
+                                ? isField ? Rules.UnlistedStaticFieldOfUncheckedCode : Rules.UnlistedMemberOfUncheckedCode
+                                : isField ? Rules.UnlistedStaticField : Rules.UnlistedMember,
                         syntax,
                         Display(use.Definition!),
                         use.TypeArgument,
@@ -379,7 +408,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                     break;
 
                 case MemberUseKind.UnlistedContainer:
-                    Report(Rules.OpaqueTypeArgument, syntax, Display(use.Definition!), use.TypeArgument, use.TypeParameter!.Name, GetListId(use.Definition!));
+                    Report(use.Definition is IFieldSymbol ? Rules.OpaqueTypeArgumentOfStaticField : Rules.OpaqueTypeArgument, syntax, Display(use.Definition!), use.TypeArgument, use.TypeParameter!.Name, GetListId(use.Definition!));
                     break;
 
                 case MemberUseKind.RequiresCopyable:
@@ -407,10 +436,61 @@ public sealed partial class DoNotCopyValueAnalyzer
                     Report(constraintRule, syntax, Display(use.Definition!), use.TypeArgument, use.TypeParameter!.Name, use.Constraint);
                     break;
             }
-
-            CheckUncheckedInbound(syntax, member);
-            return use;
         }
+
+        /// <summary>
+        /// Reports the use of a member that binds a type which is unsafe to copy to a type parameter marked
+        /// <c>[NonCopyable(UnsafeToCopy = false)]</c>: directly, or through a type with such a binding that the use gives to a type
+        /// parameter of other generic code, which can run its members.
+        /// </summary>
+        private void ReportBindingNotTaken(SyntaxNode syntax, ISymbol definition, BindingNotTaken notTaken)
+        {
+            if (!NoteBindingNotTaken(syntax, notTaken))
+                return;
+
+            if (notTaken is { Through: { } through, Given: { } given })
+            {
+                Report(
+                    Rules.UnsafeToCopyNotTakenBehindTypeParameter,
+                    syntax,
+                    Display(definition),
+                    given,
+                    through.Name,
+                    Display(notTaken.TypeParameter.ContainingSymbol),
+                    notTaken.Argument,
+                    notTaken.TypeParameter.Name);
+            }
+            else
+            {
+                var rule = notTaken.Argument is ITypeParameterSymbol ? Rules.UnsafeToCopyTypeParameterNotTaken : Rules.UnsafeToCopyNotTaken;
+                Report(rule, syntax, Display(notTaken.TypeParameter.ContainingSymbol), notTaken.Argument, notTaken.TypeParameter.Name);
+            }
+        }
+
+        /// <summary>
+        /// Reports a struct whose members run on its box with a type that is unsafe to copy bound to a type parameter marked
+        /// <c>[NonCopyable(UnsafeToCopy = false)]</c>, where the box is made.
+        /// </summary>
+        private void CheckBoxOfBindingNotTaken(SyntaxNode syntax, ITypeSymbol? type, ITypeSymbol? boxType)
+        {
+            if (type is null || boxType is null || types.FindStructBindingNotTaken(type) is not { } notTaken || !NoteBindingNotTaken(syntax, notTaken))
+                return;
+
+            Report(
+                Rules.UnsafeToCopyNotTakenBehindBox,
+                syntax,
+                type,
+                boxType,
+                Display(notTaken.TypeParameter.ContainingSymbol),
+                notTaken.Argument,
+                notTaken.TypeParameter.Name);
+        }
+
+        // Notes a binding not taken that is reported at a place, and gets whether it was not reported there already: the members that
+        // one construct runs, as the GetEnumerator, Current and box of a 'foreach', show the same binding at one place, which one report
+        // says.
+        private bool NoteBindingNotTaken(SyntaxNode syntax, BindingNotTaken notTaken) =>
+            (_bindingsNotTakenReported ??= []).Add((syntax.SyntaxTree, syntax.Span, notTaken.TypeParameter.ToDisplayString(), notTaken.Argument.ToDisplayString()));
 
         /// <summary>
         /// Reports a member of an assembly that was not built with the analyzer and that gets at a non-copyable value other than by value.
@@ -494,8 +574,9 @@ public sealed partial class DoNotCopyValueAnalyzer
             var definition = NonCopyableTypes.GetListDefinition(implementation);
 
             // The messages name a binding that a declaration writes with a closed type first: the clone copies it whatever the class is
-            // constructed with.
-            binding = types.FindClosedCloningBinding(receiver) ?? binding;
+            // constructed with. A binding that is unsafe to copy comes first, since the report names one where there is one.
+            if (types.FindClosedCloningBinding(receiver) is { } closed && !types.IsLessUnsafe(closed.Type, binding.Type))
+                binding = closed;
 
             if (types.IsCloningMember(definition) || types.IsCloningMember(NonCopyableTypes.GetListDefinition(member)))
             {
@@ -684,7 +765,7 @@ public sealed partial class DoNotCopyValueAnalyzer
             IOperation? from = null,
             IOperation? result = null)
         {
-            if (use.Kind is not MemberUseKind.Listed || inputsAreNew || !types.IsNonCopyableType(handedOutType))
+            if (use.ListedKind is not MemberUseKind.Listed || inputsAreNew || !types.IsNonCopyableType(handedOutType))
                 return;
 
             if (IsOnlyReadAsTemporary(result))
@@ -719,11 +800,11 @@ public sealed partial class DoNotCopyValueAnalyzer
                         from = conversion.Operand;
                         continue;
 
-                    case IPropertyReferenceOperation { Instance: { } instance, Property: var listed } when types.GetUse(listed).Kind is MemberUseKind.Listed:
+                    case IPropertyReferenceOperation { Instance: { } instance, Property: var listed } when types.GetUse(listed).ListedKind is MemberUseKind.Listed:
                         from = instance;
                         continue;
 
-                    case IInvocationOperation { Instance: { } instance, TargetMethod: var listed } when types.GetUse(listed).Kind is MemberUseKind.Listed:
+                    case IInvocationOperation { Instance: { } instance, TargetMethod: var listed } when types.GetUse(listed).ListedKind is MemberUseKind.Listed:
                         from = instance;
                         continue;
 
@@ -1086,14 +1167,17 @@ public sealed partial class DoNotCopyValueAnalyzer
             // own over a non-copyable type or a container is a use that is not known to be safe, whatever the loop is over.
             if (syntax.AwaitKeyword.RawKind is not (int)SyntaxKind.None)
             {
+                // The report names an awaitable that holds a value which is unsafe to copy where there is one.
+                ITypeSymbol? unsupported = null;
+
                 foreach (var awaited in new[] { info.MoveNextMethod?.ReturnType, info.DisposeMethod?.ReturnType })
                 {
-                    if (types.Carries(awaited) && !IsTaskOfTheFramework(awaited))
-                    {
-                        Report(Rules.UnsupportedUse, collection.Syntax, awaited, operation.Kind);
-                        break;
-                    }
+                    if (types.Carries(awaited) && !IsTaskOfTheFramework(awaited) && (unsupported is null || types.IsLessUnsafe(unsupported, awaited)))
+                        unsupported = awaited;
                 }
+
+                if (unsupported is not null)
+                    Report(Rules.UnsupportedUse, collection.Syntax, unsupported, operation.Kind);
             }
 
             // A variable of a non-copyable type over boxed elements, as those of an ArrayList, takes each one out of its box.
@@ -1197,6 +1281,10 @@ public sealed partial class DoNotCopyValueAnalyzer
                 else if (isBoxed && types.IsStructOfUncheckedCode(elementType) && types.LosesNonCopyableType(elementType, variableType))
                 {
                     Report(Rules.OpaqueBoxing, conversionSite, elementType, variableType, Display(GetStructDefinition(elementType)));
+                }
+                else if (isBoxed && types.FindStructBindingNotTaken(elementType) is not null)
+                {
+                    CheckBoxOfBindingNotTaken(conversionSite, elementType, variableType);
                 }
                 else if (!elementIsNew && declarator.Symbol.RefKind is RefKind.None && types.IsNonCopyableType(elementType))
                 {
@@ -1325,8 +1413,10 @@ public sealed partial class DoNotCopyValueAnalyzer
         /// </summary>
         /// <remarks>
         /// Where the class has no such field, the object that is cloned can be of a derived class that has one: one of the compilation is
-        /// reported as the definite copy that it is, and a class that another assembly can derive from as a possible one (SCA1008). A
-        /// sealed class and a struct have no derived class.
+        /// reported as the definite copy that it is (SCA1005). A class that another assembly can derive from gets a report of its own for
+        /// what such a class can hold (SCA1008), whatever the fields of the class and of the classes of the compilation below it: one report
+        /// does not hide another, and a plain field must not make the report about a class of another assembly go away. A sealed class and
+        /// a struct have no derived class.
         /// </remarks>
         private void CheckMemberwiseClone(IOperation operation, IOperation? instance)
         {
@@ -1346,30 +1436,43 @@ public sealed partial class DoNotCopyValueAnalyzer
             if (type is ITypeParameterSymbol typeParameter)
                 type = GetConstraintClass(typeParameter);
 
+            // The clone copies every field of the object: those of its class and its base classes, and those of a class below that the
+            // object can be of. The report names a field whose type is unsafe to copy where there is one, which makes it strict.
+            IFieldSymbol? own = null;
+
             for (var current = type; current is not null; current = current.BaseType)
             {
                 foreach (var member in current.GetMembers())
                 {
-                    if (member is IFieldSymbol { IsStatic: false, RefKind: RefKind.None } field && types.IsNonCopyableType(field.Type))
+                    if (member is IFieldSymbol { IsStatic: false, RefKind: RefKind.None } field &&
+                        types.IsNonCopyableType(field.Type) &&
+                        (own is null || types.IsLessUnsafe(own.Type, field.Type)))
                     {
-                        Report(Rules.MemberwiseCloneCall, operation.Syntax, type, field.Type, DisplayField(field));
-                        return;
+                        own = field;
                     }
                 }
             }
 
+            var derived = type is INamedTypeSymbol { TypeKind: TypeKind.Class, IsSealed: false } open && (own is null || !types.NamesUnsafeToCopy(own.Type))
+                ? types.FindDerivedClassWithNonCopyableField(open)
+                : null;
+
+            if (own is not null && !(derived is { } below && types.IsLessUnsafe(own.Type, below.Field.Type)))
+                Report(Rules.MemberwiseCloneCall, operation.Syntax, type, own.Type, DisplayField(own));
+
             if (type is not INamedTypeSymbol { TypeKind: TypeKind.Class, IsSealed: false } named)
                 return;
 
-            if (types.FindDerivedClassWithNonCopyableField(named) is { } derived)
+            if (derived is { } withField && (own is null || types.IsLessUnsafe(own.Type, withField.Field.Type)))
             {
-                var field = derived.Field;
-                Report(Rules.MemberwiseCloneOfDerivedClass, operation.Syntax, named, derived.Class, field.Type, DisplayField(field));
+                var field = withField.Field;
+                Report(Rules.MemberwiseCloneOfDerivedClass, operation.Syntax, named, withField.Class, field.Type, DisplayField(field));
             }
-            else if (types.CanBeDerivedFromElsewhere(named))
-            {
+
+            // A class of another assembly that derives from this one can hold a value of any type, which no field that the compilation
+            // shows tells anything of.
+            if (types.CanBeDerivedFromElsewhere(named))
                 Report(Rules.MemberwiseCloneOfOpenClass, operation.Syntax, named, named.OriginalDefinition.GetDocumentationCommentId() ?? Display(named));
-            }
         }
 
         // The class that a type parameter is constrained to, through the type parameters that it is constrained to. Null if it has none.
@@ -1388,12 +1491,12 @@ public sealed partial class DoNotCopyValueAnalyzer
         }
 
         // The clone of object, and the one of MarshalByRefObject that Stream and Component inherit, which clones the object as well.
-        private static bool IsMemberwiseClone(IMethodSymbol method) => method is { Name: nameof(MemberwiseClone) } &&
+        internal static bool IsMemberwiseClone(IMethodSymbol method) => method is { Name: nameof(MemberwiseClone) } &&
             ((method.Parameters.IsEmpty && method.ContainingType.SpecialType is SpecialType.System_Object) ||
              (method.Parameters is [{ Type.SpecialType: SpecialType.System_Boolean }] &&
                 method.ContainingType is { Name: nameof(MarshalByRefObject) } owner && NonCopyableTypes.IsInNamespace(owner, "System")));
 
-        private static bool IsGetObjectValue(IMethodSymbol method) =>
+        internal static bool IsGetObjectValue(IMethodSymbol method) =>
             method is { Name: nameof(RuntimeHelpers.GetObjectValue), ContainingType: { Name: nameof(RuntimeHelpers) } owner } &&
             NonCopyableTypes.IsInNamespace(owner, "System.Runtime.CompilerServices");
 

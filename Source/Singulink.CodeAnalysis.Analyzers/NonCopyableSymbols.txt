@@ -1,5 +1,5 @@
 # The built-in framework symbol list of the non-copyable analyzer.
-# Format: one documentation-comment ID per line, with an optional marker (";new", ";borrows", ";drains", ";owned", ";borrowswhen=" with outcomes, ";view", ";noncopyable", ";copyable", ";erasable", ";clones" or ";clones=complete") and optional ";for=" type parameter names. The outcomes of "borrowswhen" are "true" and "false".
+# Format: one documentation-comment ID per line, with an optional marker (";new", ";borrows", ";drains", ";owned", ";borrowswhen=" with outcomes, ";view", ";noncopyable", ";unsafetocopy", ";copyable", ";erasable", ";clones" or ";clones=complete") and optional ";for=" type parameter names. The outcomes of "borrowswhen" are "true" and "false". The line of a static field ("F:") takes no marker.
 # A symbol list file of a project can also vouch for an assembly, with a line of the form "A:Assembly.Name;trusted".
 # Runtime source read: dotnet/runtime d757c03be2c3. What in that source backs each entry is in NonCopyableSymbols.evidence.md beside this file.
 # A line ending in "# net11+" names a member that exists from .NET 11 on. It does not resolve in a project that targets .NET 10.
@@ -48,16 +48,31 @@ T:System.Runtime.CompilerServices.ConfiguredTaskAwaitable`1.ConfiguredTaskAwaite
 # Non-copyable framework structs
 # ============================================================================
 
+# "unsafetocopy" marks a struct whose copy can break memory safety: free, unpin or reach memory twice or after it is gone. Under the
+# updated memory safety rules a copy of one is an error. "noncopyable" marks one whose copy breaks only the logic of the program.
+#
+# The handles. Free and Dispose clear the handle field of the instance that they are called on, and then free the slot of the
+# runtime's handle table that the field named, with no check that the slot is still the one that was allocated. A copy keeps the old
+# value: its Free or Dispose releases a slot that may by then belong to another object, or unpins memory that a pointer from
+# AddrOfPinnedObject or GetAddressOfObjectData still points into. GCHandle<T>.Target reads the slot with Unsafe.As<T>, so a copy
+# read after the slot was given to another object hands out that object as a T.
+T:System.Runtime.InteropServices.GCHandle;unsafetocopy
+T:System.Runtime.InteropServices.GCHandle`1;unsafetocopy
+T:System.Runtime.InteropServices.PinnedGCHandle`1;unsafetocopy
+T:System.Runtime.InteropServices.WeakGCHandle`1;unsafetocopy
+# Dispose frees the GCHandle that the struct holds and calls Unpin on its IPinnable, so the Dispose of a copy does both a second time
+# while the pointer of the other copy may still point into the memory.
+T:System.Buffers.MemoryHandle;unsafetocopy
+#
+# A copy of these breaks the logic of the program: a lock exited twice, a flow restored twice, a result or a continuation in two places.
 T:System.Threading.SpinLock;noncopyable
-T:System.Runtime.InteropServices.GCHandle;noncopyable
-T:System.Runtime.InteropServices.GCHandle`1;noncopyable
-T:System.Runtime.InteropServices.PinnedGCHandle`1;noncopyable
-T:System.Runtime.InteropServices.WeakGCHandle`1;noncopyable
 T:System.Threading.Lock.Scope;noncopyable
-T:System.Buffers.MemoryHandle;noncopyable
-T:System.Runtime.CompilerServices.DefaultInterpolatedStringHandler;noncopyable
 T:System.Threading.AsyncFlowControl;noncopyable
 T:System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore`1;noncopyable
+# The closest call of the list. ToStringAndClear and Clear return the char array that the handler rented from ArrayPool<char>.Shared,
+# so a copy returns it a second time and two later renters can share it. That shares data, but every access stays inside a managed
+# array that the GC keeps alive, so no copy reaches memory that is gone.
+T:System.Runtime.CompilerServices.DefaultInterpolatedStringHandler;noncopyable
 # Dispatcher.DisableProcessing adds 1 to a count and returns this struct, whose Dispose checks only the struct's own field before it
 # subtracts 1: the Dispose of a copy subtracts a second time. WindowsBase of .NET and of the .NET Framework.
 T:System.Windows.Threading.DispatcherProcessingDisabled;noncopyable
@@ -1104,6 +1119,29 @@ M:System.Threading.Tasks.Task.WaitAny(System.Threading.Tasks.Task[],System.TimeS
 M:System.Threading.Tasks.Task.WaitAny(System.Threading.Tasks.Task[],System.Threading.CancellationToken)
 M:System.Threading.Tasks.Task.WaitAny(System.Threading.Tasks.Task[],System.Int32)
 M:System.Threading.Tasks.Task.WaitAny(System.Threading.Tasks.Task[],System.Int32,System.Threading.CancellationToken)
+
+# ============================================================================
+# Static fields of generic types: their static initializers make no copy
+# ============================================================================
+#
+# Reading or writing a static field of a generic type runs the static constructor and the static field initializers of the type with
+# its type arguments. A line of a field says that this code makes no copy of a value of the type arguments. FrameworkScanTests finds
+# every public or protected static field, other than a constant, of a generic type of the shared frameworks and of the .NET Framework
+# 4.8.1, and fails for one with no line. Each static constructor was read in the IL of 10.0.14 and 11.0.0: it creates an empty
+# collection, an empty array, a default value or an object with no value of the type arguments, and stores it in the field.
+# XmlQuerySequence<T> is public in the implementation assembly of .NET as well, and no reference assembly of .NET has it.
+F:System.Collections.Immutable.ImmutableArray`1.Empty
+F:System.Collections.Immutable.ImmutableDictionary`2.Empty
+F:System.Collections.Immutable.ImmutableHashSet`1.Empty
+F:System.Collections.Immutable.ImmutableList`1.Empty
+F:System.Collections.Immutable.ImmutableSortedDictionary`2.Empty
+F:System.Collections.Immutable.ImmutableSortedSet`1.Empty
+F:System.Buffers.ReadOnlySequence`1.Empty
+F:Microsoft.Extensions.Logging.Abstractions.NullLogger`1.Instance
+F:Microsoft.AspNetCore.Components.EventCallback`1.Empty
+F:Microsoft.AspNetCore.Http.Features.FeatureReference`1.Default
+F:Microsoft.AspNetCore.Routing.Matching.EndpointMetadataComparer`1.Default
+F:System.Xml.Xsl.Runtime.XmlQuerySequence`1.Empty  # netfx
 
 # ============================================================================
 # Classes that clone themselves: their own code clones an object with MemberwiseClone

@@ -467,7 +467,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                     (_keptParametersReported ??= new(SymbolEqualityComparer.Default)).Add(parameter))
                 {
                     var goingOn = parameter.ContainingSymbol is IMethodSymbol ? parameter.ContainingSymbol : function;
-                    Report(Rules.KeepsParameterAfterReturning, reference.Syntax, Display(goingOn), how, parameter.Name, DescribeContainer(parameter.Type), advice);
+                    ReportAbout(Rules.KeepsParameterAfterReturning, Subject.Of(parameter.Type), reference.Syntax, Display(goingOn), how, parameter.Name, DescribeContainer(parameter.Type), advice);
                 }
 
                 return;
@@ -485,8 +485,9 @@ public sealed partial class DoNotCopyValueAnalyzer
                 {
                     var member = NonCopyableTypes.GetListDefinition(receiver);
 
-                    Report(
+                    ReportAbout(
                         Rules.PassesParameterToUncheckedCode,
+                        Subject.Of(parameter.Type),
                         reference.Syntax,
                         Display(owner),
                         parameter.Name,
@@ -498,7 +499,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                 }
 
                 var rule = use is ParameterUse.Keeps ? Rules.KeepsUnmarkedParameter : Rules.ParameterUsedInAWayNotFollowed;
-                Report(rule, reference.Syntax, Display(owner), parameter.Name, DescribeContainer(parameter.Type));
+                ReportAbout(rule, Subject.Of(parameter.Type), reference.Syntax, Display(owner), parameter.Name, DescribeContainer(parameter.Type));
             }
         }
 

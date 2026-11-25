@@ -46,7 +46,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                 if (NonCopyableTypes.ChangesMovedFrom(parameter, invoke.Parameters[i]) && operation.Target.Syntax is AnonymousMethodExpressionSyntax { ParameterList: null })
                 {
                     // 'delegate { }' has no parameter that could be named or marked.
-                    Report(Rules.MovedFromDroppedWithNoParameterList, operation.Target.Syntax, giver, invoke.Parameters[i].Name);
+                    ReportAbout(Rules.MovedFromDroppedWithNoParameterList, Subject.OfDeclared(invoke.Parameters[i].Type), operation.Target.Syntax, giver, invoke.Parameters[i].Name);
                 }
                 else if (NonCopyableTypes.ChangesMovedFrom(parameter, invoke.Parameters[i]))
                 {
@@ -56,8 +56,9 @@ public sealed partial class DoNotCopyValueAnalyzer
                             ? Rules.MovedFromAddedOverUncheckedMark
                             : Rules.MovedFromAdded;
 
-                    Report(
+                    ReportAbout(
                         rule,
+                        Subject.OfDeclared(parameter.Type),
                         operation.Target.Syntax,
                         parameter.Name,
                         Display(function),
@@ -114,7 +115,7 @@ public sealed partial class DoNotCopyValueAnalyzer
             if (types.IsContainer(parameter.Type))
             {
                 if (value is null || !IsContainerOfItsOwn(value, given: true))
-                    Report(Rules.MovedFromContainerNotOwned, (value ?? target).Syntax, parameter.Name);
+                    ReportAbout(Rules.MovedFromContainerNotOwned, Subject.Of(parameter.Type), (value ?? target).Syntax, parameter.Name);
             }
             else if (IsParameterOfGenericMove(parameter) && (value is null || !IsPureMoveValue(value)))
             {
@@ -542,7 +543,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                 if (parameter.RefKind is not RefKind.Ref)
                 {
                     if (isLocal)
-                        ReportDiagnostic(severities.Create(Rules.MovedFromNotOnRefParameter, parameter.Locations.FirstOrDefault(l => l.IsInSource)));
+                        ReportDiagnostic(severities.CreateAbout(Rules.MovedFromNotOnRefParameter, Subject.OfDeclared(parameter.Type), parameter.Locations.FirstOrDefault(l => l.IsInSource)));
 
                     return;
                 }
@@ -551,7 +552,8 @@ public sealed partial class DoNotCopyValueAnalyzer
 
                 if (_flow.GetGraph(body, method) is { } graph)
                 {
-                    _flow.CheckMovedFromPaths(graph, parameter, method, IsMoveOfLocal, (rule, syntax, arguments) => Report(rule, syntax, arguments));
+                    var subject = Subject.OfDeclared(parameter.Type);
+                    _flow.CheckMovedFromPaths(graph, parameter, method, IsMoveOfLocal, (rule, syntax, arguments) => ReportAbout(rule, subject, syntax, arguments));
                     moves.NotePathsChecked(method, parameter);
                 }
             }

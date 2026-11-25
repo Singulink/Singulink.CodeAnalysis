@@ -60,7 +60,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                         "object, as a completion source is made in the method that returns its 'Task'"
                     : advice + ", or mark the method [return: Borrowed] so that callers treat the result as stored";
 
-                Report(Rules.UnownedContainerReturned, returnedValue.Syntax, Display(method), DescribeContainer(type), because, advice);
+                ReportAbout(Rules.UnownedContainerReturned, Subject.Of(type), returnedValue.Syntax, Display(method), DescribeContainer(type), because, advice);
             }
         }
 

@@ -394,7 +394,7 @@ public class HandOffTests
             }
         }
 
-        {{Lease}}
+        {{Sources.AsUnsafeToCopy(Lease)}}
         """,
         Verify.UsedAfterHandOff(0, "lease", "Lease", TakeLease, 1).AsError(),
         Verify.UsedAfterHandOff(2, "lease", "Lease", TakeLease, 3).AsError(),
@@ -753,10 +753,62 @@ public class HandOffTests
             }
         }
 
-        {{Sources.Guard}}
+        {{Sources.UnsafeGuard}}
         """,
         Verify.UsedAfterHandOff(0, "guard", "Guard", "'C.TryTake(Guard)' received its value", 1),
         Verify.UsedAfterHandOff(2, "guard", "Guard", "'C.TryTake(Guard)' received its value", 3),
         Verify.UsedAfterHandOff(4, "guard", "Guard", "'C.TryTake(Guard)' received its value", 5).AsError(),
         Verify.UsedAfterHandOff(6, "guard", "Guard", "'C.TryTake(Guard)' received its value", 7).AsError());
+
+    // With a plain non-copyable type a use after the hand-off is the ordinary warning under the updated rules, wherever it is.
+    [TestMethod]
+    public Task HandOff_OfAPlainTypeIsTheOrdinaryWarningUnderTheUpdatedRules() => Verify.UpdatedRulesAsync(
+        $$"""
+        class C
+        {
+            {{Members}}
+
+            void UseInUnsafeExpression(Guard guard)
+            {
+                if (!TryTake({|#1:guard|}))
+                    Keep(unsafe({|#0:guard|}));
+            }
+
+            void UseInUnsafeBlock(Guard guard)
+            {
+                if (!TryTake({|#3:guard|}))
+                {
+                    unsafe
+                    {
+                        {|#2:guard|}.Dispose();
+                    }
+                }
+            }
+
+            void HandOffInUnsafeExpression(Guard guard)
+            {
+                if (!TryTake(unsafe({|#5:guard|})))
+                    {|#4:guard|}.Dispose();
+            }
+
+            void HandOffInUnsafeBlock(Guard guard)
+            {
+                bool taken;
+
+                unsafe
+                {
+                    taken = TryTake({|#7:guard|});
+                }
+
+                if (!taken)
+                    {|#6:guard|}.Dispose();
+            }
+        }
+
+        {{Sources.Guard}}
+        """,
+        Verify.UsedAfterHandOff(0, "guard", "Guard", "'C.TryTake(Guard)' received its value", 1),
+        Verify.UsedAfterHandOff(2, "guard", "Guard", "'C.TryTake(Guard)' received its value", 3),
+        Verify.UsedAfterHandOff(4, "guard", "Guard", "'C.TryTake(Guard)' received its value", 5),
+        Verify.UsedAfterHandOff(6, "guard", "Guard", "'C.TryTake(Guard)' received its value", 7));
 }

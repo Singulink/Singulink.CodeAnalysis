@@ -255,12 +255,16 @@ public sealed partial class DoNotCopyValueAnalyzer
             if (types.FindCloningBindingWithin(sourceType) is not { } binding)
                 return false;
 
+            // The report stands for the warning of the hidden container as well, so it is about what the value holds besides the
+            // binding that it names: strict where either is unsafe to copy.
+            var subject = Subject.Of(binding.Type, sourceType);
+
             if (member is not null && NonCopyableTypes.GetListDefinition(member) is var definition && types.IsCloningMember(definition))
-                Report(Rules.CloningUseOfCloningMember, syntax, Display(definition), sourceType, binding.Type, binding.Bound);
+                ReportAbout(Rules.CloningUseOfCloningMember, subject, syntax, Display(definition), sourceType, binding.Type, binding.Bound);
             else if (member is not null)
-                Report(Rules.CloningUseMember, syntax, Display(NonCopyableTypes.GetListDefinition(member)), sourceType, targetType, binding.Cloning, binding.Type, binding.Bound, GetListId(NonCopyableTypes.GetListDefinition(member)));
+                ReportAbout(Rules.CloningUseMember, subject, syntax, Display(NonCopyableTypes.GetListDefinition(member)), sourceType, targetType, binding.Cloning, binding.Type, binding.Bound, GetListId(NonCopyableTypes.GetListDefinition(member)));
             else
-                Report(Rules.CloningUseConversion, syntax, sourceType, targetType, binding.Cloning, binding.Type, binding.Bound);
+                ReportAbout(Rules.CloningUseConversion, subject, syntax, sourceType, targetType, binding.Cloning, binding.Type, binding.Bound);
 
             return true;
         }
@@ -290,7 +294,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                 ? Rules.UntypedCollectionConversion
                 : isResultOfLambda ? Rules.OpaqueLambdaResult : Rules.OpaqueConversion;
 
-            Report(rule, syntax, DescribeContainer(sourceType), targetType);
+            ReportAbout(rule, Subject.Of(sourceType), syntax, DescribeContainer(sourceType), targetType);
         }
 
         /// <summary>

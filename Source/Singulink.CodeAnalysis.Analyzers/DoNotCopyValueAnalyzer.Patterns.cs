@@ -159,6 +159,10 @@ public sealed partial class DoNotCopyValueAnalyzer
             bool boxesUncheckedStruct = boxes && inputIsNew && !hidesTypeParameter &&
                 types.IsStructOfUncheckedCode(pattern.InputType) && types.LosesNonCopyableType(pattern.InputType, pattern.NarrowedType!);
 
+            // And a struct whose members run on the box with a type that a type parameter of it does not take.
+            bool boxesBindingNotTaken = boxes && inputIsNew && !hidesTypeParameter && !boxesUncheckedStruct &&
+                types.FindStructBindingNotTaken(pattern.InputType) is not null;
+
             switch (pattern)
             {
                 case IDeclarationPatternOperation declaration:
@@ -177,6 +181,8 @@ public sealed partial class DoNotCopyValueAnalyzer
                         Report(Rules.OpaqueTypeParameterConversion, declaration.Syntax, declaration.InputType, declaration.NarrowedType);
                     else if (boxesUncheckedStruct && declaration.DeclaredSymbol is not null)
                         ReportOpaqueBoxing(declaration);
+                    else if (boxesBindingNotTaken && declaration.DeclaredSymbol is not null)
+                        CheckBoxOfBindingNotTaken(declaration.Syntax, declaration.InputType, declaration.NarrowedType);
 
                     break;
 
@@ -209,13 +215,15 @@ public sealed partial class DoNotCopyValueAnalyzer
                         if (variableIsReported || looksIntoValue)
                             inputIsNew = true;
                     }
-                    else if (boxesCopy || hidesTypeParameter || boxesUncheckedStruct)
+                    else if (boxesCopy || hidesTypeParameter || boxesUncheckedStruct || boxesBindingNotTaken)
                     {
                         // A bare test of the type boxes nothing that can be used.
                         if (recursive.DeclaredSymbol is not null || looksIntoValue)
                         {
                             if (boxesUncheckedStruct)
                                 ReportOpaqueBoxing(recursive);
+                            else if (boxesBindingNotTaken)
+                                CheckBoxOfBindingNotTaken(recursive.Syntax, recursive.InputType, recursive.NarrowedType);
                             else
                                 Report(boxesCopy ? Rules.Boxing : Rules.OpaqueTypeParameterConversion, recursive.Syntax, recursive.InputType, recursive.NarrowedType);
 
@@ -306,7 +314,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                                 // The visit of the property reference reports the use of the property. What it reads from is only known here.
                                 CheckHandedOutValue(member.Syntax, use, property.Type, inputIsNewForMembers);
                                 memberIsNew = !types.IsContainer(property.Type) &&
-                                    (use.Kind is not MemberUseKind.Listed || inputIsNewForMembers || types.IsNonCopyableType(property.Type));
+                                    (use.ListedKind is not MemberUseKind.Listed || inputIsNewForMembers || types.IsNonCopyableType(property.Type));
                                 break;
                         }
 
@@ -398,7 +406,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                         // A container that an indexer gives is stored, as one from any other property.
                         listElementsAreNew = ReturnsByValue(indexer) &&
                             !(indexer is IPropertySymbol { Type: var elementType } && types.IsContainer(elementType)) &&
-                            (indexerUse.Kind is not MemberUseKind.Listed || (IsNewForItsMembers(inputIsNew, list.InputType) && IsNewForItsMembers(inputIsNew, listType) && !types.IsView(listType)));
+                            (indexerUse.ListedKind is not MemberUseKind.Listed || (IsNewForItsMembers(inputIsNew, list.InputType) && IsNewForItsMembers(inputIsNew, listType) && !types.IsView(listType)));
                     }
 
                     // An element is counted from the start of the list, or from its end if it comes after a slice. Two list patterns
@@ -618,7 +626,11 @@ public sealed partial class DoNotCopyValueAnalyzer
             if (!isOfExtension && (method.IsStatic || method.IsReadOnly || method.ContainingType is not { IsValueType: true }))
                 return;
 
-            taken.NoteUse(part, member, kind, syntax, $"'{Display(member)}'", isOfExtension && TakesReceiverByValue(method));
+            // The part that the member runs on has the type of its receiver, which is the first parameter of an extension method that
+            // is not in its reduced form.
+            var receiverType = NonCopyableTypes.GetExtensionReceiver(method)?.Type
+                ?? (method is { IsExtensionMethod: true, ReducedFrom: null, Parameters: [var first, ..] } ? first.Type : method.ReceiverType);
+            taken.NoteUse(part, member, kind, syntax, $"'{Display(member)}'", isOfExtension && TakesReceiverByValue(method), receiverType);
         }
 
         /// <summary>
@@ -631,7 +643,7 @@ public sealed partial class DoNotCopyValueAnalyzer
             foreach (var (first, second) in taken.FindPartsUsedTwice())
             {
                 if ((reported ??= []).Add(second.Syntax))
-                    Report(Rules.PartUsedTwiceInPattern, second.Syntax, first.Name, second.Name);
+                    ReportAbout(Rules.PartUsedTwiceInPattern, Subject.Of(first.Type, second.Type), second.Syntax, first.Name, second.Name);
             }
         }
 
@@ -932,7 +944,7 @@ public sealed partial class DoNotCopyValueAnalyzer
     /// <summary>
     /// A variable that takes a part of a matched value, or a member that uses one.
     /// </summary>
-    private sealed class PartEntry(PatternPart? part, SyntaxNode syntax, string name, ISymbol? member, PartUseKind kind, bool takesByValue)
+    private sealed class PartEntry(PatternPart? part, SyntaxNode syntax, string name, ISymbol? member, PartUseKind kind, bool takesByValue, ITypeSymbol? type)
     {
         public PatternPart? Part { get; } = part;
 
@@ -948,6 +960,9 @@ public sealed partial class DoNotCopyValueAnalyzer
 
         // The member takes the part by value, and works on a copy of it.
         public bool TakesByValue { get; } = takesByValue;
+
+        // The type of the part: that of the variable, or of the receiver of the member. Null where it is not known.
+        public ITypeSymbol? Type { get; } = type;
     }
 
     /// <summary>
@@ -1033,10 +1048,10 @@ public sealed partial class DoNotCopyValueAnalyzer
         }
 
         public void NoteVariable(PatternPart? part, ISymbol variable, SyntaxNode syntax) =>
-            (_entries ??= []).Add(new PartEntry(part, syntax, $"variable '{variable.Name}'", member: null, PartUseKind.Member, takesByValue: false));
+            (_entries ??= []).Add(new PartEntry(part, syntax, $"variable '{variable.Name}'", member: null, PartUseKind.Member, takesByValue: false, (variable as ILocalSymbol)?.Type));
 
-        public void NoteUse(PatternPart? part, ISymbol member, PartUseKind kind, SyntaxNode syntax, string name, bool takesByValue) =>
-            (_entries ??= []).Add(new PartEntry(part, syntax, name, member, kind, takesByValue));
+        public void NoteUse(PatternPart? part, ISymbol member, PartUseKind kind, SyntaxNode syntax, string name, bool takesByValue, ITypeSymbol? type) =>
+            (_entries ??= []).Add(new PartEntry(part, syntax, name, member, kind, takesByValue, type));
 
         /// <summary>
         /// Finds the pairs of a use and a variable, or of two uses, that work on one value twice. One of each pair is of the clause

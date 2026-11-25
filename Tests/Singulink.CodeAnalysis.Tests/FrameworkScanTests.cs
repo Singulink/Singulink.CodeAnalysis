@@ -105,6 +105,66 @@ public partial class FrameworkScanTests
         Assert.IsEmpty(missing, $"{found} members reach a built-in non-copyable type; these have no entry with the marker that they need:\n" + string.Join("\n", missing));
     }
 
+    // Reading or writing a static field of a generic type runs the static constructor and the static field initializers of the type with
+    // its type arguments, as a call of one of its members does. So every static field of a generic type that another assembly can name
+    // needs a line, which says that this code makes no copy of a value of the type arguments. Every type parameter counts: one that a
+    // struct cannot be bound to still takes a container. A constant runs nothing.
+    [TestMethod]
+    public void SharedFrameworks_EveryStaticFieldOfAGenericTypeIsListed() => CheckStaticFieldsOfGenericTypes(GetSharedFrameworkAssemblies());
+
+    // The same for the .NET Framework 4.8.1.
+    [TestMethod]
+    public async Task NetFramework_EveryStaticFieldOfAGenericTypeIsListed() => CheckStaticFieldsOfGenericTypes(await GetNetFrameworkAssembliesAsync());
+
+    private static void CheckStaticFieldsOfGenericTypes(List<string> assemblies)
+    {
+        Assert.IsNotEmpty(assemblies);
+
+        var references = assemblies.Select(path => (MetadataReference)MetadataReference.CreateFromFile(path)).ToList();
+        var compilation = CSharpCompilation.Create("Scan", references: references);
+        var entries = ReadEntries();
+        var missing = new SortedSet<string>(StringComparer.Ordinal);
+        int types = 0, found = 0;
+
+        foreach (var reference in references)
+        {
+            if (compilation.GetAssemblyOrModuleSymbol(reference) is not IAssemblySymbol assembly)
+                continue;
+
+            foreach (var type in GetVisibleTypes(assembly.GlobalNamespace))
+            {
+                types++;
+
+                if (!IsGenericOrInGeneric(type))
+                    continue;
+
+                foreach (var field in type.GetMembers().OfType<IFieldSymbol>().Where(f => f is { IsStatic: true, IsConst: false } && IsVisible(f)))
+                {
+                    found++;
+                    string id = field.GetDocumentationCommentId()!;
+
+                    if (!entries.ContainsKey(id))
+                        missing.Add(id);
+                }
+            }
+        }
+
+        Assert.IsGreaterThan(1000, types, "The scan reads the types of the framework.");
+        Assert.IsGreaterThan(0, found, "The scan finds the static fields of generic types.");
+        Assert.IsEmpty(missing, $"{found} static fields of generic types run the static initializers of their type; these have no line:\n" + string.Join("\n", missing));
+
+        static bool IsGenericOrInGeneric(INamedTypeSymbol type)
+        {
+            for (var current = type; current is not null; current = current.ContainingType)
+            {
+                if (current.TypeParameters.Length > 0)
+                    return true;
+            }
+
+            return false;
+        }
+    }
+
     private static (bool Inbound, bool Outbound) Judge(ISymbol member, HashSet<INamedTypeSymbol> builtIn, INamedTypeSymbol? owner)
     {
         // The value of a setter or an init accessor that the scan can see is a parameter, after those of an indexer.

@@ -25,6 +25,17 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
     public const string NotNullRefAttributeName = "NotNullRefAttribute";
 
     /// <summary>
+    /// The property of <c>NonCopyableAttribute</c> that says a copy of the struct can break memory safety.
+    /// </summary>
+    public const string UnsafeToCopyPropertyName = "UnsafeToCopy";
+
+    /// <summary>
+    /// The name of a 'bool' parameter of the constructor of a [NonCopyable] mark of a project's own that gives the value of
+    /// <c>UnsafeToCopy</c>, in any case.
+    /// </summary>
+    public const string UnsafeToCopyParameterName = "unsafeToCopy";
+
+    /// <summary>
     /// The namespace that the attributes are recognised in.
     /// </summary>
     public const string AttributeNamespace = "Singulink.CodeAnalysis";
@@ -644,7 +655,8 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
 
     /// <summary>
     /// Classifies the use of a method, a property or an event from what is bound to its type parameters and to those of the types that contain
-    /// it. Each type parameter is judged alone.
+    /// it. Each type parameter is judged alone. A read or a write of a static field is classified in the same way: it runs the static
+    /// constructor and the static field initializers of the type that declares the field, with its type arguments.
     /// </summary>
     public MemberUse GetUse(ISymbol member)
     {
@@ -666,8 +678,199 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
             return use;
 
         use = ClassifyUse(member);
+
+        if (FindUseBindingNotTaken(member, use) is { } notTaken)
+            use = use with { NotTaken = notTaken };
+
         _uses[member] = use;
         return use;
+    }
+
+    /// <summary>
+    /// Gets the binding of a type that is unsafe to copy to a type parameter marked <c>[NonCopyable(UnsafeToCopy = false)]</c> that the use
+    /// of a member makes: to a type parameter of the member or of a type that contains it; to one of a type that is bound to a type
+    /// parameter of the member or of a type that contains it, as the type argument or at any depth inside it, whose members the generic
+    /// can then run; or to one of a type whose parameterless constructor the 'new()' constraint lets the generic call. Null if the use
+    /// makes none. A delegate type has no code of its own: its target is judged where the delegate is created, with the types that it is
+    /// created with.
+    /// </summary>
+    /// <remarks>
+    /// Generic code can run the members of what is bound to its type parameter with nothing that shows them: ToString, Equals and
+    /// GetHashCode through any type parameter, a static abstract or virtual member and an interface member through a constraint, and
+    /// the members of a type that holds it, as List&lt;T&gt;.Contains runs Equals of each element. So a type with a binding that a type
+    /// parameter does not take, given to other generic code, is reported at each use of a member of that code, wherever it stands in the
+    /// type arguments. A type parameter for which the use is reported already, as a member that is not vouched for a non-copyable type
+    /// (<paramref name="use"/>), is not reported again: that report is strict for such a type.
+    /// </remarks>
+    private BindingNotTaken? FindUseBindingNotTaken(ISymbol member, MemberUse use)
+    {
+        var bound = new List<(ITypeParameterSymbol Parameter, ITypeSymbol Argument)>();
+
+        if (member is IMethodSymbol method)
+        {
+            var typeParameters = GetUnreduced(method).OriginalDefinition.TypeParameters;
+            var typeArguments = method.TypeArguments;
+
+            for (int i = 0; i < typeParameters.Length && i < typeArguments.Length; i++)
+                bound.Add((typeParameters[i], typeArguments[i]));
+        }
+
+        for (var type = member.ContainingType; type is not null; type = type.ContainingType)
+        {
+            if (type.TypeKind is TypeKind.Delegate)
+                return null;
+
+            var typeParameters = type.OriginalDefinition.TypeParameters;
+
+            for (int i = 0; i < typeParameters.Length && i < type.TypeArguments.Length; i++)
+                bound.Add((typeParameters[i], type.TypeArguments[i]));
+        }
+
+        foreach (var (typeParameter, argument) in bound)
+        {
+            if (TakesNoUnsafeToCopy(typeParameter) && IsUnsafeToCopy(argument))
+                return new BindingNotTaken(typeParameter, argument);
+        }
+
+        foreach (var (typeParameter, argument) in bound)
+        {
+            if (IsMarkedNonCopyable(typeParameter) &&
+                typeParameter.HasConstructorConstraint &&
+                argument is INamedTypeSymbol named &&
+                FindConstructorBindingNotTaken(named) is { } byConstructor)
+            {
+                return byConstructor;
+            }
+        }
+
+        // A member that is not vouched for one type parameter has one report for all that it is not vouched for, which one line
+        // answers.
+        var uses = use.AlsoBroken.IsDefault ? [use] : use.AlsoBroken.Insert(0, use);
+        bool isUnlisted = uses.Any(static use => use.Kind is MemberUseKind.UnlistedNonCopyable or MemberUseKind.UnlistedContainer);
+        var entry = isUnlisted ? list.GetMember(GetListDefinition(member)) : null;
+
+        foreach (var (typeParameter, argument) in bound)
+        {
+            if (uses.Any(other => IsReported(other) && SymbolEqualityComparer.Default.Equals(other.TypeParameter, typeParameter)) ||
+                (isUnlisted && !IsMarkedNonCopyable(typeParameter) && entry?.Covers(typeParameter) is not true))
+            {
+                continue;
+            }
+
+            if (FindBindingNotTakenWithin(argument) is { } within)
+                return new BindingNotTaken(within.TypeParameter, within.Argument, typeParameter, argument);
+        }
+
+        return null;
+
+        static bool IsReported(MemberUse use) => use.Kind is
+            MemberUseKind.UnlistedNonCopyable or
+            MemberUseKind.UnlistedContainer or
+            MemberUseKind.ContainerHiddenByConstraint or
+            MemberUseKind.DefaultMemberOfConstraint or
+            MemberUseKind.RequiresCopyable;
+    }
+
+    /// <summary>
+    /// Gets a type with a binding that a type parameter does not take (<see cref="FindBindingNotTaken(INamedTypeSymbol?)"/>) in a type:
+    /// the type itself, the element type of an array, or a type argument of it or of a type that contains it, at any depth. Each type is
+    /// looked at once, with a stack of its own. Null if there is none.
+    /// </summary>
+    private (ITypeParameterSymbol TypeParameter, ITypeSymbol Argument)? FindBindingNotTakenWithin(ITypeSymbol type)
+    {
+        var pending = new Stack<ITypeSymbol>();
+        var seen = new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default) { type };
+        pending.Push(type);
+
+        while (pending.Count > 0)
+        {
+            switch (pending.Pop())
+            {
+                case IArrayTypeSymbol array:
+                    if (seen.Add(array.ElementType))
+                        pending.Push(array.ElementType);
+
+                    break;
+
+                case INamedTypeSymbol named:
+                    if (FindBindingNotTaken(named) is { } binding)
+                        return binding;
+
+                    foreach (var argument in GetAllTypeArguments(named))
+                    {
+                        if (seen.Add(argument))
+                            pending.Push(argument);
+                    }
+
+                    break;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Gets the binding not taken of a type whose parameterless constructor runs where a generic with the 'new()' constraint creates it: the
+    /// constructor of a class, which runs the initializers of its fields, and one that a struct declares. A constructor of a base class
+    /// that it calls with nothing written counts too.
+    /// </summary>
+    private BindingNotTaken? FindConstructorBindingNotTaken(INamedTypeSymbol type)
+    {
+        // A struct with no constructor of its own is created with nothing run.
+        if (type.InstanceConstructors.FirstOrDefault(static c => c.Parameters.IsEmpty) is not { } constructor ||
+            (type.TypeKind is TypeKind.Struct && constructor.IsImplicitlyDeclared))
+        {
+            return null;
+        }
+
+        return Find(constructor, depth: 0);
+
+        BindingNotTaken? Find(IMethodSymbol constructor, int depth)
+        {
+            RuntimeHelpers.EnsureSufficientExecutionStack();
+
+            if (constructor.ContainingType is { } owner && FindBindingNotTaken(owner) is { } found)
+                return new BindingNotTaken(found.TypeParameter, found.Argument);
+
+            if (depth >= 64)
+                return null;
+
+            foreach (var called in GetBaseConstructorsCalledWithNothingWritten(constructor))
+            {
+                if (Find(called, depth + 1) is { } inBase)
+                    return inBase;
+            }
+
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Gets a binding of a type that is unsafe to copy to a type parameter marked <c>[NonCopyable(UnsafeToCopy = false)]</c> among the type
+    /// arguments of a struct, or of a struct that is one of them, at any depth: the members of such a struct run with the type where the
+    /// struct is boxed, and where a struct that holds it inline compares or hashes its fields, with no use that shows the binding. A
+    /// <c>Nullable&lt;T&gt;</c> boxes as what it holds.
+    /// Null if there is none.
+    /// </summary>
+    public BindingNotTaken? FindStructBindingNotTaken(ITypeSymbol? type) => FindStructBindingNotTaken(type, depth: 0);
+
+    private BindingNotTaken? FindStructBindingNotTaken(ITypeSymbol? type, int depth)
+    {
+        RuntimeHelpers.EnsureSufficientExecutionStack();
+
+        if (type is not INamedTypeSymbol { TypeKind: TypeKind.Struct } named || depth > 8)
+            return null;
+
+        if (FindBindingNotTaken(named) is { } binding)
+            return new BindingNotTaken(binding.TypeParameter, binding.Argument);
+
+        foreach (var argument in GetAllTypeArguments(named))
+        {
+            if (FindStructBindingNotTaken(argument, depth + 1) is { } inArgument)
+                return inArgument;
+        }
+
+        return null;
     }
 
     private bool HasCarriedTypeArgument(ISymbol member)
@@ -704,7 +907,7 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
     /// values of a non-copyable type only: a container that is taken out of a channel is a reference that whoever wrote it may
     /// still hold, so a sequence of containers is as new as what the member was called on.
     /// </remarks>
-    public bool FollowsInputs(MemberUse use, ITypeSymbol? handedOutType) => use.Kind switch {
+    public bool FollowsInputs(MemberUse use, ITypeSymbol? handedOutType) => use.ListedKind switch {
         MemberUseKind.Listed => !(use.Drains && SafeMemberList.IsSequence(handedOutType, out var elementType) && IsNonCopyableType(elementType)),
         MemberUseKind.ListedNew => !IsNonCopyableType(handedOutType),
         _ => false,
@@ -782,6 +985,7 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
 
         var definition = converted.OriginalDefinition;
         var typeParameters = definition.TypeParameters;
+        (ITypeSymbol Holder, ITypeSymbol Container)? found = null;
 
         foreach (var construction in GetConstructions(source))
         {
@@ -795,16 +999,21 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
 
                 var from = construction.TypeArguments[i];
                 var to = converted.TypeArguments[i];
+                var lost = LosesHolder(from, to) ? (from, to) : FindHolderLostByVariance(from, to, depth + 1);
 
-                if (LosesHolder(from, to))
-                    return (from, to);
+                // The report names a holder or a container that holds a value which is unsafe to copy where there is one.
+                if (lost is { } candidate && (found is not { } kept || (!IsAboutUnsafeToCopy(kept) && IsAboutUnsafeToCopy(candidate))))
+                    found = candidate;
 
-                if (FindHolderLostByVariance(from, to, depth + 1) is { } nested)
-                    return nested;
+                if (found is { } done && IsAboutUnsafeToCopy(done))
+                    return done;
             }
         }
 
-        return null;
+        return found;
+
+        bool IsAboutUnsafeToCopy((ITypeSymbol Holder, ITypeSymbol Container) pair) =>
+            NamesUnsafeToCopy(pair.Holder) || NamesUnsafeToCopy(pair.Container);
 
         static IEnumerable<INamedTypeSymbol> GetConstructions(ITypeSymbol type)
         {
@@ -862,31 +1071,39 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
 
     /// <summary>
     /// Gets a class of the compilation that derives from a class, at any depth, and declares an instance field of a non-copyable type,
-    /// with that field. Null if there is none.
+    /// with that field: one whose type is unsafe to copy where there is one. Null if there is none.
     /// </summary>
     public (INamedTypeSymbol Class, IFieldSymbol Field)? FindDerivedClassWithNonCopyableField(INamedTypeSymbol type)
     {
+        (INamedTypeSymbol Class, IFieldSymbol Field)? result = null;
+
         foreach (var derived in GetClasses())
         {
             // The fields of the class and of its constructed base classes below the type: 'class D : G<Guard>' holds the 'T' field of
             // 'G<T>' as a Guard. The fields of the type and of its own base classes are judged on the type itself.
-            IFieldSymbol? found = null;
+            var found = new List<IFieldSymbol>();
 
             for (var current = derived; current is not null; current = current.BaseType)
             {
                 if (!ReferenceEquals(current, derived) && IsSameClassAs(current, type))
                 {
-                    if (found is not null)
-                        return (derived, found);
+                    foreach (var field in found)
+                    {
+                        if (result is not { } kept || IsLessUnsafe(kept.Field.Type, field.Type))
+                            result = (derived, field);
+                    }
 
                     break;
                 }
 
-                found ??= current.GetMembers().OfType<IFieldSymbol>().FirstOrDefault(f => f is { IsStatic: false, RefKind: RefKind.None } && IsNonCopyableType(f.Type));
+                found.AddRange(current.GetMembers().OfType<IFieldSymbol>().Where(f => f is { IsStatic: false, RefKind: RefKind.None } && IsNonCopyableType(f.Type)));
             }
+
+            if (result is { } done && NamesUnsafeToCopy(done.Field.Type))
+                return done;
         }
 
-        return null;
+        return result;
     }
 
     // A base class of a derived class is the type that a call is on where it is of the same class: the same instantiation where both are
@@ -921,41 +1138,47 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
     /// type mentions a type parameter and that is non-copyable as the class is constructed. The base classes are judged as they are
     /// constructed through the class, up to the cloning class, which is judged as well: its own fields are copied by its own clone.
     /// </remarks>
-    public CloningBinding? FindCloningBinding(INamedTypeSymbol constructed)
+    public CloningBinding? FindCloningBinding(INamedTypeSymbol constructed) => FindCloningBindings(constructed).FirstOrDefault();
+
+    /// <summary>
+    /// Gets a binding that <see cref="FindCloningBinding(INamedTypeSymbol)"/> finds, or where it is of a type that is not unsafe to copy,
+    /// another binding in the chain of the class up to the class that clones itself whose type is: the clone copies them all, so a report
+    /// about one of them names one that is unsafe to copy where there is one, which makes it strict. Null if the class has no binding.
+    /// </summary>
+    public CloningBinding? PreferUnsafeToCopy(CloningBinding? binding, INamedTypeSymbol constructed) =>
+        binding is null || NamesUnsafeToCopy(binding.Type)
+            ? binding
+            : FindCloningBindings(constructed).FirstOrDefault(other => NamesUnsafeToCopy(other.Type)) ?? binding;
+
+    // Every binding that FindCloningBinding looks for, in the order of the chain, the first of a class being one whose type is unsafe to
+    // copy where the class has one.
+    private IEnumerable<CloningBinding> FindCloningBindings(INamedTypeSymbol constructed)
     {
         // The topmost class that clones itself: a binding anywhere up to it is copied by its clone.
         var cloning = FindCloningBase(constructed) ?? (list.IsClones(constructed.OriginalDefinition) ? constructed : null);
 
         if (cloning is null)
-            return null;
+            yield break;
 
         for (var current = constructed; current is not null; current = current.BaseType)
         {
             if (!SymbolEqualityComparer.Default.Equals(current, current.OriginalDefinition))
             {
-                if (!SymbolEqualityComparer.Default.Equals(current.ContainingAssembly, compilationAssembly))
-                {
-                    foreach (var argument in GetAllTypeArguments(current))
-                    {
-                        if (IsNonCopyableType(argument))
-                            return new CloningBinding(current, argument, cloning.OriginalDefinition);
-                    }
-                }
-                else
-                {
-                    foreach (var field in current.GetMembers().OfType<IFieldSymbol>())
-                    {
-                        if (field is { IsStatic: false, RefKind: RefKind.None } && MentionsTypeParameter(field.OriginalDefinition.Type) && IsNonCopyableType(field.Type))
-                            return new CloningBinding(current, field.Type, cloning.OriginalDefinition);
-                    }
-                }
+                var bound = !SymbolEqualityComparer.Default.Equals(current.ContainingAssembly, compilationAssembly)
+                    ? GetAllTypeArguments(current).Where(IsNonCopyableType).ToList()
+                    : current.GetMembers()
+                        .OfType<IFieldSymbol>()
+                        .Where(field => field is { IsStatic: false, RefKind: RefKind.None } && MentionsTypeParameter(field.OriginalDefinition.Type) && IsNonCopyableType(field.Type))
+                        .Select(static field => field.Type)
+                        .ToList();
+
+                foreach (var type in bound.OrderBy(type => NamesUnsafeToCopy(type) ? 0 : 1))
+                    yield return new CloningBinding(current, type, cloning.OriginalDefinition);
             }
 
             if (SymbolEqualityComparer.Default.Equals(cloning, current))
                 break;
         }
-
-        return null;
     }
 
     /// <summary>
@@ -1608,7 +1831,7 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
     }
 
     /// <summary>
-    /// Gets the first parameter, the receiver of an extension included, through which a member of an assembly that was not built with
+    /// Gets a parameter, the receiver of an extension included, through which a member of an assembly that was not built with
     /// the analyzer gets at a value of a non-copyable type other than by value: by 'ref', 'in' or 'ref readonly', inside a container,
     /// inside a view or through a pointer. Null where there is none, where the member is of an analyzed assembly, or where the list marks
     /// it 'borrows'. A member of a non-copyable type is trusted with a value of that type, and a parameter whose declared type mentions a
@@ -1621,13 +1844,16 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
 
         var unreduced = member is IMethodSymbol method ? GetUnreduced(method) : member;
 
+        // The report names a parameter whose type is unsafe to copy where there is one, which makes it strict.
+        IParameterSymbol? found = null;
+
         foreach (var parameter in GetParametersWithReceiver(unreduced))
         {
-            if (GetsAtNonCopyableValue(parameter) && !IsTrustedWith(member, parameter))
-                return parameter;
+            if (GetsAtNonCopyableValue(parameter) && !IsTrustedWith(member, parameter) && (found is null || IsLessUnsafe(found.Type, parameter.Type)))
+                found = parameter;
         }
 
-        return null;
+        return found;
     }
 
     private bool IsUncheckedInbound(IParameterSymbol receiving, ISymbol member) =>
@@ -2587,16 +2813,19 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
                 return FindCloningBindingWithin(array.ElementType, depth + 1);
 
             case INamedTypeSymbol named:
-                if (FindUnjudgedCloningBinding(named) is { } binding)
-                    return binding;
+                // A report names a binding whose type is unsafe to copy where there is one, which makes it strict.
+                var found = FindUnjudgedCloningBinding(named);
 
                 foreach (var argument in GetAllTypeArguments(named))
                 {
-                    if (FindCloningBindingWithin(argument, depth + 1) is { } within)
-                        return within;
+                    if (found is not null && NamesUnsafeToCopy(found.Type))
+                        break;
+
+                    if (FindCloningBindingWithin(argument, depth + 1) is { } within && (found is null || NamesUnsafeToCopy(within.Type)))
+                        found = within;
                 }
 
-                return null;
+                return found;
 
             default:
                 return null;
@@ -2651,6 +2880,8 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
             }
         }
 
+        // The clone copies every binding of the chain, so the report names one that is unsafe to copy where there is one.
+        found = PreferUnsafeToCopy(found, type);
         _unjudgedCloningBindings[type] = found;
         return found;
     }
@@ -2694,6 +2925,10 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
         if (constructions.Contains(targetType, SymbolEqualityComparer.Default))
             return null;
 
+        // A conversion can hide several containers. The report names one that holds a value that is unsafe to copy where there is one,
+        // which makes it strict.
+        (ITypeSymbol Container, ITypeSymbol HidingType)? found = null;
+
         foreach (var construction in constructions)
         {
             for (int i = 0; i < typeParameters.Length && i < construction.TypeArguments.Length && i < targetType.TypeArguments.Length; i++)
@@ -2706,16 +2941,17 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
 
                 // What comes out goes from the source's type argument to the target's, and what goes in the other way.
                 var (given, received) = typeParameters[i].Variance is VarianceKind.Out ? (from, to) : (to, from);
+                var hidden = HidesDirectly(given, received) ? (given, received) : FindHiddenByVariance(given, received, depth + 1);
 
-                if (HidesDirectly(given, received))
-                    return (given, received);
+                if (hidden is { } candidate && (found is not { } kept || IsLessUnsafe(kept.Container, candidate.Container)))
+                    found = candidate;
 
-                if (FindHiddenByVariance(given, received, depth + 1) is { } nested)
-                    return nested;
+                if (found is { } done && NamesUnsafeToCopy(done.Container))
+                    return done;
             }
         }
 
-        return null;
+        return found;
     }
 
     private static bool HasMemberWithBody(INamedTypeSymbol interfaceDefinition) =>
@@ -2985,6 +3221,261 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
         !list.IsCopyable(type.OriginalDefinition) && (IsMarkedNonCopyable(type) || list.IsNonCopyable(type.OriginalDefinition));
 
     /// <summary>
+    /// Gets a value indicating whether a value of a type is unsafe to copy: a copy of it can break memory safety, and not only the logic
+    /// of the program. Under the updated memory safety rules only a report about such a type is an error. A non-copyable type is unsafe
+    /// to copy by what its own declaration and its type arguments say, and never by its fields:
+    /// <list type="bullet">
+    /// <item>a struct that is non-copyable by itself and marked <c>[NonCopyable(UnsafeToCopy = true)]</c>, or that a line of a symbol
+    /// list file or of the built-in list marks 'unsafetocopy';</item>
+    /// <item>a constructed struct that is non-copyable through a type argument which is unsafe to copy, as a <c>Nullable&lt;T&gt;</c>, a
+    /// tuple or a generic struct over one is;</item>
+    /// <item>a type parameter that is marked [NonCopyable] and does not say <c>UnsafeToCopy = false</c>, which can stand for any
+    /// non-copyable type.</item>
+    /// </list>
+    /// A struct that declares a field of such a type and does not say so itself is reported where it is declared, and is what its
+    /// attribute says until then. A struct that a 'copyable' line takes out is never unsafe to copy, and nothing makes a type that is
+    /// unsafe to copy plain non-copyable.
+    /// </summary>
+    public bool IsUnsafeToCopy([NotNullWhen(true)] ITypeSymbol? type) => IsNonCopyableType(type) && IsUnsafeToCopy(type, typeParametersCount: true);
+
+    /// <summary>
+    /// Gets a value indicating whether a type is unsafe to copy by what its own declaration says or by a type argument other than a
+    /// type parameter: the type of a field that asks a struct to say that it is unsafe to copy. A type parameter, and a constructed type
+    /// that is unsafe to copy only through one, is judged where the type parameter is bound.
+    /// </summary>
+    public bool IsUnsafeToCopyWithoutTypeParameters([NotNullWhen(true)] ITypeSymbol? type) =>
+        IsNonCopyableType(type) && IsUnsafeToCopy(type, typeParametersCount: false);
+
+    /// <summary>
+    /// Gets a value indicating whether a report about a type is about a value that is unsafe to copy: for a non-copyable type, whether it
+    /// is unsafe to copy itself, and for a container, whether a value that it holds is, as for a <c>List&lt;T&gt;</c> or an array of such
+    /// a type, or a class that derives from one (<see cref="HoldsUnsafeToCopy(ITypeSymbol?)"/>). A copyable type is about no such value.
+    /// </summary>
+    public bool IsAboutUnsafeToCopy([NotNullWhen(true)] ITypeSymbol? type) => GetKind(type) switch {
+        CopyKind.NonCopyable => IsUnsafeToCopy(type),
+        CopyKind.Container => HoldsUnsafeToCopyInParts(type!),
+        _ => false,
+    };
+
+    /// <summary>
+    /// Gets a value indicating whether a type holds a value that is unsafe to copy, judged by what it is made of rather than by its
+    /// fields: the element type of an array, a type argument of the type or of a type that contains it, or what a base type or an
+    /// interface of it holds. A non-copyable type that the type is made of counts where it is unsafe to copy itself, and a container
+    /// counts by what it holds in turn. A box of a generic struct gives boxed copies of what the struct is made of through its interfaces,
+    /// which is why a report about the box asks this and not whether the struct itself is unsafe to copy.
+    /// </summary>
+    public bool HoldsUnsafeToCopy([NotNullWhen(true)] ITypeSymbol? type) => IsUnsafeToCopy(type) || (type is not null && HoldsUnsafeToCopyInParts(type));
+
+    /// <summary>
+    /// Gets a value indicating whether a report that names one of several types should name a candidate in place of the type that it
+    /// has: the candidate is about a value that is unsafe to copy and the type that it has is not. A report that involves several
+    /// non-copyable types names one that is unsafe to copy where there is one, which makes it strict.
+    /// </summary>
+    public bool IsLessUnsafe(ITypeSymbol? kept, ITypeSymbol? candidate) => !NamesUnsafeToCopy(kept) && NamesUnsafeToCopy(candidate);
+
+    /// <summary>
+    /// Gets a value indicating whether a report that names a type is strict by that type under the updated rules: it is about a value
+    /// that is unsafe to copy, or it is a type parameter that can stand for one, as the severities read it.
+    /// </summary>
+    public bool NamesUnsafeToCopy(ITypeSymbol? type) =>
+        type is ITypeParameterSymbol typeParameter ? !TakesNoUnsafeToCopy(typeParameter) : IsAboutUnsafeToCopy(type);
+
+    /// <summary>
+    /// Gets the binding of a type argument that is unsafe to copy to a type parameter that says <c>UnsafeToCopy = false</c>, among the
+    /// type arguments of a type and of the types that contain it: the generic does not take such a type. A type parameter that is bound
+    /// counts as unsafe to copy unless it says <c>UnsafeToCopy = false</c> itself. Null if the type has no such binding.
+    /// </summary>
+    public (ITypeParameterSymbol TypeParameter, ITypeSymbol Argument)? FindBindingNotTaken(INamedTypeSymbol? type)
+    {
+        foreach (var (typeParameter, argument) in GetBoundTypeArguments(type))
+        {
+            if (TakesNoUnsafeToCopy(typeParameter) && IsUnsafeToCopy(argument))
+                return (typeParameter, argument);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether a type parameter is marked [NonCopyable] and says <c>UnsafeToCopy = false</c>: inside the generic it
+    /// is a plain non-copyable type, and the generic takes only types that are not unsafe to copy. The mark counts only where it counts at
+    /// all (<see cref="IsMarkedNonCopyable(ITypeParameterSymbol)"/>).
+    /// </summary>
+    public static bool TakesNoUnsafeToCopy(ITypeParameterSymbol typeParameter) =>
+        IsMarkedNonCopyable(typeParameter) && GetUnsafeToCopyArgument(typeParameter) is false;
+
+    /// <summary>
+    /// Gets the value of the named argument <c>UnsafeToCopy</c> of the [NonCopyable] mark of a type parameter, or null where the mark does
+    /// not have it. Not written and <c>true</c> differ from <c>false</c> on a type parameter, so whether the argument is there is read, in
+    /// source and in metadata alike, and never the property.
+    /// </summary>
+    public static bool? GetUnsafeToCopyArgument(ITypeParameterSymbol typeParameter)
+    {
+        foreach (var attribute in typeParameter.GetAttributes())
+        {
+            if (IsNonCopyableMark(attribute.AttributeClass))
+                return GetUnsafeToCopyArgument(attribute);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether a [NonCopyable] mark of a struct says <c>UnsafeToCopy = true</c> where it is applied.
+    /// </summary>
+    public static bool SaysUnsafeToCopy(AttributeData attribute) => GetUnsafeToCopyArgument(attribute) is true;
+
+    /// <summary>
+    /// Gets the value of <c>UnsafeToCopy</c> that a [NonCopyable] mark is given where it is applied, or null where it is given none: the
+    /// named argument, or else an argument for a 'bool' parameter of the constructor named 'unsafeToCopy', in any case, which a mark of a
+    /// project's own sets the property from. Metadata shows both for a referenced assembly. The code of the attribute class is not read,
+    /// so a value that it sets in its own code does not count, and the project that declares it gets a warning for it.
+    /// </summary>
+    private static bool? GetUnsafeToCopyArgument(AttributeData attribute)
+    {
+        foreach (var argument in attribute.NamedArguments)
+        {
+            if (argument is { Key: UnsafeToCopyPropertyName, Value.Value: bool value })
+                return value;
+        }
+
+        if (attribute.AttributeConstructor is { } constructor)
+        {
+            for (int i = 0; i < constructor.Parameters.Length && i < attribute.ConstructorArguments.Length; i++)
+            {
+                if (IsUnsafeToCopyParameter(constructor.Parameters[i]) && attribute.ConstructorArguments[i].Value is bool value)
+                    return value;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether a parameter of the constructor of a [NonCopyable] mark gives the value of <c>UnsafeToCopy</c>: a
+    /// 'bool' parameter named 'unsafeToCopy', in any case.
+    /// </summary>
+    public static bool IsUnsafeToCopyParameter(IParameterSymbol parameter) =>
+        parameter.Type.SpecialType is SpecialType.System_Boolean && string.Equals(parameter.Name, UnsafeToCopyParameterName, StringComparison.OrdinalIgnoreCase);
+
+    // Whether what a type is made of holds a value that is unsafe to copy: see HoldsUnsafeToCopy. A type can mention itself through a
+    // base type or an interface, as Box<T> : IEquatable<Box<T>> does, and two generics can mention each other, so the walk keeps a stack
+    // of its own and looks at each type once: it ends for every type, and cannot run out of stack.
+    private bool HoldsUnsafeToCopyInParts(ITypeSymbol type)
+    {
+        var pending = new Stack<ITypeSymbol>();
+        var seen = new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default) { type };
+        pending.Push(type);
+
+        while (pending.Count > 0)
+        {
+            switch (pending.Pop())
+            {
+                case IArrayTypeSymbol array:
+                    if (IsPartUnsafeToCopy(array.ElementType))
+                        return true;
+
+                    break;
+
+                case INamedTypeSymbol named:
+                    foreach (var argument in GetAllTypeArguments(named))
+                    {
+                        if (IsPartUnsafeToCopy(argument))
+                            return true;
+                    }
+
+                    // A container holds what its base type and its interfaces hold.
+                    if (GetKind(named) is CopyKind.Container)
+                    {
+                        foreach (var inherited in GetBaseTypeAndInterfaces(named))
+                        {
+                            if (seen.Add(inherited))
+                                pending.Push(inherited);
+                        }
+                    }
+
+                    break;
+            }
+        }
+
+        return false;
+
+        // A non-copyable part counts where it is unsafe to copy itself, and a container that is a part counts by what it holds in turn.
+        bool IsPartUnsafeToCopy(ITypeSymbol part)
+        {
+            switch (GetKind(part))
+            {
+                case CopyKind.NonCopyable:
+                    return IsUnsafeToCopy(part);
+
+                case CopyKind.Container:
+                    if (seen.Add(part))
+                        pending.Push(part);
+
+                    return false;
+
+                default:
+                    return false;
+            }
+        }
+    }
+
+    // Whether a non-copyable type is unsafe to copy by its declaration or by its type arguments: see IsUnsafeToCopy. Types are finite
+    // trees of type arguments, so this ends without a bound.
+    private bool IsUnsafeToCopy(ITypeSymbol type, bool typeParametersCount)
+    {
+        RuntimeHelpers.EnsureSufficientExecutionStack();
+
+        if (type is ITypeParameterSymbol typeParameter)
+            return typeParametersCount && GetKind(typeParameter) is CopyKind.NonCopyable && GetUnsafeToCopyArgument(typeParameter) is not false;
+
+        if (type is not INamedTypeSymbol { TypeKind: TypeKind.Struct } named || list.IsCopyable(named.OriginalDefinition))
+            return false;
+
+        if (IsNonCopyableByItself(named) && IsUnsafeToCopyByItself(named))
+            return true;
+
+        // A generic struct is non-copyable through every type argument that is non-copyable, since it stores its type arguments inline as
+        // far as anyone can tell from outside. A view is the exception: its copies share the elements.
+        if (list.IsView(named.OriginalDefinition))
+            return false;
+
+        foreach (var argument in GetAllTypeArguments(named))
+        {
+            if (GetKind(argument) is CopyKind.NonCopyable && IsUnsafeToCopy(argument, typeParametersCount))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether a struct says itself that it is unsafe to copy: it is non-copyable by itself, and its attribute or a
+    /// line says that a copy of it is unsafe. A struct that holds a field of a type that is unsafe to copy must say so.
+    /// </summary>
+    public bool SaysItIsUnsafeToCopy(INamedTypeSymbol type) =>
+        type.TypeKind is TypeKind.Struct && IsNonCopyableByItself(type) && IsUnsafeToCopyByItself(type);
+
+    // Whether a struct that is non-copyable by itself says that a copy of it is unsafe: a line marks it 'unsafetocopy', or the attribute
+    // that makes it non-copyable has the named argument UnsafeToCopy = true. A project's own copy of the attribute that declares the
+    // property counts the same, and one that does not cannot be given the argument.
+    private bool IsUnsafeToCopyByItself(INamedTypeSymbol type)
+    {
+        if (list.IsUnsafeToCopy(type.OriginalDefinition))
+            return true;
+
+        bool isOfAnotherAssembly = !SymbolEqualityComparer.Default.Equals(type.ContainingAssembly, compilationAssembly);
+
+        foreach (var attribute in type.OriginalDefinition.GetAttributes())
+        {
+            if (IsNonCopyableMark(attribute.AttributeClass, ofAnyNamespace: isOfAnotherAssembly) && GetUnsafeToCopyArgument(attribute) is true)
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Gets a value indicating whether a struct is marked <c>[NonCopyable]</c>. On a struct that the compilation declares only the
     /// attribute of the analyzer counts, by its full name. On a struct of another assembly, a referenced project included, a class
     /// named NonCopyableAttribute of any namespace does: libraries that are already published mark their guards with an attribute
@@ -3075,37 +3566,66 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
         foreach (var (typeParameter, typeArgument) in bound)
             Judge(typeParameter, typeArgument);
 
+        // Every rule that the use breaks is reported, the first of them as the kind of the use: one report does not hide another. A
+        // binding that a rule before it reports already is not reported again for another rule, since the first report speaks of
+        // everything that the generic does with what is bound there.
+        var broken = new List<MemberUse>();
+
         if (markedNonCopyable is { } marked && IsMarkedRequiresCopyable(definition))
-            return new MemberUse(MemberUseKind.RequiresCopyable, definition, marked.Parameter, marked.Argument);
+            broken.Add(new MemberUse(MemberUseKind.RequiresCopyable, definition, marked.Parameter, marked.Argument));
 
         if (requiresCopyableConstructor is { } constructorUse)
-            return constructorUse;
+            broken.Add(constructorUse);
 
-        // A member that the list names for other type parameters is not unlisted: the message says what the line covers.
+        // A member that the list names for other type parameters is not unlisted: the message says what the line covers. A value and a
+        // container that the member is not vouched for are one rule, which one line answers: the report names a type that is unsafe to
+        // copy where there is one, so that the report is strict.
         string? listedFor = entry?.TypeParameterNames is { } names ? string.Join("', '", names) : null;
 
-        if (unlistedNonCopyable is { } nonCopyable)
-            return new MemberUse(MemberUseKind.UnlistedNonCopyable, definition, nonCopyable.Parameter, nonCopyable.Argument, ListedFor: listedFor);
-
-        if (unlistedContainer is { } container)
-            return new MemberUse(MemberUseKind.UnlistedContainer, definition, container.Parameter, container.Argument, ListedFor: listedFor);
+        if (unlistedNonCopyable is { } nonCopyable && !(unlistedContainer is { } other && IsLessUnsafe(nonCopyable.Argument, other.Argument)))
+            broken.Add(new MemberUse(MemberUseKind.UnlistedNonCopyable, definition, nonCopyable.Parameter, nonCopyable.Argument, ListedFor: listedFor));
+        else if (unlistedContainer is { } container)
+            broken.Add(new MemberUse(MemberUseKind.UnlistedContainer, definition, container.Parameter, container.Argument, ListedFor: listedFor));
 
         if (hidingConstraint is { } hidden)
-            return new MemberUse(MemberUseKind.ContainerHiddenByConstraint, definition, hidden.Parameter, hidden.Argument, hidden.Constraint);
+            broken.Add(new MemberUse(MemberUseKind.ContainerHiddenByConstraint, definition, hidden.Parameter, hidden.Argument, hidden.Constraint));
 
         if (defaultMember is { } left)
-            return new MemberUse(MemberUseKind.DefaultMemberOfConstraint, definition, left.Parameter, left.Argument, left.Constraint, left.Member);
+            broken.Add(new MemberUse(MemberUseKind.DefaultMemberOfConstraint, definition, left.Parameter, left.Argument, left.Constraint, left.Member));
+
+        // What a listed member hands out is judged by its line for the type parameters that the line covers, also where the use
+        // breaks a rule for another type parameter: a value that it hands out of a stored container is still a copy.
+        var listedKind = listed is null
+            ? MemberUseKind.Checked
+            : entry!.Marker is SafeListMarker.New ? MemberUseKind.ListedNew : MemberUseKind.Listed;
+
+        bool drains = listed is not null && entry!.Marker is SafeListMarker.Drains;
+
+        if (broken.Count > 0)
+        {
+            var others = broken
+                .Skip(1)
+                .Where((use, index) => !broken.Take(index + 1).Any(before => SymbolEqualityComparer.Default.Equals(before.TypeParameter, use.TypeParameter)))
+                .ToImmutableArray();
+
+            return broken[0] with { ListedKind = listedKind, Drains = drains, AlsoBroken = others };
+        }
 
         if (listed is { } covered)
-        {
-            var kind = entry!.Marker is SafeListMarker.New ? MemberUseKind.ListedNew : MemberUseKind.Listed;
-            return new MemberUse(kind, definition, covered.Parameter, covered.Argument, Drains: entry.Marker is SafeListMarker.Drains);
-        }
+            return new MemberUse(listedKind, definition, covered.Parameter, covered.Argument, Drains: drains, ListedKind: listedKind);
 
         if (markedContainer is { } boundContainer)
             return new MemberUse(MemberUseKind.MarkedContainer, definition, boundContainer.Parameter, boundContainer.Argument);
 
         return default;
+
+        // Keeps the first binding for a rule, or a later one that is unsafe to copy where the first is not.
+        void Keep<T>(ref T? slot, T candidate, Func<T, ITypeSymbol> argumentOf)
+            where T : struct
+        {
+            if (slot is not { } kept || IsLessUnsafe(argumentOf(kept), argumentOf(candidate)))
+                slot = candidate;
+        }
 
         void Judge(ITypeParameterSymbol typeParameter, ITypeSymbol typeArgument)
         {
@@ -3116,22 +3636,20 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
 
             // The 'new()' constraint lets the generic call the parameterless constructor of what is bound, with no use of it to judge.
             if (typeParameter.HasConstructorConstraint &&
-                requiresCopyableConstructor is null &&
                 typeArgument is INamedTypeSymbol constructed &&
                 FindRequiresCopyableConstructorUse(constructed) is { } use)
             {
-                requiresCopyableConstructor = use;
+                Keep(ref requiresCopyableConstructor, use, static use => use.TypeArgument!);
             }
 
             // A generic struct that is non-copyable only through its type arguments cannot be judged where it is declared. A call through
             // the constraint of a member that it leaves to the interface runs on a boxed copy.
-            if (defaultMember is null &&
-                typeArgument is INamedTypeSymbol { TypeKind: TypeKind.Struct } boundStruct &&
+            if (typeArgument is INamedTypeSymbol { TypeKind: TypeKind.Struct } boundStruct &&
                 kind is CopyKind.NonCopyable &&
                 !IsNonCopyableType(boundStruct.OriginalDefinition) &&
                 FindDefaultMemberOfConstraint(typeParameter, boundStruct) is { } found)
             {
-                defaultMember = (typeParameter, typeArgument, found.Constraint, found.Member);
+                Keep(ref defaultMember, (Parameter: typeParameter, Argument: typeArgument, found.Constraint, found.Member), static left => left.Argument);
             }
 
             if (IsMarkedNonCopyable(typeParameter))
@@ -3141,15 +3659,14 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
                 // the non-copyable type: no conversion shows that, here or in the generic. The same goes for a generic struct with
                 // unchecked code, which runs that code behind such a type.
                 if (kind is CopyKind.NonCopyable)
-                    markedNonCopyable ??= (typeParameter, typeArgument);
+                    Keep(ref markedNonCopyable, (Parameter: typeParameter, Argument: typeArgument), static marked => marked.Argument);
                 else
                     markedContainer ??= (typeParameter, typeArgument);
 
                 if ((kind is CopyKind.Container || IsStructOfUncheckedCode(typeArgument)) &&
-                    hidingConstraint is null &&
                     FindHidingConstraint(typeParameter, typeArgument, bound) is { } constraint)
                 {
-                    hidingConstraint = (typeParameter, typeArgument, constraint);
+                    Keep(ref hidingConstraint, (Parameter: typeParameter, Argument: typeArgument, Constraint: constraint), static hidden => hidden.Argument);
                 }
 
                 return;
@@ -3164,9 +3681,9 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
             if (entry?.Covers(typeParameter) is true)
                 listed ??= (typeParameter, typeArgument);
             else if (kind is CopyKind.NonCopyable)
-                unlistedNonCopyable ??= (typeParameter, typeArgument);
+                Keep(ref unlistedNonCopyable, (Parameter: typeParameter, Argument: typeArgument), static unlisted => unlisted.Argument);
             else
-                unlistedContainer ??= (typeParameter, typeArgument);
+                Keep(ref unlistedContainer, (Parameter: typeParameter, Argument: typeArgument), static unlisted => unlisted.Argument);
         }
     }
 
@@ -3174,14 +3691,25 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
     /// Gets a value indicating whether a type is a type parameter or has one in it: as a type argument, as the element type of an
     /// array, or as a type argument of a type that contains it.
     /// </summary>
-    public static bool MentionsTypeParameter(ITypeSymbol type)
+    public static bool MentionsTypeParameter(ITypeSymbol type) => MentionsTypeParameter(type, static _ => true);
+
+    /// <summary>
+    /// Gets a value indicating whether a type mentions a type parameter that can stand for a type which is unsafe to copy: any type
+    /// parameter but one that is marked [NonCopyable] and says <c>UnsafeToCopy = false</c>, for which a caller binds only types that are
+    /// not.
+    /// </summary>
+    public static bool MentionsTypeParameterThatTakesUnsafeToCopy(ITypeSymbol type) =>
+        MentionsTypeParameter(type, static typeParameter => !TakesNoUnsafeToCopy(typeParameter));
+
+    private static bool MentionsTypeParameter(ITypeSymbol type, Func<ITypeParameterSymbol, bool> counts)
     {
         RuntimeHelpers.EnsureSufficientExecutionStack();
 
         return type switch {
-            ITypeParameterSymbol => true,
-            IArrayTypeSymbol array => MentionsTypeParameter(array.ElementType),
-            INamedTypeSymbol named => named.TypeArguments.Any(MentionsTypeParameter) || (named.ContainingType is { } containing && MentionsTypeParameter(containing)),
+            ITypeParameterSymbol typeParameter => counts(typeParameter),
+            IArrayTypeSymbol array => MentionsTypeParameter(array.ElementType, counts),
+            INamedTypeSymbol named => named.TypeArguments.Any(argument => MentionsTypeParameter(argument, counts)) ||
+                (named.ContainingType is { } containing && MentionsTypeParameter(containing, counts)),
             _ => false,
         };
     }
@@ -3443,6 +3971,14 @@ internal readonly record struct ErasureObstacle(
 /// sequence hands out it is a listed member like any other.</param>
 /// <param name="ListedFor">For a member that is unlisted for its type parameter, the type parameters that the list names it for with
 /// <c>for=</c>, where it names it at all: a line of a file then cannot name it for the type parameter. Null otherwise.</param>
+/// <param name="NotTaken">A binding of a type that is unsafe to copy to a type parameter marked <c>UnsafeToCopy = false</c> that the use
+/// makes, whatever its kind. Null if it makes none.</param>
+/// <param name="ListedKind"><see cref="MemberUseKind.Listed"/> or <see cref="MemberUseKind.ListedNew"/> where the symbol list names the
+/// member for a type parameter that a non-copyable type or a container is bound to, whatever the kind of the use: what the member hands
+/// out is judged by the line, also where the use breaks a rule for another type parameter. <see cref="MemberUseKind.Checked"/>
+/// otherwise.</param>
+/// <param name="AlsoBroken">The rules that the use breaks besides the one of its kind, each for another type parameter, in the order in
+/// which they are reported. Empty or default if there are none.</param>
 internal readonly record struct MemberUse(
     MemberUseKind Kind,
     ISymbol? Definition = null,
@@ -3451,7 +3987,26 @@ internal readonly record struct MemberUse(
     ITypeSymbol? Constraint = null,
     ISymbol? Member = null,
     bool Drains = false,
-    string? ListedFor = null);
+    string? ListedFor = null,
+    BindingNotTaken? NotTaken = null,
+    MemberUseKind ListedKind = MemberUseKind.Checked,
+    ImmutableArray<MemberUse> AlsoBroken = default);
+
+/// <summary>
+/// A binding of a type that is unsafe to copy, or of a type parameter that can stand for one, to a type parameter marked
+/// <c>[NonCopyable(UnsafeToCopy = false)]</c>, which does not take one. It is reported besides what the use of a member is, and changes
+/// nothing else: the generic is checked code.
+/// </summary>
+/// <param name="TypeParameter">The type parameter that does not take the type.</param>
+/// <param name="Argument">What is bound to it.</param>
+/// <param name="Through">Where a type with the binding is given to other generic code, which can run its members: the type parameter
+/// of that code that it is given to. Null otherwise.</param>
+/// <param name="Given">What is bound to <paramref name="Through"/>: the type with the binding, or a type that holds it.</param>
+internal sealed record BindingNotTaken(
+    ITypeParameterSymbol TypeParameter,
+    ITypeSymbol Argument,
+    ITypeParameterSymbol? Through = null,
+    ITypeSymbol? Given = null);
 
 /// <summary>
 /// What keeps the mark [NotNullRef] on a parameter from counting.

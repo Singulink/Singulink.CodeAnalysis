@@ -297,8 +297,9 @@ public sealed partial class DoNotCopyValueAnalyzer
             {
                 foreach (var parameter in pointedTo.Parameters.Where(NonCopyableTypes.IsMovedFrom))
                 {
-                    Report(
+                    ReportAbout(
                         Rules.MovedFromAdded,
+                        Subject.OfDeclared(parameter.Type),
                         operation.Syntax,
                         parameter.Name,
                         Display(pointedTo),
@@ -368,8 +369,9 @@ public sealed partial class DoNotCopyValueAnalyzer
                 else if (SkipParentheses(operation.Value) is IParameterReferenceOperation { Parameter: var slot } passed && NonCopyableTypes.IsMovedFrom(slot) && FindSlotGiver(slot, passed) is { } giver)
                     Report(Rules.ContainerMovedFromSlotParameter, operation.Value.Syntax, operation.Value.Type, slot.Name, giver);
                 else
-                    Report(
+                    ReportAbout(
                         Rules.ContainerMovedFromUnowned,
+                        Subject.Of(operation.Value.Type),
                         operation.Value.Syntax,
                         DescribeContainer(operation.Value.Type),
                         operation.Value.Syntax.ToString(),
@@ -705,6 +707,8 @@ public sealed partial class DoNotCopyValueAnalyzer
                         Report(Rules.OpaqueTypeParameterConversion, operand.Syntax, operand.Type, operation.Type);
                     else if (operation.Type is { } boxType && types.IsStructOfUncheckedCode(operand.Type) && types.LosesNonCopyableType(operand.Type, boxType))
                         Report(IsUnwantedResultOfLambda(operation) ? Rules.OpaqueLambdaBoxing : Rules.OpaqueBoxing, operand.Syntax, operand.Type, operation.Type, Display(GetStructDefinition(operand.Type)));
+                    else
+                        CheckBoxOfBindingNotTaken(operand.Syntax, operand.Type, operation.Type);
                 }
             }
 
@@ -809,7 +813,7 @@ public sealed partial class DoNotCopyValueAnalyzer
             if (function is not null && operation.Type is INamedTypeSymbol { DelegateInvokeMethod: { } invoke })
             {
                 if (NonCopyableTypes.AddsBorrowed(function, invoke))
-                    Report(Rules.BorrowedNotOnDelegate, operation.Target.Syntax, Display(function), operation.Type);
+                    ReportAbout(Rules.BorrowedNotOnDelegate, Subject.OfDeclared(function.ReturnType), operation.Target.Syntax, Display(function), operation.Type);
                 else if (!NonCopyableTypes.HasBorrowedReturn(invoke) && function.RefKind is RefKind.None && wrappedInvoke is null && types.Carries(invoke.ReturnType))
                     CheckContainerHandedOutByDelegate(operation, function, invoke);
                 else if (!NonCopyableTypes.HasBorrowedReturn(invoke) && wrappedInvoke is not null && types.LosesHolder(wrappedInvoke.ReturnType, invoke.ReturnType))
@@ -825,9 +829,20 @@ public sealed partial class DoNotCopyValueAnalyzer
                 for (int i = 0; i < parameters.Length && parameters.Length == invoke.Parameters.Length; i++)
                 {
                     if (types.AddsKept(parameters[i], invoke.Parameters[i]))
-                        Report(Rules.KeptNotOnDelegate, operation.Target.Syntax, parameters[i].Name, Display(function), operation.Type);
+                    {
+                        ReportAbout(Rules.KeptNotOnDelegate, Subject.OfDeclared(parameters[i].Type), operation.Target.Syntax, parameters[i].Name, Display(function), operation.Type);
+                    }
                     else if (operation.Target is not IAnonymousFunctionOperation && types.KeepsUnseenBehind(parameters[i], invoke.Parameters[i], out bool byUncheckedCode))
-                        Report(Rules.KeepingNotOnDelegate, operation.Target.Syntax, parameters[i].Name, Display(function), operation.Type, Rules.DescribeKeeping(byUncheckedCode));
+                    {
+                        ReportAbout(
+                            Rules.KeepingNotOnDelegate,
+                            Subject.OfDeclared(invoke.Parameters[i].Type),
+                            operation.Target.Syntax,
+                            parameters[i].Name,
+                            Display(function),
+                            operation.Type,
+                            Rules.DescribeKeeping(byUncheckedCode));
+                    }
                 }
             }
 
@@ -940,6 +955,12 @@ public sealed partial class DoNotCopyValueAnalyzer
             {
                 CheckMemberOfClonedObject(operation.Syntax, receiverClass, operation.Field, binding);
             }
+
+            // A read or a write of a static field runs the static constructor and the static field initializers of the type that
+            // declares it, with its type arguments, so it is a use of the type's code as a call of one of its members is. A constant
+            // runs nothing.
+            if (operation.Field is { IsStatic: true, IsConst: false })
+                CheckMemberUse(operation.Syntax, operation.Field);
 
             CheckTypeInUnsupportedContext(operation);
             base.VisitFieldReference(operation);
@@ -1133,7 +1154,7 @@ public sealed partial class DoNotCopyValueAnalyzer
             if (IsGetObjectValue(method))
                 Report(Rules.GetObjectValueCall, operation.Syntax);
 
-            if (use.Kind is MemberUseKind.Listed)
+            if (use.ListedKind is MemberUseKind.Listed)
             {
                 bool? inputsAreNew = null;
 
@@ -1293,7 +1314,7 @@ public sealed partial class DoNotCopyValueAnalyzer
             if (creation.Type is INamedTypeSymbol created &&
                 !SymbolEqualityComparer.Default.Equals(created, created.OriginalDefinition) &&
                 !(SkipParenthesesUpward(creation).Parent is IConversionOperation { OperatorMethod: null } conversion && types.HidesNonCopyableType(created, conversion.Type)) &&
-                types.FindCloningBinding(created) is { } binding)
+                types.PreferUnsafeToCopy(types.FindCloningBinding(created), created) is { } binding)
             {
                 Report(Rules.CloningBinding, creation.Syntax, binding.Type, binding.Bound, binding.Cloning);
             }
@@ -1310,7 +1331,7 @@ public sealed partial class DoNotCopyValueAnalyzer
 
             ReportCloningBindingOfCreation(operation);
 
-            if (use.Kind is MemberUseKind.Listed && types.IsNonCopyableType(operation.Type))
+            if (use.ListedKind is MemberUseKind.Listed && types.IsNonCopyableType(operation.Type))
                 CheckHandedOutValue(operation.Syntax, use, operation.Type, AreInputsNew(null, operation.Arguments, forValue: true), operation.Arguments is [var only] ? only.Value : null);
 
             // 'new T()' is a valid way to acquire a 'T'. No need to check the method signature further. Parameters will be checked by the
@@ -1336,7 +1357,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                 taking is IAddressOfOperation or IVariableInitializerOperation { Parent: IVariableDeclaratorOperation { Symbol.RefKind: not RefKind.None } } &&
                 !(taking.Parent is IVariableDeclaratorOperation { Symbol: var alias } && IsUsedOnlyToReset(alias)))
             {
-                Report(Rules.MovedFromContainerExposed, operation.Syntax, operation.Parameter.Name, "has a reference taken to it");
+                ReportAbout(Rules.MovedFromContainerExposed, Subject.OfDeclared(operation.Parameter.Type), operation.Syntax, operation.Parameter.Name, "has a reference taken to it");
             }
 
             if (IsParameterThatMustNotBeKept(operation.Parameter))
@@ -1372,7 +1393,7 @@ public sealed partial class DoNotCopyValueAnalyzer
             }
 
             // A property of a pattern is checked with the pattern, which knows what it reads from.
-            if (use.Kind is MemberUseKind.Listed &&
+            if (use.ListedKind is MemberUseKind.Listed &&
                 ReturnsByValue(property) &&
                 types.IsNonCopyableType(operation.Type) &&
                 operation.Parent is not IPropertySubpatternOperation &&
@@ -1466,7 +1487,7 @@ public sealed partial class DoNotCopyValueAnalyzer
             }
             else if (SkipParentheses(target) is IParameterReferenceOperation { Parameter: var reassigned } && NonCopyableTypes.IsMovedFrom(reassigned))
             {
-                Report(Rules.MovedFromParameterReassigned, operation.Syntax, reassigned.Name);
+                ReportAbout(Rules.MovedFromParameterReassigned, Subject.OfDeclared(reassigned.Type), operation.Syntax, reassigned.Name);
             }
             else
             {
@@ -1499,7 +1520,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                 NonCopyableTypes.IsMovedFrom(referred) &&
                 (types.IsContainer(referred.Type) || IsParameterOfGenericMove(referred)))
             {
-                Report(Rules.MovedFromContainerExposed, value.Syntax, referred.Name, "has a reference taken to it");
+                ReportAbout(Rules.MovedFromContainerExposed, Subject.OfDeclared(referred.Type), value.Syntax, referred.Name, "has a reference taken to it");
             }
         }
 
@@ -1525,8 +1546,9 @@ public sealed partial class DoNotCopyValueAnalyzer
                     : IsParameterOfGenericMove(handedOn) &&
                         !(argument.Parent is IInvocationOperation call && NonCopyableTypes.IsMovedFrom(receiving.OriginalDefinition) && IsPureMoveCall(call.TargetMethod, call.Instance, call.Arguments))))
             {
-                Report(
+                ReportAbout(
                     Rules.MovedFromContainerExposed,
+                    Subject.OfDeclared(handedOn.Type),
                     value.Syntax,
                     handedOn.Name,
                     $"is passed by reference to '{Display(receiving.ContainingSymbol.OriginalDefinition)}'");
@@ -1974,6 +1996,16 @@ public sealed partial class DoNotCopyValueAnalyzer
         {
             WithoutNullableAnnotations(arguments);
             ReportDiagnostic(severities.Create(rule, location, arguments));
+        }
+
+        // Reports a rule whose message does not name the types that the report is about: see About.Given.
+        private void ReportAbout(Rule rule, Subject subject, SyntaxNode syntax, params object?[] arguments) =>
+            ReportAbout(rule, subject, syntax.GetLocation(), arguments);
+
+        private void ReportAbout(Rule rule, Subject subject, Location? location, params object?[] arguments)
+        {
+            WithoutNullableAnnotations(arguments);
+            ReportDiagnostic(severities.CreateAbout(rule, subject, location, arguments));
         }
 
         /// <summary>

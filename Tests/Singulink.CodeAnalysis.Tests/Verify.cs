@@ -433,12 +433,62 @@ internal static class Verify
         $"cloneable in a library, add '{id ?? "T:" + type};clones' to the symbol list file that ships with the library, so that a class that " +
         "derives from it in another project is reported for a non-copyable value, and then suppress this warning.");
 
+    /// <summary>
+    /// The finding of <see cref="MemberwiseCloneOfOpenClass"/> under the updated memory safety rules, where it is an error and the
+    /// message says that an unsafe context answers for it.
+    /// </summary>
+    public static DiagnosticResult MemberwiseCloneOfOpenClassUnderUpdatedRules(int location, string type, string? id = null) => Diagnostic(
+        DiagnosticIds.MemberwiseCloneOfOpenClass,
+        location,
+        $"MemberwiseClone of '{type}' clones an object of whatever class derives from it, and '{type}' can be derived from in another assembly, " +
+        "where a derived class can hold a non-copyable value that the clone copies. Seal the class or copy its fields in a constructor " +
+        "instead. Where no derived class may hold a non-copyable value, call MemberwiseClone in an unsafe context and suppress the warning " +
+        $"there. To keep the class open and cloneable in a library, add '{id ?? "T:" + type};clones' to the symbol list file that ships with " +
+        "the library, so that a class that derives from it in another project is reported for a non-copyable value, and then suppress the " +
+        "warning in the same way.").AsError();
+
     public static DiagnosticResult MemberwiseCloneThroughListedBase(int location, string type, string listedBase, string fieldType, string field, bool isParameter = false) => Diagnostic(
         DiagnosticIds.CloningBase,
         location,
         $"'{type}' derives from '{listedBase}', whose own code clones an object field by field with MemberwiseClone, so a clone of an object " +
         $"of '{type}' copies its {(isParameter ? "parameter" : "field")} '{field}' of non-copyable type '{fieldType}'. Hold the value in an " +
         $"object of a class that '{type}' refers to, which the clone shares, or suppress this warning where no object of '{type}' is ever cloned.");
+
+    /// <summary>
+    /// The finding of <see cref="MemberwiseCloneThroughListedBase"/> for a field of a type that is unsafe to copy under the updated
+    /// memory safety rules, where the message says that marking the declaration 'safe' answers for it.
+    /// </summary>
+    public static DiagnosticResult MemberwiseCloneThroughListedBaseOfTypeThatIsUnsafeToCopy(int location, string type, string listedBase, string fieldType, string field) => Diagnostic(
+        DiagnosticIds.CloningBase,
+        location,
+        $"'{type}' derives from '{listedBase}', whose own code clones an object field by field with MemberwiseClone, so a clone of an object " +
+        $"of '{type}' copies its field '{field}' of non-copyable type '{fieldType}'. Hold the value in an object of a class that '{type}' " +
+        $"refers to, which the clone shares. Where no object of '{type}' is ever cloned, mark the declaration 'safe' and suppress the " +
+        "warning there.");
+
+    /// <summary>
+    /// The finding of <see cref="MemberwiseCloneOfTypeParameterThroughListedBase"/> under the updated memory safety rules, where a
+    /// marked type parameter stands for a type that may be unsafe to copy.
+    /// </summary>
+    public static DiagnosticResult MemberwiseCloneOfTypeParameterThroughListedBaseOfTypeThatIsUnsafeToCopy(int location, string type, string listedBase, string fieldType, string field) => Diagnostic(
+        DiagnosticIds.CloningBase,
+        location,
+        $"'{type}' derives from '{listedBase}', whose own code clones an object field by field with MemberwiseClone, so a clone of an object " +
+        $"of '{type}' copies its field '{field}' of type '{fieldType}' with the non-copyable value that a project binds to its type parameter. " +
+        $"Hold the value in an object of a class that '{type}' refers to, which the clone shares. Where the code of '{type}' never clones " +
+        "its objects, mark the declaration 'safe' and suppress the warning there: a project that binds a non-copyable type gets a report " +
+        $"of its own where it hands such an object to the code of '{listedBase}'.");
+
+    /// <summary>
+    /// The finding of <see cref="CloningBinding"/> in the base list of a class, for a type that is unsafe to copy under the updated
+    /// memory safety rules, where the message says that marking the class 'safe' answers for it.
+    /// </summary>
+    public static DiagnosticResult CloningBindingInBaseListOfTypeThatIsUnsafeToCopy(int location, string bound, string boundTo, string cloning) => Diagnostic(
+        DiagnosticIds.CloningBase,
+        location,
+        $"Non-copyable type '{bound}' is bound to a type parameter of '{boundTo}', whose objects the own code of '{cloning}' clones field by " +
+        $"field with MemberwiseClone, so a clone copies the '{bound}' that it holds. Bind a class that refers to the value instead, which a " +
+        $"clone shares. Where no object of '{boundTo}' is ever cloned, mark the declaration of the class 'safe' and suppress the warning there.");
 
     // The ID of the lines that the message advises is 'T:' and the name of the base class, for a class that is not generic.
     public static DiagnosticResult FieldBehindUnknownBase(
@@ -494,6 +544,18 @@ internal static class Verify
         $"'{cloning}' clones its objects field by field with MemberwiseClone, and a clone copies the non-copyable '{boundType}' that is bound " +
         $"to a type parameter of '{boundTo}'. Keep the value as '{source}', bind a class that refers to the value instead, which a clone " +
         "shares, or suppress this warning where the object is never cloned.");
+
+    /// <summary>
+    /// The finding of <see cref="CloningUseConversion"/> for a type that is unsafe to copy under the updated memory safety rules, where
+    /// the message says that an unsafe context answers for it.
+    /// </summary>
+    public static DiagnosticResult CloningUseConversionOfTypeThatIsUnsafeToCopy(int location, string source, string target, string cloning, string boundType, string boundTo) => Diagnostic(
+        DiagnosticIds.CloningBase,
+        location,
+        $"'{source}' is converted to '{target}', which hands the object, or what holds it, to code that can clone it: the own code of " +
+        $"'{cloning}' clones its objects field by field with MemberwiseClone, and a clone copies the non-copyable '{boundType}' that is bound " +
+        $"to a type parameter of '{boundTo}'. Keep the value as '{source}' or bind a class that refers to the value instead, which a clone " +
+        "shares. Code that never clones the object can convert it in an unsafe context and suppress the warning there.");
 
     public static DiagnosticResult CloningUseMember(int location, string member, string receiver, string declaringType, string cloning, string boundType, string boundTo, string id) => Diagnostic(
         DiagnosticIds.CloningBase,
@@ -599,6 +661,17 @@ internal static class Verify
         $"field with MemberwiseClone, so a clone copies the '{bound}' that it holds. Bind a class that refers to the value instead, which a " +
         $"clone shares, or suppress this warning where no object of '{boundTo}' is ever cloned.");
 
+    /// <summary>
+    /// The finding of <see cref="CloningBinding"/> for a type that is unsafe to copy under the updated memory safety rules, where the
+    /// message gives no suppression.
+    /// </summary>
+    public static DiagnosticResult CloningBindingOfTypeThatIsUnsafeToCopy(int location, string bound, string boundTo, string cloning) => Diagnostic(
+        DiagnosticIds.CloningBase,
+        location,
+        $"Non-copyable type '{bound}' is bound to a type parameter of '{boundTo}', whose objects the own code of '{cloning}' clones field by " +
+        $"field with MemberwiseClone, so a clone copies the '{bound}' that it holds. Bind a class that refers to the value instead, which a " +
+        "clone shares.");
+
     public static DiagnosticResult OpaqueMemberThatClones(int location, string container, string declaringType, string member) => Diagnostic(
         DiagnosticIds.OpaqueType,
         location,
@@ -622,6 +695,88 @@ internal static class Verify
         location,
         $"Parameter '{parameter}' of the primary constructor of copyable struct '{containingType}' cannot have non-copyable type '{type}': members " +
         "of the struct use it, which makes it a field");
+
+    /// <summary>
+    /// The finding of <see cref="FieldOfCopyableType(int, string, string)"/>, or where the type of the field is unsafe to copy, the one
+    /// whose message names the property that the mark of the struct needs. The struct is the part of the field before its last dot.
+    /// </summary>
+    public static DiagnosticResult FieldOfCopyableType(int location, string type, string field, bool unsafeToCopy) => unsafeToCopy
+        ? FieldOfCopyableTypeUnsafeToCopy(location, type, field, field[..field.LastIndexOf('.')])
+        : FieldOfCopyableType(location, type, field);
+
+    public static DiagnosticResult FieldOfCopyableTypeUnsafeToCopy(int location, string type, string field, string containingType) => Diagnostic(
+        DiagnosticIds.FieldOfCopyableType,
+        location,
+        $"Copyable field '{field}' cannot have non-copyable type '{type}', which is unsafe to copy. Mark '{containingType}' " +
+        "[NonCopyable(UnsafeToCopy = true)], make it a class, or remove the field.");
+
+    public static DiagnosticResult FieldByPrimaryConstructorUnsafeToCopy(int location, string type, string parameter, string containingType) => Diagnostic(
+        DiagnosticIds.FieldOfCopyableType,
+        location,
+        $"Parameter '{parameter}' of the primary constructor of copyable struct '{containingType}' cannot have non-copyable type '{type}', " +
+        $"which is unsafe to copy: members of the struct use it, which makes it a field. Mark '{containingType}' " +
+        "[NonCopyable(UnsafeToCopy = true)], or use the parameter only in initializers.");
+
+    public static DiagnosticResult UnsafeToCopyField(int location, string type, string field, string containingType) => Diagnostic(
+        DiagnosticIds.UnsafeToCopyField,
+        location,
+        $"Field '{field}' has type '{type}', which is unsafe to copy, and a copy of struct '{containingType}' copies the field. Mark " +
+        $"'{containingType}' [NonCopyable(UnsafeToCopy = true)].");
+
+    public static DiagnosticResult UnsafeToCopyFieldByPrimaryConstructor(int location, string type, string parameter, string containingType) => Diagnostic(
+        DiagnosticIds.UnsafeToCopyField,
+        location,
+        $"Parameter '{parameter}' of the primary constructor of struct '{containingType}' has type '{type}', which is unsafe to copy: " +
+        $"members of the struct use it, which makes it a field, and a copy of '{containingType}' copies the field. Mark '{containingType}' " +
+        "[NonCopyable(UnsafeToCopy = true)], or use the parameter only in initializers.");
+
+    public static DiagnosticResult UnsafeToCopyNotTaken(int location, string generic, string type, string typeParameter) => Diagnostic(
+        DiagnosticIds.UnsafeToCopyNotTaken,
+        location,
+        $"'{generic}' does not take '{type}' for type parameter '{typeParameter}', which is marked [NonCopyable(UnsafeToCopy = false)]: " +
+        $"'{type}' is unsafe to copy. Use a type that is not unsafe to copy, or a generic whose type parameter takes any non-copyable type.");
+
+    public static DiagnosticResult UnsafeToCopyTypeParameterNotTaken(int location, string generic, string argument, string typeParameter) => Diagnostic(
+        DiagnosticIds.UnsafeToCopyNotTaken,
+        location,
+        $"'{generic}' does not take type parameter '{argument}' for type parameter '{typeParameter}', which is marked " +
+        $"[NonCopyable(UnsafeToCopy = false)]: '{argument}' can stand for a type that is unsafe to copy. Mark '{argument}' " +
+        "[NonCopyable(UnsafeToCopy = false)] as well, or use a generic whose type parameter takes any non-copyable type.");
+
+    public static DiagnosticResult UnsafeToCopyNotTakenBehindBox(int location, string type, string boxType, string generic, string argument, string typeParameter) =>
+        Diagnostic(
+            DiagnosticIds.UnsafeToCopyNotTaken,
+            location,
+            $"Boxing '{type}' as '{boxType}' lets other code run the members of '{generic}' on the box with '{argument}' for type parameter " +
+            $"'{typeParameter}', which is marked [NonCopyable(UnsafeToCopy = false)] and does not take '{argument}', since it is unsafe to " +
+            $"copy. Keep the value as '{type}'.");
+
+    public static DiagnosticResult UnsafeToCopyNotTakenBehindTypeParameter(
+        int location, string member, string given, string through, string generic, string argument, string typeParameter) =>
+        Diagnostic(
+            DiagnosticIds.UnsafeToCopyNotTaken,
+            location,
+            $"'{given}' is bound to type parameter '{through}' of '{member}', so the generic can run the members of '{generic}' with " +
+            $"'{argument}' for type parameter '{typeParameter}', which is marked [NonCopyable(UnsafeToCopy = false)] and does not take " +
+            $"'{argument}', since it is unsafe to copy. Keep the value out of '{through}'.");
+
+    public static DiagnosticResult UnsafeToCopyNotTakenInField(
+        int location, string field, string type, string fieldType, string generic, string argument, string typeParameter) =>
+        Diagnostic(
+            DiagnosticIds.UnsafeToCopyNotTaken,
+            location,
+            $"The field '{field}' of struct '{type}' holds '{fieldType}': the Equals and GetHashCode that '{type}' inherits from ValueType run " +
+            $"the members of '{generic}' with '{argument}' for type parameter '{typeParameter}', which is marked [NonCopyable(UnsafeToCopy = false)] " +
+            $"and does not take '{argument}', since it is unsafe to copy. Use a type that is not unsafe to copy, or override Equals and " +
+            $"GetHashCode in '{type}'.");
+
+    public static DiagnosticResult UnsafeToCopySetInOwnCode(int location, string attribute) => Diagnostic(
+        DiagnosticIds.UnsafeToCopySetInOwnCode,
+        location,
+        $"'{attribute}' sets UnsafeToCopy in its own code, which the analyzer does not read: it reads the value only where the attribute is " +
+        "applied, from the named argument UnsafeToCopy or from an argument for a 'bool' parameter named 'unsafeToCopy'. A struct marked " +
+        "with it counts as what it says there. Write the value where the attribute is applied, or take it as a 'bool' parameter named " +
+        "'unsafeToCopy' and set the property from it.");
 
     public static DiagnosticResult MovedFromOnPrimaryConstructor(int location, string parameter, string type) => Diagnostic(
         DiagnosticIds.MovedFromMisuse,
@@ -685,6 +840,47 @@ internal static class Verify
         location,
         $"'{member}' may copy non-copyable type '{type}': type parameter '{typeParameter}' is not marked [NonCopyable], and the member clones its " +
         "object field by field with MemberwiseClone, so no line of a symbol list file can vouch for it. Avoid the use.");
+
+    /// <summary>
+    /// The finding for a read or a write of a static field of a generic type with a non-copyable type bound to a type parameter that is
+    /// not marked, where the field has no line: it runs the static initializers of the type.
+    /// </summary>
+    public static DiagnosticResult UnlistedStaticField(int location, string field, string type, string typeParameter, string id) => Diagnostic(
+        DiagnosticIds.UnlistedMember,
+        location,
+        $"Reading or writing static field '{field}' runs the static constructor and the static field initializers of its type, which may copy " +
+        $"non-copyable type '{type}': type parameter '{typeParameter}' is not marked [NonCopyable] and the field is not on the symbol list. Mark " +
+        $"the type parameter, add '{id}' to a NonCopyableSymbols.txt file if that code makes no copy, or avoid the use.");
+
+    /// <summary>
+    /// The finding of <see cref="UnlistedStaticField"/> where the type parameter is marked in an assembly that was not built with the
+    /// analyzer.
+    /// </summary>
+    public static DiagnosticResult UnlistedStaticFieldOfUncheckedCode(int location, string field, string type, string typeParameter, string id) => Diagnostic(
+        DiagnosticIds.UnlistedMember,
+        location,
+        $"Reading or writing static field '{field}' runs the static constructor and the static field initializers of its type, which may copy " +
+        $"non-copyable type '{type}': type parameter '{typeParameter}' is marked [NonCopyable], but the mark does not count in an assembly that " +
+        $"was not built with the analyzer, and the field is not on the symbol list. Add '{id}' to a NonCopyableSymbols.txt file if that code " +
+        "makes no copy, or avoid the use.");
+
+    /// <summary>
+    /// The finding of <see cref="UnlistedStaticField"/> for a container.
+    /// </summary>
+    public static DiagnosticResult OpaqueTypeArgumentOfStaticField(int location, string field, string container, string typeParameter, string id) => Diagnostic(
+        DiagnosticIds.OpaqueType,
+        location,
+        $"Container '{container}' is bound to type parameter '{typeParameter}' of '{field}', which is not marked [NonCopyable], and the field is " +
+        "not on the symbol list: reading or writing the static field runs the static constructor and the static field initializers of its " +
+        $"type. Mark the type parameter, add '{id}' to a NonCopyableSymbols.txt file if that code makes no copy, or avoid the use.");
+
+    /// <summary>
+    /// The finding for the line of a field that no use is judged by.
+    /// </summary>
+    public static DiagnosticResult SafeListFieldHasNoEffect(int line, int startColumn, int endColumn, string id, string because) =>
+        new DiagnosticResult(DiagnosticIds.SafeListLine, DiagnosticSeverity.Warning)
+            .WithSpan(ListFileName, line, startColumn, line, endColumn)
+            .WithMessage($"This line of the symbol list file says that the static initializers of the type of '{id}' make no copy. It has no effect, because {because}.");
 
     public static DiagnosticResult UnlistedMember(int location, string member, string type, string typeParameter, string id) => Diagnostic(
         DiagnosticIds.UnlistedMember,
@@ -982,6 +1178,14 @@ internal static class Verify
         location,
         $"Type parameter '{typeParameter}' is passed to [NonCopyable] type parameter '{baseTypeParameter}' of '{baseType}' and must be marked " +
         "[NonCopyable] as well");
+
+    public static DiagnosticResult TypeParameterTakesNoUnsafeToCopy(int location, string typeParameter, string member, string baseTypeParameter, string baseMember) =>
+        Diagnostic(
+            DiagnosticIds.MarkNotKept,
+            location,
+            $"Type parameter '{typeParameter}' of '{member}' cannot be marked [NonCopyable(UnsafeToCopy = false)] because type parameter " +
+            $"'{baseTypeParameter}' of '{baseMember}', which the member overrides or implements, is not: a call through '{baseMember}' can " +
+            "bind a type that is unsafe to copy");
 
     public static DiagnosticResult TypeParameterMarkNotKept(int location, string typeParameter, string member, string baseTypeParameter, string baseMember) =>
         Diagnostic(
@@ -1302,6 +1506,11 @@ internal static class Verify
     /// <summary>
     /// The finding for a 'copyable' line of the list file that has no effect.
     /// </summary>
+    public static DiagnosticResult SafeListNonCopyableHasNoEffect(int line, int endColumn, string id, string what, string because) =>
+        new DiagnosticResult(DiagnosticIds.SafeListLine, DiagnosticSeverity.Warning)
+            .WithSpan(ListFileName, line, 1, line, endColumn)
+            .WithMessage($"This line of the symbol list file marks '{id}' as {what}. It has no effect, because {because}.");
+
     public static DiagnosticResult SafeListCopyableHasNoEffect(int line, int startColumn, int endColumn, string id, string because) =>
         new DiagnosticResult(DiagnosticIds.SafeListLine, DiagnosticSeverity.Warning)
             .WithSpan(ListFileName, line, startColumn, line, endColumn)
@@ -1394,8 +1603,8 @@ internal static class Verify
     /// </summary>
     public static readonly ImmutableHashSet<string> EnforcedIds = [
         "SCA1001", "SCA1002", "SCA1003", "SCA1004", "SCA1005", "SCA1006", "SCA1007", "SCA1008", "SCA1009", "SCA1010", "SCA1011", "SCA1012",
-        "SCA1013", "SCA1014", "SCA1015", "SCA1016", "SCA1020", "SCA1021", "SCA1022", "SCA1023", "SCA1024", "SCA1030", "SCA1031", "SCA1032",
-        "SCA1033", "SCA1040", "SCA1041", "SCA1043", "SCA1044", "SCA1046", "SCA1048",
+        "SCA1013", "SCA1014", "SCA1015", "SCA1016", "SCA1017", "SCA1020", "SCA1021", "SCA1022", "SCA1023", "SCA1024", "SCA1026", "SCA1030",
+        "SCA1031", "SCA1032", "SCA1033", "SCA1040", "SCA1041", "SCA1043", "SCA1044", "SCA1046", "SCA1048",
     ];
 
     /// <summary>
@@ -1403,6 +1612,12 @@ internal static class Verify
     /// helpers give the warning, which it is everywhere under the current rules and in an unsafe context under the updated ones.
     /// </summary>
     public static DiagnosticResult AsError(this DiagnosticResult result) => result.WithSeverity(DiagnosticSeverity.Error);
+
+    /// <summary>
+    /// Makes a result the error of the updated memory safety rules where <paramref name="isError"/> is true, for a test that runs under
+    /// both rule sets.
+    /// </summary>
+    public static DiagnosticResult AsError(this DiagnosticResult result, bool isError) => isError ? result.AsError() : result;
 
     /// <summary>
     /// A test of the analyzer on .NET 10, with the latest C# version and a reference to the attributes package.
@@ -1480,6 +1695,21 @@ internal static class Verify
         /// </summary>
         public string[] NoWarn { get; init; } = [];
 
+        /// <summary>
+        /// Gets a value indicating whether the project allows unsafe code, as <c>&lt;AllowUnsafeBlocks&gt;</c> in the project file does.
+        /// The testing library allows it by default.
+        /// </summary>
+        public bool AllowUnsafe { get; init; } = true;
+
+        /// <summary>
+        /// Gets the size in bytes of the stack that the analyzer runs on, on a thread of its own for each of its actions (see
+        /// <see cref="FixedStackAnalyzer"/>). Null runs it on the threads of the testing library.
+        /// </summary>
+        public int? AnalysisStackSize { get; init; }
+
+        protected override IEnumerable<DiagnosticAnalyzer> GetDiagnosticAnalyzers() =>
+            AnalysisStackSize is { } stackSize ? [new FixedStackAnalyzer(new DoNotCopyValueAnalyzer(), stackSize)] : base.GetDiagnosticAnalyzers();
+
         protected override Task RunImplAsync(CancellationToken cancellationToken)
         {
             if (_buildProperties.Count > 0)
@@ -1494,7 +1724,7 @@ internal static class Verify
 
         protected override CompilationOptions CreateCompilationOptions()
         {
-            var options = ((CSharpCompilationOptions)base.CreateCompilationOptions()).WithOverflowChecks(ChecksOverflow);
+            var options = ((CSharpCompilationOptions)base.CreateCompilationOptions()).WithOverflowChecks(ChecksOverflow).WithAllowUnsafe(AllowUnsafe);
 
             return NoWarn.Length is 0
                 ? options

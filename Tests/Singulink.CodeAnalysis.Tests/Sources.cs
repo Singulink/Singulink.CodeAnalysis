@@ -26,4 +26,17 @@ internal static class Sources
             public System.Collections.Generic.List<Guard> CreateGuards() => new();
         }
         """;
+
+    /// <summary>
+    /// The non-copyable struct of the examples, marked unsafe to copy, and the lock that hands it out. Under the updated memory
+    /// safety rules a copy of it is an error.
+    /// </summary>
+    public static readonly string UnsafeGuard = AsUnsafeToCopy(Guard);
+
+    /// <summary>
+    /// Gets a source with every struct that it marks <c>[Singulink.CodeAnalysis.NonCopyable]</c> marked unsafe to copy instead, for a
+    /// test of the updated memory safety rules, under which only a report about such a type is an error.
+    /// </summary>
+    public static string AsUnsafeToCopy(string source) =>
+        source.Replace("[Singulink.CodeAnalysis.NonCopyable]", "[Singulink.CodeAnalysis.NonCopyable(UnsafeToCopy = true)]", StringComparison.Ordinal);
 }

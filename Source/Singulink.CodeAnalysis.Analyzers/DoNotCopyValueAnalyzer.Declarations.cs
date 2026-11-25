@@ -4,6 +4,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Operations;
 
 namespace Singulink.CodeAnalysis.Analyzers;
 
@@ -14,7 +15,15 @@ namespace Singulink.CodeAnalysis.Analyzers;
 /// </content>
 public sealed partial class DoNotCopyValueAnalyzer
 {
-    private static void AnalyzeField(SymbolAnalysisContext context, Severities severities, NonCopyableTypes types)
+    /// <summary>
+    /// Checks a field of a non-copyable type: in a record, or in a struct that is not marked [NonCopyable] itself.
+    /// </summary>
+    /// <param name="context">The context of the field.</param>
+    /// <param name="severities">The severities of the compilation.</param>
+    /// <param name="types">The classifier of the compilation.</param>
+    /// <param name="typesByThemselves">The classifier that counts every type parameter as copyable: a struct is non-copyable by
+    /// itself where it is non-copyable there, and a field asks the struct to be marked where its type is.</param>
+    private static void AnalyzeField(SymbolAnalysisContext context, Severities severities, NonCopyableTypes types, NonCopyableTypes typesByThemselves)
     {
         var field = (IFieldSymbol)context.Symbol;
 
@@ -31,13 +40,38 @@ public sealed partial class DoNotCopyValueAnalyzer
             // class or a struct and whether or not it is marked non-copyable.
             context.ReportDiagnostic(CreateDiagnostic(severities, field, Rules.FieldOfRecord, field.Type, field));
         }
-        else if (!types.IsNonCopyableType(containingType) && containingType.IsValueType)
+        else if (containingType.IsValueType && IsNotMarkedFor(typesByThemselves, containingType, field.Type))
         {
             // Fields of copyable value types must be copyable. Copying a value type makes a shallow copy of the fields, which implicitly copies any
-            // value type fields.
-            context.ReportDiagnostic(CreateDiagnostic(severities, field, Rules.FieldOfCopyableType, field.Type, field));
+            // value type fields. Where the field is unsafe to copy, the message names the property that the mark needs, so one edit fixes both.
+            if (types.IsUnsafeToCopyWithoutTypeParameters(field.Type))
+                context.ReportDiagnostic(CreateDiagnostic(severities, field, Rules.FieldOfCopyableTypeUnsafeToCopy, field.Type, field, containingType));
+            else
+                context.ReportDiagnostic(CreateDiagnostic(severities, field, Rules.FieldOfCopyableType, field.Type, field));
+        }
+        else if (IsMissingUnsafeToCopy(types, containingType, field.Type))
+        {
+            context.ReportDiagnostic(CreateDiagnostic(severities, field, Rules.UnsafeToCopyField, field.Type, field, containingType));
         }
     }
+
+    /// <summary>
+    /// Gets a value indicating whether a struct holds a field of a type that is non-copyable by itself and is not marked [NonCopyable]
+    /// itself: a copy of the struct copies the field. Both are judged with every type parameter counted as copyable. A struct that is
+    /// non-copyable only through a marked type parameter of its own, or of a type that contains it, is copyable where a copyable type is
+    /// bound to it, and copies the field there. A field whose type is non-copyable only through a type parameter asks nothing of the
+    /// struct, since each constructed type of the struct is non-copyable through its type arguments as well.
+    /// </summary>
+    private static bool IsNotMarkedFor(NonCopyableTypes typesByThemselves, INamedTypeSymbol type, ITypeSymbol fieldType) =>
+        typesByThemselves.IsNonCopyableType(fieldType) && !typesByThemselves.IsNonCopyableType(type);
+
+    /// <summary>
+    /// Gets a value indicating whether a struct holds a field of a type that is unsafe to copy and does not say itself that it is: a copy of
+    /// the struct copies the field. A field whose type is unsafe to copy only through a type parameter asks nothing of the struct, since
+    /// each constructed type of it is judged by its type arguments. Until the struct says so, it is what its attribute says.
+    /// </summary>
+    private static bool IsMissingUnsafeToCopy(NonCopyableTypes types, INamedTypeSymbol type, ITypeSymbol fieldType) =>
+        type.TypeKind is TypeKind.Struct && types.IsUnsafeToCopyWithoutTypeParameters(fieldType) && !types.SaysItIsUnsafeToCopy(type);
 
     /// <summary>
     /// Makes every check of the declaration of a type.
@@ -45,7 +79,7 @@ public sealed partial class DoNotCopyValueAnalyzer
     private static void AnalyzeNamedType(SymbolAnalysisContext context, Severities severities, NonCopyableTypes types, NonCopyableTypes typesInCopyingMember, MarkCache marks)
     {
         AnalyzeMarksOfType(context, severities, types, marks);
-        AnalyzeStruct(context, severities, types);
+        AnalyzeStruct(context, severities, types, typesInCopyingMember);
         AnalyzeImplicitBaseConstructorCalls(context, severities, types, typesInCopyingMember);
         AnalyzeErasableBase(context, severities, types);
         AnalyzeAttributeClass(context, severities);
@@ -141,36 +175,48 @@ public sealed partial class DoNotCopyValueAnalyzer
     }
 
     /// <summary>
-    /// Checks what only a struct can get wrong: a copyable struct whose members use a parameter of its primary constructor, which is a field
-    /// that no declaration shows, and a struct of a non-copyable type that has an async or iterator instance member, which runs on a copy of
-    /// the struct, or that leaves an interface member to the default implementation of the interface, which runs on a boxed copy.
+    /// Checks what only a struct can get wrong: a parameter of its primary constructor that its members use, which is a field that no
+    /// declaration shows, and a struct of a non-copyable type that has an async or iterator instance member, which runs on a copy of the
+    /// struct, or that leaves an interface member to the default implementation of the interface, which runs on a boxed copy.
     /// </summary>
-    private static void AnalyzeStruct(SymbolAnalysisContext context, Severities severities, NonCopyableTypes types)
+    private static void AnalyzeStruct(SymbolAnalysisContext context, Severities severities, NonCopyableTypes types, NonCopyableTypes typesByThemselves)
     {
         var type = (INamedTypeSymbol)context.Symbol;
 
         if (type.TypeKind is not TypeKind.Struct)
             return;
 
-        if (!types.IsNonCopyableType(type))
+        // A parameter of the primary constructor that the struct keeps in a field is copied with the struct as a declared field is, and
+        // is judged as one (see AnalyzeField). The compiler keeps a parameter that a member uses in a field that it names after the
+        // parameter. A record turns the parameters of its primary constructor into properties, which are reported as such.
+        foreach (var member in type.GetMembers())
         {
-            // A record turns the parameters of its primary constructor into properties, which are reported as such.
-            if (type.IsRecord)
-                return;
-
-            foreach (var member in type.GetMembers())
+            if (member is not IFieldSymbol { IsImplicitlyDeclared: true, IsStatic: false, AssociatedSymbol: not (IPropertySymbol or IEventSymbol) } field ||
+                GetPrimaryConstructorParameter(type, field) is not { } parameter)
             {
-                // The compiler keeps a parameter that a member uses in a field that it names after the parameter.
-                if (member is IFieldSymbol { IsImplicitlyDeclared: true, IsStatic: false, AssociatedSymbol: not (IPropertySymbol or IEventSymbol) } field &&
-                    types.IsNonCopyableType(field.Type) &&
-                    GetPrimaryConstructorParameter(type, field) is { } parameter)
-                {
-                    context.ReportDiagnostic(CreateDiagnostic(severities, parameter, Rules.FieldByPrimaryConstructor, parameter.Type, parameter.Name, type));
-                }
+                continue;
             }
 
-            return;
+            if (IsNotMarkedFor(typesByThemselves, type, field.Type))
+            {
+                if (!type.IsRecord)
+                {
+                    var rule = types.IsUnsafeToCopyWithoutTypeParameters(field.Type)
+                        ? Rules.FieldByPrimaryConstructorUnsafeToCopy
+                        : Rules.FieldByPrimaryConstructor;
+                    context.ReportDiagnostic(CreateDiagnostic(severities, parameter, rule, parameter.Type, parameter.Name, type));
+                }
+            }
+            else if (IsMissingUnsafeToCopy(types, type, field.Type))
+            {
+                context.ReportDiagnostic(CreateDiagnostic(severities, parameter, Rules.UnsafeToCopyFieldByPrimaryConstructor, parameter.Type, parameter.Name, type));
+            }
         }
+
+        AnalyzeFieldBindingsNotTaken(context, severities, types, type);
+
+        if (!types.IsNonCopyableType(type))
+            return;
 
         foreach (var member in type.GetMembers())
         {
@@ -187,6 +233,105 @@ public sealed partial class DoNotCopyValueAnalyzer
 
         foreach (var member in NonCopyableTypes.GetMembersLeftToInterfaces(type, type.AllInterfaces))
             context.ReportDiagnostic(CreateDiagnostic(severities, type, Rules.DefaultInterfaceMember, type, Display(member)));
+    }
+
+    /// <summary>
+    /// Reports an instance field of a struct that holds, inline, a struct with a binding of a type that is unsafe to copy to a type
+    /// parameter marked <c>[NonCopyable(UnsafeToCopy = false)]</c>: the Equals and GetHashCode that the struct inherits from ValueType
+    /// run the members of its fields, with no use that shows the binding. A struct that overrides both runs only what its own code calls,
+    /// which is a use. A record is left out: its fields of a non-copyable type are reported as such.
+    /// </summary>
+    private static void AnalyzeFieldBindingsNotTaken(SymbolAnalysisContext context, Severities severities, NonCopyableTypes types, INamedTypeSymbol type)
+    {
+        if (type.IsRecord || (Overrides(nameof(Equals), parameterCount: 1) && Overrides(nameof(GetHashCode), parameterCount: 0)))
+            return;
+
+        foreach (var member in type.GetMembers())
+        {
+            if (member is not IFieldSymbol { IsStatic: false, IsConst: false } field || types.FindStructBindingNotTaken(field.Type) is not { } notTaken)
+                continue;
+
+            object?[] arguments = [DisplayField(field), type, field.Type, Display(notTaken.TypeParameter.ContainingSymbol), notTaken.Argument, notTaken.TypeParameter.Name];
+            WithoutNullableAnnotations(arguments);
+            context.ReportDiagnostic(severities.Create(Rules.UnsafeToCopyNotTakenInField, GetFieldLocation(field), arguments));
+        }
+
+        bool Overrides(string name, int parameterCount) => type
+            .GetMembers(name)
+            .Any(member => member is IMethodSymbol { IsOverride: true, IsImplicitlyDeclared: false } method && method.Parameters.Length == parameterCount);
+    }
+
+    /// <summary>
+    /// Reports code of a non-copyable mark of the project, the class that the analyzer recognizes as the attribute or one that derives
+    /// from it, that sets <c>UnsafeToCopy</c> (SCA1049): an assignment of the property, its initializer, and an argument for a
+    /// constructor parameter named 'unsafeToCopy' in a call of another constructor. The analyzer reads the value only where the attribute
+    /// is applied, so such code makes a struct look as if it said nothing. Setting the property from the constructor's own 'bool'
+    /// parameter named 'unsafeToCopy', or passing that parameter on, is what the analyzer reads, and is no mistake.
+    /// </summary>
+    private static void AnalyzeUnsafeToCopySetInOwnCode(OperationBlockStartAnalysisContext context, Severities severities)
+    {
+        if (context.OwningSymbol.ContainingType is not { TypeKind: TypeKind.Class } type || !NonCopyableTypes.IsNonCopyableMark(type))
+            return;
+
+        context.RegisterOperationAction(
+            operationContext => {
+                switch (operationContext.Operation)
+                {
+                    case IPropertyReferenceOperation reference when IsUnsafeToCopy(reference.Property) && FindWrite(reference) is { } write && !IsOwnParameter(write):
+                        Report(operationContext, write.Syntax);
+                        break;
+
+                    case IPropertyInitializerOperation initializer when initializer.InitializedProperties.Any(IsUnsafeToCopy):
+                        Report(operationContext, initializer.Syntax);
+                        break;
+
+                    case IInvocationOperation { TargetMethod.MethodKind: MethodKind.Constructor } call:
+                        foreach (var argument in call.Arguments)
+                        {
+                            if (argument.Parameter is { } parameter && NonCopyableTypes.IsUnsafeToCopyParameter(parameter) && !IsOwnParameter(argument.Value))
+                                Report(operationContext, argument.Syntax);
+                        }
+
+                        break;
+                }
+            },
+            OperationKind.PropertyReference,
+            OperationKind.PropertyInitializer,
+            OperationKind.Invocation);
+
+        void Report(OperationAnalysisContext operationContext, SyntaxNode syntax) =>
+            operationContext.ReportDiagnostic(severities.Create(Rules.UnsafeToCopySetInOwnCode, syntax.GetLocation(), Display(type)));
+
+        static bool IsUnsafeToCopy(IPropertySymbol property) =>
+            property is { Name: NonCopyableTypes.UnsafeToCopyPropertyName, IsStatic: false } && NonCopyableTypes.IsNonCopyableMark(property.ContainingType);
+
+        // The assignment that writes the property, or the property itself where a deconstruction writes it. Null where it is read.
+        static IOperation? FindWrite(IPropertyReferenceOperation reference)
+        {
+            IOperation current = reference;
+
+            while (current.Parent is ITupleOperation tuple)
+                current = tuple;
+
+            return current.Parent switch {
+                IAssignmentOperation assignment when ReferenceEquals(assignment.Target, current) =>
+                    current is ITupleOperation ? reference : assignment,
+                _ => null,
+            };
+        }
+
+        // A value that is the constructor's own 'bool' parameter named 'unsafeToCopy', which the analyzer reads where the attribute is
+        // applied, as an assignment of it, or as the value itself.
+        static bool IsOwnParameter(IOperation operation)
+        {
+            var value = operation is ISimpleAssignmentOperation assignment ? assignment.Value : operation;
+
+            while (value is IConversionOperation { IsImplicit: true } conversion)
+                value = conversion.Operand;
+
+            return value is IParameterReferenceOperation { Parameter: { ContainingSymbol: IMethodSymbol { MethodKind: MethodKind.Constructor } } parameter } &&
+                NonCopyableTypes.IsUnsafeToCopyParameter(parameter);
+        }
     }
 
     /// <summary>
@@ -430,13 +575,18 @@ public sealed partial class DoNotCopyValueAnalyzer
 
         INamedTypeSymbol? erasable = null;
 
-        for (var current = type.BaseType; current is not null && erasable is null; current = current.BaseType)
+        // The report names an erasable type that holds a value which is unsafe to copy where there is one, which makes it strict.
+        for (var current = type.BaseType; current is not null; current = current.BaseType)
         {
-            if (types.Carries(current) && types.IsErasable(current))
+            if (types.Carries(current) && types.IsErasable(current) && (erasable is null || types.IsLessUnsafe(erasable, current)))
                 erasable = current;
         }
 
-        erasable ??= type.AllInterfaces.FirstOrDefault(i => types.Carries(i) && types.IsErasable(i));
+        foreach (var @interface in type.AllInterfaces)
+        {
+            if (types.Carries(@interface) && types.IsErasable(@interface) && (erasable is null || types.IsLessUnsafe(erasable, @interface)))
+                erasable = @interface;
+        }
 
         if (erasable is null || types.FindErasureObstacle(type) is not { } obstacle)
             return;
@@ -539,7 +689,9 @@ public sealed partial class DoNotCopyValueAnalyzer
         // A type parameter that is constrained to a class can be returned as a base type as well, and can have a container bound to it.
         if (types.HidesNonCopyableType(returnType, overriddenReturnType) && types.FindCloningBindingWithin(returnType) is { } binding)
         {
-            context.ReportDiagnostic(CreateDiagnostic(severities, member, Rules.CloningUseConversion, returnType, overriddenReturnType, binding.Cloning, binding.Type, binding.Bound));
+            // The report stands for the warning of the hidden container as well, so it is about what the value holds besides the binding.
+            context.ReportDiagnostic(CreateDiagnosticAbout(
+                severities, member, Rules.CloningUseReturn, Subject.Of(binding.Type, returnType), returnType, overriddenReturnType, binding.Cloning, binding.Type, binding.Bound));
         }
         else if (types.HidesNonCopyableType(returnType, overriddenReturnType) || types.HidesTypeParameter(returnType, overriddenReturnType))
         {
@@ -553,6 +705,36 @@ public sealed partial class DoNotCopyValueAnalyzer
             context.ReportDiagnostic(CreateDiagnostic(
                 severities, member, Rules.HolderReturnedByOverride, returnType, overriddenReturnType, Display(member), Display(overridden.OriginalDefinition)));
         }
+    }
+
+    /// <summary>
+    /// Reports an entry of a base list that binds a type which is unsafe to copy to a type parameter marked
+    /// <c>[NonCopyable(UnsafeToCopy = false)]</c>, on the entry: the code of the base class or of the interface runs with the type through
+    /// every member that a type inherits or implements, an override that is called through a base class that is not generic included,
+    /// with no use that shows the binding.
+    /// </summary>
+    private static void AnalyzeBaseListBindings(SyntaxNodeAnalysisContext context, Severities severities, NonCopyableTypes types)
+    {
+        foreach (var entry in ((BaseListSyntax)context.Node).Types)
+        {
+            if (context.SemanticModel.GetSymbolInfo(entry.Type, context.CancellationToken).Symbol is INamedTypeSymbol baseType &&
+                types.FindBindingNotTaken(baseType) is { } binding)
+            {
+                ReportBindingNotTaken(severities, context.ReportDiagnostic, entry.Type.GetLocation(), binding.TypeParameter, binding.Argument);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Reports a type that is unsafe to copy, or a type parameter that can stand for one, bound to a type parameter that is marked
+    /// <c>[NonCopyable(UnsafeToCopy = false)]</c>.
+    /// </summary>
+    private static void ReportBindingNotTaken(Severities severities, Action<Diagnostic> report, Location location, ITypeParameterSymbol typeParameter, ITypeSymbol argument)
+    {
+        var rule = argument is ITypeParameterSymbol ? Rules.UnsafeToCopyTypeParameterNotTaken : Rules.UnsafeToCopyNotTaken;
+        object?[] arguments = [Display(typeParameter.ContainingSymbol), argument, typeParameter.Name];
+        WithoutNullableAnnotations(arguments);
+        report(severities.Create(rule, location, arguments));
     }
 
     private static void CheckTypeArgumentsOfBaseType(SymbolAnalysisContext context, Severities severities, INamedTypeSymbol type, INamedTypeSymbol baseType)
@@ -689,9 +871,10 @@ public sealed partial class DoNotCopyValueAnalyzer
 
             if (!NonCopyableTypes.IsMarkedKept(parameter) && types.KeepsUnseenBehind(parameter, interfaceMethod.Parameters[i], out bool byUncheckedCode))
             {
-                context.ReportDiagnostic(CreateDiagnostic(
+                context.ReportDiagnostic(CreateDiagnosticAbout(
                     severities, type,
                     Rules.KeepingNotOnInterfaceMember,
+                    Subject.OfDeclared(interfaceMethod.Parameters[i].Type),
                     parameter.Name,
                     Display(method.OriginalDefinition),
                     Display(interfaceMethod.OriginalDefinition),
@@ -771,11 +954,28 @@ public sealed partial class DoNotCopyValueAnalyzer
                     baseTypeParameters[i].Name,
                     Display(baseMethod)));
             }
+
+            // A caller through the base member can bind a type that is unsafe to copy where the base member's type parameter is marked and
+            // takes one, and the body of this member is checked for copies of it with warnings only. Where the base member's type parameter
+            // is not marked, a call through it with any non-copyable type is reported already, so this member may say false there, as it
+            // may mark the type parameter at all.
+            if (NonCopyableTypes.TakesNoUnsafeToCopy(typeParameters[i]) &&
+                NonCopyableTypes.IsMarkedNonCopyable(baseTypeParameters[i]) &&
+                !NonCopyableTypes.TakesNoUnsafeToCopy(baseTypeParameters[i]))
+            {
+                context.ReportDiagnostic(CreateDiagnostic(
+                    severities, reportOnMember ? typeParameters[i] : reported,
+                    Rules.TypeParameterTakesNoUnsafeToCopy,
+                    typeParameters[i].Name,
+                    Display(method),
+                    baseTypeParameters[i].Name,
+                    Display(baseMethod)));
+            }
         }
 
         // A caller through the base member takes the result for a new value. The other way round is fine: the caller is only more careful.
         if (NonCopyableTypes.AddsBorrowed(method, baseMethod))
-            context.ReportDiagnostic(CreateDiagnostic(severities, reported, Rules.BorrowedNotOnBaseMember, Display(member), Display(baseMember)));
+            context.ReportDiagnostic(CreateDiagnosticAbout(severities, reported, Rules.BorrowedNotOnBaseMember, Subject.OfDeclared(method.ReturnType), Display(member), Display(baseMember)));
 
         for (int i = 0; i < method.Parameters.Length && i < baseMethod.Parameters.Length; i++)
         {
@@ -793,9 +993,10 @@ public sealed partial class DoNotCopyValueAnalyzer
                         ? Rules.MovedFromAddedOverUncheckedMark
                         : Rules.MovedFromAdded;
 
-                context.ReportDiagnostic(CreateDiagnostic(
+                context.ReportDiagnostic(CreateDiagnosticAbout(
                     severities, reportedForParameter,
                     rule,
+                    Subject.OfDeclared(parameter.Type),
                     parameter.Name,
                     Display(member),
                     $"'{Display(baseMember)}', which the member overrides or implements,"));
@@ -803,7 +1004,10 @@ public sealed partial class DoNotCopyValueAnalyzer
 
             // And a caller through the base member takes a container that it passes to be still its own.
             if (types.AddsKept(parameter, baseParameter))
-                context.ReportDiagnostic(CreateDiagnostic(severities, reportedForParameter, Rules.KeptNotOnBaseMember, parameter.Name, Display(member), Display(baseMember)));
+            {
+                context.ReportDiagnostic(CreateDiagnosticAbout(
+                    severities, reportedForParameter, Rules.KeptNotOnBaseMember, Subject.OfDeclared(parameter.Type), parameter.Name, Display(member), Display(baseMember)));
+            }
         }
     }
 
@@ -859,7 +1063,10 @@ public sealed partial class DoNotCopyValueAnalyzer
 
             case IMethodSymbol method:
                 CheckTypeParameters(method.TypeParameters);
-                CheckParameters(method.Parameters);
+
+                // An accessor of an indexer has a parameter for each of the indexer's, with its attributes and its place, and the indexer
+                // reports those. The value of a setter is the accessor's own.
+                CheckParameters(method.AssociatedSymbol is IPropertySymbol { Parameters.Length: var count and > 0 } ? method.Parameters.Skip(count) : method.Parameters);
 
                 // The receiver of an extension block is a parameter of the member too, and its paths are followed in every member.
                 foreach (var parameter in NonCopyableTypes.GetParametersWithReceiver(method))
@@ -870,13 +1077,13 @@ public sealed partial class DoNotCopyValueAnalyzer
                     // The code of a primary constructor is the initializers of the type and the call of the base constructor.
                     // They have no order in which the parameter could be read and then assigned, and no path runs through them.
                     if (method.MethodKind is MethodKind.Constructor && method.DeclaringSyntaxReferences.Any(static declared => declared.GetSyntax() is TypeDeclarationSyntax))
-                        context.ReportDiagnostic(CreateDiagnostic(severities, parameter, Rules.MovedFromOnPrimaryConstructor, parameter.Name, method.ContainingType));
+                        context.ReportDiagnostic(CreateDiagnosticAbout(severities, parameter, Rules.MovedFromOnPrimaryConstructor, Subject.OfDeclared(parameter.Type), parameter.Name, method.ContainingType));
                     else if (method is { IsAbstract: false, IsExtern: false, IsImplicitlyDeclared: false } && !(method.IsPartialDefinition && method.PartialImplementationPart is null))
                         moves?.NoteDeclared(method, parameter);
                 }
 
                 if (NonCopyableTypes.HasReturnAttribute(method, NonCopyableTypes.MovedFromAttributeName))
-                    context.ReportDiagnostic(CreateDiagnostic(severities, method, Rules.MovedFromNotOnRefParameter));
+                    context.ReportDiagnostic(CreateDiagnosticAbout(severities, method, Rules.MovedFromNotOnRefParameter, GetSubjectOfMark(method)));
 
                 break;
 
@@ -891,7 +1098,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                 Check(typeParameter, typeParameter);
         }
 
-        void CheckParameters(ImmutableArray<IParameterSymbol> parameters)
+        void CheckParameters(IEnumerable<IParameterSymbol> parameters)
         {
             foreach (var parameter in parameters)
             {
@@ -903,7 +1110,7 @@ public sealed partial class DoNotCopyValueAnalyzer
         void Check(ISymbol attributed, ISymbol reported)
         {
             if (NonCopyableTypes.HasAttribute(attributed, NonCopyableTypes.MovedFromAttributeName))
-                context.ReportDiagnostic(CreateDiagnostic(severities, reported, Rules.MovedFromNotOnRefParameter));
+                context.ReportDiagnostic(CreateDiagnosticAbout(severities, reported, Rules.MovedFromNotOnRefParameter, GetSubjectOfMark(attributed)));
         }
     }
 
@@ -1008,6 +1215,30 @@ public sealed partial class DoNotCopyValueAnalyzer
         return severities.Create(rule, inSource[0], inSource.Skip(1), arguments);
     }
 
+    // Creates the diagnostic of a rule whose message does not name the types that the report is about, as CreateDiagnostic does: see
+    // About.Given.
+    private static Diagnostic CreateDiagnosticAbout(Severities severities, ISymbol symbol, Rule rule, Subject subject, params object?[] arguments)
+    {
+        WithoutNullableAnnotations(arguments);
+        var inSource = symbol.Locations.Where(l => l.IsInSource).ToList();
+
+        if (inSource.Count is 0)
+            return severities.CreateAbout(rule, subject, null, arguments);
+
+        return severities.CreateAbout(rule, subject, inSource[0], inSource.Skip(1), arguments);
+    }
+
+    // The subject of a report about a mark: the type of what carries it, where a caller binds what a type parameter in it stands for.
+    private static Subject GetSubjectOfMark(ISymbol marked) => Subject.OfDeclared(marked switch {
+        IParameterSymbol parameter => parameter.Type,
+        ITypeParameterSymbol typeParameter => typeParameter,
+        IFieldSymbol field => field.Type,
+        IPropertySymbol property => property.Type,
+        IEventSymbol @event => @event.Type,
+        IMethodSymbol method => method.ReturnType,
+        _ => null,
+    });
+
     /// <summary>
     /// What a compilation's types have of marks, as far as the check of implementations has asked: it is what lets that check skip the types that
     /// have nothing to lose.
@@ -1035,8 +1266,8 @@ public sealed partial class DoNotCopyValueAnalyzer
 
         /// <summary>
         /// Gets a value indicating whether a type or one of its base classes declares a member marked <c>[RequiresCopyable]</c>, or a method
-        /// whose return value is marked <c>[Borrowed]</c> or that has a <c>[Kept]</c> or a <c>[MovedFrom]</c> parameter, or a
-        /// parameter whose type is a type parameter, which is taken to keep what it is given.
+        /// whose return value is marked <c>[Borrowed]</c> or that has a <c>[Kept]</c> or a <c>[MovedFrom]</c> parameter, a parameter whose
+        /// type is a type parameter, which is taken to keep what it is given, or a type parameter marked <c>UnsafeToCopy = false</c>.
         /// </summary>
         public bool HasMarkedMember(INamedTypeSymbol type)
         {
@@ -1044,7 +1275,8 @@ public sealed partial class DoNotCopyValueAnalyzer
             {
                 bool hasMarkedMember = _typesWithMarkedMembers.GetOrAdd(current.OriginalDefinition, static definition => definition.GetMembers().Any(
                     m => (m is IMethodSymbol or IPropertySymbol or IEventSymbol && NonCopyableTypes.HasAttribute(m, NonCopyableTypes.RequiresCopyableAttributeName)) ||
-                        (m is IMethodSymbol method && (NonCopyableTypes.HasBorrowedReturn(method) || HasKeptParameter(method) || NonCopyableTypes.HasMovedFromParameter(method)))));
+                        (m is IMethodSymbol method && (NonCopyableTypes.HasBorrowedReturn(method) || HasKeptParameter(method) || NonCopyableTypes.HasMovedFromParameter(method) ||
+                            method.TypeParameters.Any(NonCopyableTypes.TakesNoUnsafeToCopy)))));
 
                 if (hasMarkedMember)
                     return true;

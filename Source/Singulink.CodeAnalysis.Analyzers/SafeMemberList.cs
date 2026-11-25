@@ -63,10 +63,11 @@ internal sealed class SafeMemberList
 
     private readonly Dictionary<string, SafeListEntry> _entries;
 
-    // The IDs of the structs that a 'copyable' line of a user file takes out, which no 'noncopyable' line of a user file names.
+    // The IDs of the structs that a 'copyable' line of a user file takes out, which no 'noncopyable' or 'unsafetocopy' line of a user file
+    // names.
     private readonly HashSet<string> _copyable;
 
-    // The IDs that a 'noncopyable' line of a user file names, and the simple names of the assemblies that a 'trusted' line names.
+    // The IDs that a 'noncopyable' or 'unsafetocopy' line of a user file names, and the simple names of the assemblies that a 'trusted' line names.
     private readonly HashSet<string> _userNonCopyable;
     private readonly HashSet<string> _trustedAssemblies;
 
@@ -141,7 +142,7 @@ internal sealed class SafeMemberList
         _clones.Count > 0 && definition.TypeKind is TypeKind.Class && definition.GetDocumentationCommentId() is { } id && _clones.Contains(id);
 
     /// <summary>
-    /// Gets the IDs that a 'noncopyable' line of a user file names, whether the compilation has the type or not.
+    /// Gets the IDs that a 'noncopyable' or 'unsafetocopy' line of a user file names, whether the compilation has the type or not.
     /// </summary>
     public IReadOnlyCollection<string> UserNonCopyableIds => _userNonCopyable;
 
@@ -150,7 +151,7 @@ internal sealed class SafeMemberList
     /// that claims less applies, whether they are in two user files or in a user file and the built-in list. So a user file can add entries and
     /// can tighten a built-in one, but cannot loosen it, and the order of the files does not matter.
     /// </summary>
-    /// <param name="userFiles">The list files of the project.</param>
+    /// <param name="userFiles">The list files of the project, each with whether it came in a package.</param>
     /// <param name="includeBuiltInNonCopyableTypes">False to leave out the entries of the built-in list that name a framework struct as
     /// non-copyable. The entries of the user files that do so still apply.</param>
     /// <param name="compilation">The compilation. A line of a user file that does not fit what it names there is reported for the file
@@ -158,9 +159,11 @@ internal sealed class SafeMemberList
     /// <remarks>
     /// A 'copyable' line is not merged with the other entries for its type: it takes the type out of the non-copyable types and leaves
     /// whatever else the list says of it. It overrides the built-in list, which is what it is for, and loses to a 'noncopyable' line
-    /// of a user file, as the stricter line does everywhere in the list.
+    /// of a user file, as the stricter line does everywhere in the list. It counts only in a file of the project, and never in one that
+    /// came in a package: it says that the project copies the type on purpose, which is the decision of one project, and a library's line
+    /// would otherwise take a type, even one that is unsafe to copy, out for every project that uses the library.
     /// </remarks>
-    public static SafeMemberList Create(IReadOnlyList<SourceText> userFiles, bool includeBuiltInNonCopyableTypes, Compilation compilation)
+    public static SafeMemberList Create(IReadOnlyList<(SourceText Text, bool IsOfAPackage)> userFiles, bool includeBuiltInNonCopyableTypes, Compilation compilation)
     {
         var builtInEntries = (includeBuiltInNonCopyableTypes ? s_builtInEntries : s_builtInEntriesWithoutNonCopyableTypes).Value;
 
@@ -168,9 +171,16 @@ internal sealed class SafeMemberList
             return new SafeMemberList(builtInEntries);
 
         var parsed = new List<SafeListEntry>();
+        var copyableOfProject = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (var file in userFiles)
-            Parse(file, parsed, errors: null);
+        foreach (var (text, isOfAPackage) in userFiles)
+        {
+            int start = parsed.Count;
+            Parse(text, parsed, errors: null);
+
+            if (!isOfAPackage)
+                copyableOfProject.UnionWith(parsed.Skip(start).Where(static e => e.Marker is SafeListMarker.Copyable).Select(static e => e.Id));
+        }
 
         var entries = new Dictionary<string, SafeListEntry>(builtInEntries, StringComparer.Ordinal);
         var copyable = new HashSet<string>(StringComparer.Ordinal);
@@ -219,7 +229,7 @@ internal sealed class SafeMemberList
 
             if (entry.Marker is SafeListMarker.Copyable)
             {
-                if (GetWhyCopyableHasNoEffect(entry, compilation) is null)
+                if (copyableOfProject.Contains(entry.Id) && GetWhyCopyableHasNoEffect(entry, compilation) is null)
                     copyable.Add(entry.Id);
 
                 continue;
@@ -255,6 +265,12 @@ internal sealed class SafeMemberList
     /// whether a project includes them or not.
     /// </summary>
     public static bool IsBuiltInNonCopyable(string id) => s_builtInEntries.Value.TryGetValue(id, out var entry) && entry.Marker is SafeListMarker.NonCopyable;
+
+    /// <summary>
+    /// Gets a value indicating whether the built-in list names a struct as unsafe to copy, with the marker 'unsafetocopy': one of the
+    /// built-in non-copyable types whose copy can break memory safety, whether a project includes them or not.
+    /// </summary>
+    public static bool IsBuiltInUnsafeToCopy(string id) => s_builtInEntries.Value.TryGetValue(id, out var entry) && entry.IsUnsafeToCopy;
 
     /// <summary>
     /// Gets the entries of the list that ships in the analyzer.
@@ -322,7 +338,12 @@ internal sealed class SafeMemberList
         if (entry.Marker is SafeListMarker.View or SafeListMarker.NonCopyable or SafeListMarker.Copyable &&
             !symbols.Any(s => s is INamedTypeSymbol { TypeKind: TypeKind.Struct }))
         {
-            string name = entry.Marker switch { SafeListMarker.View => "view", SafeListMarker.NonCopyable => "noncopyable", _ => "copyable" };
+            string name = entry.Marker switch {
+                SafeListMarker.View => "view",
+                SafeListMarker.NonCopyable => entry.IsUnsafeToCopy ? "unsafetocopy" : "noncopyable",
+                _ => "copyable",
+            };
+
             return $"the marker '{name}' is for a struct";
         }
 
@@ -495,6 +516,29 @@ internal sealed class SafeMemberList
     }
 
     /// <summary>
+    /// Gets why the line of a field has no effect in a compilation: a read or a write of the field runs no code of its type with type
+    /// arguments that a use binds, so no use of it is ever judged by the line. That is so for an instance field, for a constant, and for a
+    /// static field of a type that is neither generic nor nested in a generic type. Null if the line has an effect, and for a line that
+    /// names nothing there, which is ignored so that one file can serve several projects.
+    /// </summary>
+    public static string? GetWhyFieldHasNoEffect(SafeListEntry entry, Compilation compilation)
+    {
+        if (entry.Id[0] is not 'F')
+            return null;
+
+        var fields = DocumentationCommentId.GetSymbolsForDeclarationId(entry.Id, compilation).OfType<IFieldSymbol>().ToList();
+
+        if (fields.Count is 0 || fields.Any(f => f is { IsStatic: true, IsConst: false } && IsGenericOrInGeneric(f.ContainingType)))
+            return null;
+
+        return fields[0] switch {
+            { IsConst: true } => "the field is a constant, which runs no code",
+            { IsStatic: false } => "the field is not static, and reading or writing it runs no code of its type",
+            _ => "its type is neither generic nor nested in a generic type, so its static initializers run with no type argument that a use binds",
+        };
+    }
+
+    /// <summary>
     /// Gets the kind of member that an ID names by its prefix: a method, a property or an event.
     /// </summary>
     public static string GetMemberKind(string id) => id[0] switch { 'M' => "method", 'P' => "property", _ => "event" };
@@ -562,7 +606,52 @@ internal sealed class SafeMemberList
     }
 
     /// <summary>
-    /// Gets the entry of a member (a method, a property or an event) by its original definition, or null if the list does not have the member.
+    /// Gets why a 'noncopyable' or 'unsafetocopy' line of a user file has no effect in a compilation: the struct that it names is already
+    /// what the line says, by the attribute that the analyzer recognizes on it. A type that is unsafe to copy is non-copyable as well, so a
+    /// 'noncopyable' line has no effect for one. A line for a type of the built-in framework symbol list is never reported, in any project:
+    /// one file can serve a project that includes the built-in non-copyable types and one that does not, where the line makes the type what
+    /// it says. Null if the line has an effect, for a line that names nothing, which is reported as such, and for one that does not fit
+    /// what it names, which <see cref="GetErrorInCompilation"/> reports. A 'copyable' line of a file for the type gives the line an effect,
+    /// since the line wins over it, and is left to the caller.
+    /// </summary>
+    public static string? GetWhyNonCopyableHasNoEffect(SafeListEntry entry, Compilation compilation)
+    {
+        if (entry.Marker is not SafeListMarker.NonCopyable ||
+            (s_builtInEntries.Value.TryGetValue(entry.Id, out var builtIn) && builtIn.Marker is SafeListMarker.NonCopyable))
+        {
+            return null;
+        }
+
+        var structs = DocumentationCommentId.GetSymbolsForDeclarationId(entry.Id, compilation)
+            .OfType<INamedTypeSymbol>()
+            .Where(s => s.TypeKind is TypeKind.Struct)
+            .ToList();
+
+        if (structs.Count is 0)
+            return null;
+
+        string what = entry.IsUnsafeToCopy ? "unsafe to copy" : "non-copyable";
+        var marks = structs.Select(s => FindNonCopyableMark(s, compilation)).ToList();
+
+        if (marks.Any(mark => mark is null || (entry.IsUnsafeToCopy && !NonCopyableTypes.SaysUnsafeToCopy(mark))))
+            return null;
+
+        return !entry.IsUnsafeToCopy && marks.All(mark => NonCopyableTypes.SaysUnsafeToCopy(mark!))
+            ? "its attribute marks it unsafe to copy, which makes it non-copyable as well"
+            : $"its attribute marks it {what} already";
+
+        // On a struct of the compilation only the analyzer's attribute counts, and on one of another assembly an attribute of the name in
+        // any namespace, as for the mark itself.
+        static AttributeData? FindNonCopyableMark(INamedTypeSymbol type, Compilation compilation)
+        {
+            bool ofAnyNamespace = !SymbolEqualityComparer.Default.Equals(type.ContainingAssembly, compilation.Assembly);
+            return type.GetAttributes().FirstOrDefault(a => NonCopyableTypes.IsNonCopyableMark(a.AttributeClass, ofAnyNamespace));
+        }
+    }
+
+    /// <summary>
+    /// Gets the entry of a member (a method, a property, an event or a static field) by its original definition, or null if the list does not
+    /// have the member.
     /// </summary>
     public SafeListEntry? GetMember(ISymbol definition) => GetEntry(definition) is { } entry && IsForMember(entry.Marker) ? entry : null;
 
@@ -620,6 +709,12 @@ internal sealed class SafeMemberList
     public bool IsNonCopyable(INamedTypeSymbol definition) => GetEntry(definition)?.Marker is SafeListMarker.NonCopyable;
 
     /// <summary>
+    /// Gets a value indicating whether the list names the type as unsafe to copy by its original definition: a non-copyable type whose
+    /// copy can break memory safety, which a line of any file or of the built-in list marks 'unsafetocopy'.
+    /// </summary>
+    public bool IsUnsafeToCopy(INamedTypeSymbol definition) => GetEntry(definition) is { Marker: SafeListMarker.NonCopyable, IsUnsafeToCopy: true };
+
+    /// <summary>
     /// Gets a value indicating whether a 'copyable' line of a user file takes the type out of the non-copyable types, by its original
     /// definition, whatever the built-in list or an attribute says of it.
     /// </summary>
@@ -670,7 +765,7 @@ internal sealed class SafeMemberList
     /// </summary>
     public static (string Added, string BuiltIn)? FindWideningOfBuiltIn(SafeListEntry entry)
     {
-        if (entry.Id[0] is not ('M' or 'P' or 'E') ||
+        if (entry.Id[0] is not ('M' or 'P' or 'E' or 'F') ||
             entry.Marker is SafeListMarker.Clones or SafeListMarker.NonCopyable or SafeListMarker.Copyable ||
             !s_builtInEntries.Value.TryGetValue(entry.Id, out var builtIn) ||
             builtIn.TypeParameterNames is not { } builtInNames)
@@ -785,7 +880,8 @@ internal sealed class SafeMemberList
         // if both say so, and is vouched for only where both vouch for it. A type that one of them calls non-copyable is non-copyable, and
         // one that only one of them calls erasable is not erasable. A member keeps nothing of a value that it is given in the outcomes that
         // both lines list, where 'borrows' lists every outcome and any other marker none: 'borrows' and 'borrowswhen=false' give
-        // 'borrowswhen=false', and 'borrowswhen=false' and 'borrowswhen=true' give no marker.
+        // 'borrowswhen=false', and 'borrowswhen=false' and 'borrowswhen=true' give no marker. A type that one of them calls unsafe to copy
+        // is unsafe to copy: for that claim the stricter line is the one that says more, and nothing makes such a type plain non-copyable.
         var marker = (first.Marker, second.Marker) switch {
             var (one, other) when one == other => one,
             (SafeListMarker.NonCopyable, _) or (_, SafeListMarker.NonCopyable) => SafeListMarker.NonCopyable,
@@ -810,7 +906,8 @@ internal sealed class SafeMemberList
                 marker = SafeListMarker.None;
         }
 
-        return new SafeListEntry(first.Id, marker, typeParameterNames, first.Line, borrowedOutcomes: borrowed);
+        bool unsafeToCopy = marker is SafeListMarker.NonCopyable && (first.IsUnsafeToCopy || second.IsUnsafeToCopy);
+        return new SafeListEntry(first.Id, marker, typeParameterNames, first.Line, borrowedOutcomes: borrowed, isUnsafeToCopy: unsafeToCopy);
     }
 
     private static string RemoveComment(string line)
@@ -832,9 +929,9 @@ internal sealed class SafeMemberList
         string[] parts = content.Split(';');
         string id = parts[0].Trim();
 
-        if (id.Length < 3 || id[1] is not ':' || id[0] is not ('M' or 'P' or 'E' or 'T' or 'A'))
+        if (id.Length < 3 || id[1] is not ':' || id[0] is not ('M' or 'P' or 'E' or 'F' or 'T' or 'A'))
         {
-            reason = "expected a documentation comment ID that starts with 'M:', 'P:', 'E:' or 'T:', or the name of an assembly after 'A:'";
+            reason = "expected a documentation comment ID that starts with 'M:', 'P:', 'E:', 'F:' or 'T:', or the name of an assembly after 'A:'";
             return false;
         }
 
@@ -856,6 +953,7 @@ internal sealed class SafeMemberList
         bool isType = id[0] is 'T';
         var marker = SafeListMarker.None;
         bool isComplete = false;
+        bool unsafeToCopy = false;
         bool hasMarker = false;
         var borrowed = SafeListOutcomes.None;
         List<string>? unknownOutcomes = null;
@@ -901,6 +999,20 @@ internal sealed class SafeMemberList
             if (part is CompleteValue or NoneValue)
             {
                 reason = $"'{part}' is a value of the marker 'clones', written 'clones={part}'";
+                return false;
+            }
+
+            // The line of a static field says that the static initializers of its type make no copy of a value of the type arguments.
+            // Every marker says something of a member that is called or of a type, and none of it fits: a field takes no argument, and a
+            // read of it gets the value that the field holds, which is never a new one.
+            if (id[0] is 'F')
+            {
+                string name = part.Split('=')[0].Trim();
+
+                reason = name is "new"
+                    ? "a field holds its value, so what a read of it gives is never new; the line of a static field takes no marker, only 'for='"
+                    : $"the marker '{name}' is not for a field; the line of a static field takes no marker, only 'for='";
+
                 return false;
             }
 
@@ -970,7 +1082,7 @@ internal sealed class SafeMemberList
                 if (id[0] is not 'M')
                 {
                     reason = isType
-                        ? "the marker 'borrowswhen' is for a method; a type takes 'view', 'noncopyable', 'copyable', 'erasable' or 'clones'"
+                        ? "the marker 'borrowswhen' is for a method; a type takes 'view', 'noncopyable', 'unsafetocopy', 'copyable', 'erasable' or 'clones'"
                         : "the marker 'borrowswhen' is for a method";
 
                     return false;
@@ -1043,6 +1155,13 @@ internal sealed class SafeMemberList
                     marker = SafeListMarker.NonCopyable;
                     break;
 
+                // A non-copyable type whose copy can break memory safety. Under the current memory safety rules it is reported as
+                // 'noncopyable' is.
+                case "unsafetocopy" when isType:
+                    marker = SafeListMarker.NonCopyable;
+                    unsafeToCopy = true;
+                    break;
+
                 case "copyable" when isType:
                     marker = SafeListMarker.Copyable;
                     break;
@@ -1060,26 +1179,26 @@ internal sealed class SafeMemberList
                     return false;
 
                 case "new" or "borrows" or "drains":
-                    reason = $"the marker '{part}' is for a member; a type takes 'view', 'noncopyable', 'copyable', 'erasable' or 'clones'";
+                    reason = $"the marker '{part}' is for a member; a type takes 'view', 'noncopyable', 'unsafetocopy', 'copyable', 'erasable' or 'clones'";
                     return false;
 
-                case "view" or "noncopyable" or "copyable" or "erasable":
+                case "view" or "noncopyable" or "unsafetocopy" or "copyable" or "erasable":
                     reason = $"the marker '{part}' is for a type; a member takes 'new', 'borrows', 'drains', 'owned', 'borrowswhen', 'clones' or no marker";
                     return false;
 
                 default:
-                    reason = $"unknown marker '{part}'; the markers are 'new', 'borrows', 'drains', 'owned', 'borrowswhen', 'view', 'noncopyable', 'copyable', 'erasable' and 'clones', and 'trusted' for an assembly";
+                    reason = $"unknown marker '{part}'; the markers are 'new', 'borrows', 'drains', 'owned', 'borrowswhen', 'view', 'noncopyable', 'unsafetocopy', 'copyable', 'erasable' and 'clones', and 'trusted' for an assembly";
                     return false;
             }
         }
 
         if (isType && marker is SafeListMarker.None)
         {
-            reason = "a type needs the marker 'view', 'noncopyable', 'copyable', 'erasable' or 'clones'; there is no entry for every member of a type";
+            reason = "a type needs the marker 'view', 'noncopyable', 'unsafetocopy', 'copyable', 'erasable' or 'clones'; there is no entry for every member of a type";
             return false;
         }
 
-        entry = new SafeListEntry(id, marker, typeParameterNames, line, isComplete, borrowed, unknownOutcomes?.ToArray());
+        entry = new SafeListEntry(id, marker, typeParameterNames, line, isComplete, borrowed, unknownOutcomes?.ToArray(), unsafeToCopy);
         reason = string.Empty;
         return true;
     }
@@ -1160,7 +1279,7 @@ internal sealed class SafeMemberList
         if (open.Count > 0)
             return Unbalanced;
 
-        return parameterLists > 0 && id[0] is 'T' or 'E' ? "only a method or a property has a parameter list" : null;
+        return parameterLists > 0 && id[0] is 'T' or 'E' or 'F' ? "only a method or a property has a parameter list" : null;
     }
 
     /// <summary>
@@ -1249,7 +1368,8 @@ internal enum SafeListMarker
     View,
 
     /// <summary>
-    /// A struct that is a non-copyable type.
+    /// A struct that is a non-copyable type, written 'noncopyable', or 'unsafetocopy' for one whose copy can break memory safety
+    /// (<see cref="SafeListEntry.IsUnsafeToCopy"/>).
     /// </summary>
     NonCopyable,
 
@@ -1296,7 +1416,8 @@ internal sealed class SafeListEntry(
     TextLine line,
     bool isComplete = false,
     SafeListOutcomes borrowedOutcomes = SafeListOutcomes.None,
-    string[]? unknownOutcomes = null)
+    string[]? unknownOutcomes = null,
+    bool isUnsafeToCopy = false)
 {
     public string Id { get; } = id;
 
@@ -1307,6 +1428,12 @@ internal sealed class SafeListEntry(
     /// clones its object or hands it to code that can.
     /// </summary>
     public bool IsComplete { get; } = isComplete;
+
+    /// <summary>
+    /// Gets a value indicating whether the line of a type says 'unsafetocopy': the type is non-copyable, as with 'noncopyable', and a
+    /// copy of it can break memory safety. Such an entry has the marker <see cref="SafeListMarker.NonCopyable"/>.
+    /// </summary>
+    public bool IsUnsafeToCopy { get; } = isUnsafeToCopy;
 
     /// <summary>
     /// Gets the outcomes of a call in which the member keeps nothing of a value that it is given by value: those that 'borrowswhen' lists,

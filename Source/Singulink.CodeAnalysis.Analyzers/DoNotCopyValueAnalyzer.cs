@@ -56,7 +56,8 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
 
             // The list is built once for the compilation. The two classifiers share it.
             var listFiles = GetListFiles(context.Options, context.CancellationToken);
-            var list = SafeMemberList.Create([.. listFiles.Select(f => f.Text)], IncludesBuiltInNonCopyableTypes(context.Options), context.Compilation);
+            var list = SafeMemberList.Create(
+                [.. listFiles.Select(f => (f.Text, IsFileOfAPackage(f.File, context.Options)))], IncludesBuiltInNonCopyableTypes(context.Options), context.Compilation);
             var typesInCopyingMember = new NonCopyableTypes(list, context.Compilation.Assembly, typeParametersAreCopyable: true);
             var types = new NonCopyableTypes(list, context.Compilation.Assembly, typeParametersAreCopyable: false, definitions: typesInCopyingMember);
             var marks = new MarkCache();
@@ -64,7 +65,7 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
             bool allowsImplicitMoves = AllowsImplicitMoves(context.Options);
 
             // Every diagnostic of the compilation is made here, which chooses its severity.
-            var severities = new Severities(context.Compilation, context.Options);
+            var severities = new Severities(context.Compilation, context.Options, types);
 
             context.RegisterAdditionalFileAction(context => AnalyzeListFile(context, severities));
             context.RegisterCompilationEndAction(context => moves.Report(context, severities));
@@ -76,6 +77,7 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
             context.RegisterCompilationEndAction(context => AnalyzeUncheckedReferences(context, severities, list, types, listFiles, trustedForBase));
             context.RegisterSymbolAction(context => AnalyzeCloningBases(context, severities, types, trustedForBase), SymbolKind.NamedType);
             context.RegisterSyntaxNodeAction(context => AnalyzeCloningBinding(context, severities, types), SyntaxKind.ClassDeclaration);
+            context.RegisterSyntaxNodeAction(context => AnalyzeBaseListBindings(context, severities, types), SyntaxKind.BaseList);
 
             context.RegisterOperationBlockAction(context => {
                 // In the body of a member marked [RequiresCopyable] the marked type parameters count as copyable.
@@ -83,7 +85,8 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
                 AnalyzeOperationBlock(context, severities, typesOfMember, moves, allowsImplicitMoves);
             });
 
-            context.RegisterSymbolAction(context => AnalyzeField(context, severities, types), SymbolKind.Field);
+            context.RegisterOperationBlockStartAction(context => AnalyzeUnsafeToCopySetInOwnCode(context, severities));
+            context.RegisterSymbolAction(context => AnalyzeField(context, severities, types, typesInCopyingMember), SymbolKind.Field);
             context.RegisterSymbolAction(context => AnalyzeProperty(context, severities, types, typesInCopyingMember), SymbolKind.Property);
             context.RegisterSymbolAction(context => AnalyzeNamedType(context, severities, types, typesInCopyingMember, marks), SymbolKind.NamedType);
             context.RegisterSymbolAction(context => AnalyzeForeignNonCopyableMark(context, severities), SymbolKind.Method);
@@ -191,6 +194,12 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
         // warning here whichever file that line is in.
         var clonesOfFiles = new HashSet<string>(entries.Where(e => e.Marker is SafeListMarker.Clones).Select(e => e.Id), StringComparer.Ordinal);
 
+        // A 'noncopyable' or 'unsafetocopy' line wins over a 'copyable' line of any file, so it has an effect where one takes the type out.
+        // A 'copyable' line counts only in a file of the project, never in one that came in a package: it says that the project copies
+        // the type on purpose, which is the decision of one project.
+        bool isFileOfAPackage = IsFileOfAPackage(context.AdditionalFile, context.Options);
+        var copyableOfFiles = new HashSet<string>(isFileOfAPackage ? [] : entries.Where(IsCopyableWithEffect).Select(e => e.Id), StringComparer.Ordinal);
+
         foreach (var other in context.Options.AdditionalFiles)
         {
             if (ReferenceEquals(other, context.AdditionalFile) || !IsListFile(other) || other.GetText(context.CancellationToken) is not { } otherText)
@@ -199,6 +208,9 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
             var otherEntries = new List<SafeListEntry>();
             SafeMemberList.Parse(otherText, otherEntries, errors: null);
             clonesOfFiles.UnionWith(otherEntries.Where(e => e.Marker is SafeListMarker.Clones).Select(e => e.Id));
+
+            if (!IsFileOfAPackage(other, context.Options))
+                copyableOfFiles.UnionWith(otherEntries.Where(IsCopyableWithEffect).Select(e => e.Id));
         }
 
         foreach (var entry in entries)
@@ -217,8 +229,12 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
                 errors.Add(new SafeListError(entry.Line, reason));
             else if (entry.Marker is SafeListMarker.NonCopyable && DocumentationCommentId.GetSymbolsForDeclarationId(entry.Id, context.Compilation).IsEmpty)
                 Report(Rules.SafeListNonCopyableNamesNothing, entry.Line, entry.Id);
-            else if (entry.Marker is SafeListMarker.Copyable && SafeMemberList.GetWhyCopyableHasNoEffect(entry, context.Compilation) is { } why)
+            else if (FindWhyNonCopyableHasNoEffect(entry) is { } already)
+                Report(Rules.SafeListNonCopyableHasNoEffect, entry.Line, entry.Id, entry.IsUnsafeToCopy ? "unsafe to copy" : "non-copyable", already);
+            else if (entry.Marker is SafeListMarker.Copyable && !isFileOfAPackage && SafeMemberList.GetWhyCopyableHasNoEffect(entry, context.Compilation) is { } why)
                 Report(Rules.SafeListCopyableHasNoEffect, entry.Line, entry.Id, why);
+            else if (SafeMemberList.GetWhyFieldHasNoEffect(entry, context.Compilation) is { } whyField)
+                Report(Rules.SafeListFieldHasNoEffect, entry.Line, entry.Id, whyField);
             else if (SafeMemberList.GetAccessorOwnerId(entry, context.Compilation) is { } owner)
                 Report(Rules.SafeListNamesAccessor, entry.Line, entry.Id, owner);
             else if (entry.Marker is SafeListMarker.Clones && SafeMemberList.GetWhyClonesHasNoEffect(entry, context.Compilation, clonesOfFiles) is { } whyNot)
@@ -237,6 +253,16 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
 
         foreach (var error in errors)
             Report(Rules.SafeListLine, error.Line, error.Reason);
+
+        bool IsCopyableWithEffect(SafeListEntry entry) =>
+            entry.Marker is SafeListMarker.Copyable && SafeMemberList.GetWhyCopyableHasNoEffect(entry, context.Compilation) is null;
+
+        // A 'noncopyable' or 'unsafetocopy' line for a type that already is what it says. Its author learns of it; a project that gets the
+        // file from a library has nothing to fix.
+        string? FindWhyNonCopyableHasNoEffect(SafeListEntry entry) =>
+            entry.Marker is SafeListMarker.NonCopyable && !copyableOfFiles.Contains(entry.Id) && !IsFileOfAPackage(context.AdditionalFile, context.Options)
+                ? SafeMemberList.GetWhyNonCopyableHasNoEffect(entry, context.Compilation)
+                : null;
 
         void Report(Rule rule, TextLine line, params object[] arguments)
         {
@@ -356,7 +382,7 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
             foreach (var (member, declared) in _declared.Keys)
             {
                 if (!_checked.ContainsKey((member, declared)) && declared.Locations.FirstOrDefault(static location => location.IsInSource) is { } location)
-                    context.ReportDiagnostic(severities.Create(Rules.MovedFromPathsNotChecked, location, declared.Name, member.ToDisplayString(SymbolDisplayFormat.CSharpShortErrorMessageFormat)));
+                    context.ReportDiagnostic(severities.CreateAbout(Rules.MovedFromPathsNotChecked, Subject.OfDeclared(declared.Type), location, declared.Name, member.ToDisplayString(SymbolDisplayFormat.CSharpShortErrorMessageFormat)));
             }
 
             foreach (var passed in _passedSlots)

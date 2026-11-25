@@ -208,7 +208,7 @@ public class BorrowsWhenTests
 
         {{Writer}}
 
-        {{Sources.Guard}}
+        {{Sources.UnsafeGuard}}
         """,
         ListFile,
         Verify.UsedAfterHandOff(0, "guard", "Guard", TryWrite, 1).AsError());
@@ -803,7 +803,7 @@ public class BorrowsWhenTests
         Verify.SafeListLine(15, 1, 54, "an entry has one marker, which 'for=' can follow"),
         Verify.SafeListLine(16, 1, 45, "an entry has one marker, which 'for=' can follow"),
         Verify.SafeListLine(17, 1, 43, "'for=' is the last part of an entry"),
-        Verify.SafeListLine(18, 1, 26, "the marker 'borrowswhen' is for a method; a type takes 'view', 'noncopyable', 'copyable', 'erasable' or 'clones'"),
+        Verify.SafeListLine(18, 1, 26, "the marker 'borrowswhen' is for a method; a type takes 'view', 'noncopyable', 'unsafetocopy', 'copyable', 'erasable' or 'clones'"),
         Verify.SafeListLine(19, 1, 32, "the marker 'borrowswhen' is for a method"),
         Verify.SafeListLine(20, 1, 34, ResultIsForABoolean),
         Verify.SafeListLine(21, 1, 38, ResultIsForABoolean),
@@ -814,7 +814,7 @@ public class BorrowsWhenTests
         Verify.SafeListLine(26, 1, 43, NeedsAParameter),
         Verify.SafeListLine(27, 1, 61, NeedsAParameter),
         Verify.SafeListLine(28, 1, 43, "'U' is not a type parameter of the member or of a type that contains it"),
-        Verify.SafeListLine(29, 1, 34, "unknown marker 'takeswhen=true'; the markers are 'new', 'borrows', 'drains', 'owned', 'borrowswhen', 'view', 'noncopyable', 'copyable', 'erasable' and 'clones', and 'trusted' for an assembly"),
+        Verify.SafeListLine(29, 1, 34, "unknown marker 'takeswhen=true'; the markers are 'new', 'borrows', 'drains', 'owned', 'borrowswhen', 'view', 'noncopyable', 'unsafetocopy', 'copyable', 'erasable' and 'clones', and 'trusted' for an assembly"),
         Verify.SafeListUnknownOutcome(30, 39, "returns"),
         Verify.SafeListUnknownOutcome(31, 37, "maybe"),
         Verify.SafeListUnknownOutcome(32, 52, "never"),
@@ -1288,7 +1288,7 @@ public class BorrowsWhenTests
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
 
         var listType = typeof(DoNotCopyValueAnalyzer).Assembly.GetType("Singulink.CodeAnalysis.Analyzers.SafeMemberList", throwOnError: true)!;
-        IReadOnlyList<SourceText> texts = [.. files.Select(f => SourceText.From(f))];
+        IReadOnlyList<(SourceText Text, bool IsOfAPackage)> texts = [.. files.Select(f => (SourceText.From(f), false))];
         object list = listType.GetMethod("Create")!.Invoke(null, [texts, true, compilation])!;
         object? entry = listType.GetMethod("GetMember", [typeof(string)])!.Invoke(list, [id]);
 

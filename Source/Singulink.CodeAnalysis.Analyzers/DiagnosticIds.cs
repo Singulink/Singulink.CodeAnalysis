@@ -90,6 +90,12 @@ public static class DiagnosticIds
     public const string UsedAfterHandOff = "SCA1016";
 
     /// <summary>
+    /// A struct declares an instance field of a type that is unsafe to copy, and its own <c>[NonCopyable]</c> attribute does not say
+    /// <c>UnsafeToCopy = true</c>.
+    /// </summary>
+    public const string UnsafeToCopyField = "SCA1017";
+
+    /// <summary>
     /// A member of a generic whose type parameter is not marked is used with a non-copyable type, and the member is not on the safe list.
     /// </summary>
     public const string UnlistedMember = "SCA1020";
@@ -120,6 +126,12 @@ public static class DiagnosticIds
     /// non-copyable type, and no list vouches for it.
     /// </summary>
     public const string UncheckedAssembly = "SCA1025";
+
+    /// <summary>
+    /// A type that is unsafe to copy is bound to a type parameter that is marked <c>[NonCopyable(UnsafeToCopy = false)]</c>, which does not
+    /// take one.
+    /// </summary>
+    public const string UnsafeToCopyNotTaken = "SCA1026";
 
     /// <summary>
     /// A non-copyable value is read by value from a stored container.
@@ -191,4 +203,10 @@ public static class DiagnosticIds
     /// A member that is nested too deeply for the analyzer, which was not checked.
     /// </summary>
     public const string NestedTooDeeply = "SCA1048";
+
+    /// <summary>
+    /// A non-copyable mark of the project sets <c>UnsafeToCopy</c> in its own code, which the analyzer does not read: it reads the value
+    /// only where the attribute is applied.
+    /// </summary>
+    public const string UnsafeToCopySetInOwnCode = "SCA1049";
 }

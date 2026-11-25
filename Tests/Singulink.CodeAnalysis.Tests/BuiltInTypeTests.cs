@@ -88,6 +88,26 @@ public class BuiltInTypeTests
         Verify.CopyByAssignment(10, "Own"),
         Verify.CopyByAssignment(11, "Listed"));
 
+    // Under the updated rules the five types whose copy can break memory safety are errors: the four GC handles, whose Free or Dispose
+    // releases a slot that may belong to another object by then, and MemoryHandle, whose Dispose frees and unpins. The other six are
+    // the ordinary warning, DispatcherProcessingDisabled among them (below), and so are the project's own plain types.
+    [TestMethod]
+    public Task BuiltInNonCopyableTypes_FiveAreUnsafeToCopyUnderTheUpdatedRules() => Verify.UpdatedRulesAsync(
+        Copies,
+        UserList,
+        Verify.CopyByAssignment(0, "System.Threading.SpinLock"),
+        Verify.CopyByAssignment(1, "System.Runtime.InteropServices.GCHandle").AsError(),
+        Verify.CopyByAssignment(2, "System.Runtime.InteropServices.GCHandle<string>").AsError(),
+        Verify.CopyByAssignment(3, "System.Runtime.InteropServices.PinnedGCHandle<byte[]>").AsError(),
+        Verify.CopyByAssignment(4, "System.Runtime.InteropServices.WeakGCHandle<string>").AsError(),
+        Verify.CopyByAssignment(5, "System.Buffers.MemoryHandle").AsError(),
+        Verify.CopyByAssignment(6, "System.Threading.AsyncFlowControl"),
+        Verify.CopyByAssignment(7, "System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<int>"),
+        Verify.CopyByAssignment(8, "System.Runtime.CompilerServices.DefaultInterpolatedStringHandler"),
+        Verify.CopyByAssignment(9, "System.Threading.Lock.Scope"),
+        Verify.CopyByAssignment(10, "Own"),
+        Verify.CopyByAssignment(11, "Listed"));
+
     // A build in which the targets file of the package did not run has no value, and errs to off; so does any value but 'true'.
     [TestMethod]
     [DataRow("false")]
@@ -321,6 +341,23 @@ public class BuiltInTypeTests
     public async Task DispatcherProcessingDisabled_IsNonCopyable()
     {
         var test = new Verify.Test { TestCode = DispatcherProcessing, ReferenceAssemblies = DesktopReferenceAssemblies };
+        test.ExpectedDiagnostics.Add(Verify.CopyByAssignment(0, "System.Windows.Threading.DispatcherProcessingDisabled"));
+        await test.RunAsync();
+    }
+
+    [TestMethod]
+    public async Task DispatcherProcessingDisabled_IsPlainNonCopyableUnderTheUpdatedRules()
+    {
+        if (!Verify.CompilerHasUpdatedRules)
+            Assert.Inconclusive("The compiler of this target does not apply the updated memory safety rules.");
+
+        var test = new Verify.Test {
+            TestCode = DispatcherProcessing,
+            ReferenceAssemblies = DesktopReferenceAssemblies,
+            LanguageVersion = Microsoft.CodeAnalysis.CSharp.LanguageVersion.Preview,
+            Features = [Verify.UpdatedRulesFeature],
+        };
+
         test.ExpectedDiagnostics.Add(Verify.CopyByAssignment(0, "System.Windows.Threading.DispatcherProcessingDisabled"));
         await test.RunAsync();
     }

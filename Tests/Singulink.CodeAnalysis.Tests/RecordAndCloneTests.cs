@@ -1,3 +1,4 @@
+using Microsoft.CodeAnalysis.Testing;
 using PrefixClassName.MsTest;
 
 namespace Singulink.CodeAnalysis.Tests;
@@ -265,8 +266,9 @@ public class RecordAndCloneTests
         Verify.MemberwiseCloneCall(2, "Holder", "Guard", "_guard"));
 
     // Where the class of the receiver has no field of a non-copyable type, the object that is cloned can be of a derived class that has
-    // one: a derived class of the compilation is a definite copy (SCA1005), a class that another assembly can derive from a possible one
-    // (SCA1008). A sealed class and a struct have no derived class, and a class that no other assembly can derive from has none there.
+    // one: a derived class of the compilation is a definite copy (SCA1005), and a class that another assembly can derive from a possible
+    // one (SCA1008), whatever the classes of the compilation below it hold. A sealed class and a struct have no derived class, and a class
+    // that no other assembly can derive from has none there.
     [TestMethod]
     public Task MemberwiseClone_OfAClassWhoseDerivedClassCanHoldANonCopyableValue() => Verify.AnalyzerAsync(
         $$"""
@@ -320,7 +322,50 @@ public class RecordAndCloneTests
         {{Sources.Guard}}
         """,
         Verify.MemberwiseCloneOfOpenClass(0, "Open"),
-        Verify.MemberwiseCloneOfDerivedClass(1, "Base", "Derived", "Guard", "_guard"));
+        Verify.MemberwiseCloneOfDerivedClass(1, "Base", "Derived", "Guard", "_guard"),
+        Verify.MemberwiseCloneOfOpenClass(1, "Base"));
+
+    // A class that another assembly can derive from, with a field of a non-copyable type: the call copies the field (SCA1005, about the
+    // type of the field), and a class of another assembly that derives from it can hold a value of any type (SCA1008). Both are reported:
+    // the field does not make the report about the class of another assembly go away. Under the updated memory safety rules SCA1005 is
+    // an error where the type of the field is unsafe to copy, and SCA1008 is one whatever it is.
+    [TestMethod]
+    [DataRow(false, false)]
+    [DataRow(false, true)]
+    [DataRow(true, false)]
+    [DataRow(true, true)]
+    public Task MemberwiseClone_OfAnOpenClassWithANonCopyableFieldGetsBothReports(bool updatedRules, bool unsafeToCopy)
+    {
+        string source = $$"""
+            public class Holder
+            {
+                private Guard _guard;
+
+                public object Copy() => {|#0:MemberwiseClone()|};
+            }
+
+            public class Base
+            {
+                public object Copy() => {|#1:MemberwiseClone()|};
+            }
+
+            internal sealed class Derived : Base
+            {
+                private Guard _guard;
+            }
+
+            {{(unsafeToCopy ? Sources.UnsafeGuard : Sources.Guard)}}
+            """;
+
+        DiagnosticResult[] expected = [
+            Verify.MemberwiseCloneCall(0, "Holder", "Guard", "_guard").AsError(updatedRules && unsafeToCopy),
+            Verify.MemberwiseCloneOfDerivedClass(1, "Base", "Derived", "Guard", "_guard").AsError(updatedRules && unsafeToCopy),
+            updatedRules ? Verify.MemberwiseCloneOfOpenClassUnderUpdatedRules(0, "Holder") : Verify.MemberwiseCloneOfOpenClass(0, "Holder"),
+            updatedRules ? Verify.MemberwiseCloneOfOpenClassUnderUpdatedRules(1, "Base") : Verify.MemberwiseCloneOfOpenClass(1, "Base"),
+        ];
+
+        return updatedRules ? Verify.UpdatedRulesAsync(source, expected) : Verify.AnalyzerAsync(source, expected);
+    }
 
     // An assembly with InternalsVisibleTo counts its internal types and constructors as reachable from another assembly.
     [TestMethod]

@@ -1,4 +1,6 @@
 using System.Text;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.Testing;
 using PrefixClassName.MsTest;
 
 namespace Singulink.CodeAnalysis.Tests;
@@ -7,10 +9,34 @@ namespace Singulink.CodeAnalysis.Tests;
 /// Tests of code that is deep or long: the analyzer must get through it, or report the one member that is too deep for it (SCA1048) and go
 /// on with the next, and must never run out of stack, which would end the compiler's process.
 /// </summary>
+/// <remarks>
+/// <para>
+/// How deep the analyzer gets before it gives up depends on how much stack the thread that runs it has, and on how large the frames of
+/// its methods are, which changes as the JIT compiles them again with optimizations. The testing library runs the analysis on whatever
+/// thread it is given, so each test here runs the analyzer on a thread of its own with a fixed stack (<see cref="FixedStackAnalyzer"/>): a
+/// small one where the member must be too deep, and a large one where the analyzer must get through.</para>
+/// <para>
+/// The compiler makes the operations of a member before the analyzer is called, on a thread of the testing library, and it makes those of
+/// a conditional expression and of a chain of calls by recursion. So those forms stay well below the depth at which the compiler runs
+/// out of stack itself: about 1,000 conditionals or 950 calls on a thread of the thread pool on Windows, and a run on another machine
+/// has run out at 850 conditionals. On the small stack, of 192 KB, the analyzer gave up after at most 217 conditionals, 99 calls and 146
+/// terms of a sum with every method fully optimized, the most that it reaches, and after 20, 24 and 40 before the JIT optimized it, on
+/// .NET 10 and .NET 11 alike. A sum of binary operators is one form that the compiler makes without recursion, so it can be as long as
+/// a test likes.</para>
+/// </remarks>
 [PrefixTestClass]
 public class DeepCodeTests
 {
-    private const int CallsInChain = 800;
+    // A stack on which the analyzer gives up on each deep form of these tests, however its methods were compiled. A request for less got
+    // a thread with the same stack on Windows.
+    private const int SmallStack = 192 * 1024;
+
+    // A stack on which the analyzer gets through each long form of these tests, however its methods were compiled.
+    private const int LargeStack = 16 * 1024 * 1024;
+
+    // About twice the most that the analyzer reaches on the small stack, and half of the least at which the compiler has run out.
+    private const int CallsInChain = 400;
+    private const int Conditionals = 450;
 
     [TestMethod]
     public Task ElseIfChain_WithNoNonCopyableTypeIsAnalyzedWithoutAnException()
@@ -29,7 +55,7 @@ public class DeepCodeTests
         source.AppendLine("    }");
         source.AppendLine("}");
 
-        return Verify.AnalyzerAsync(source.ToString());
+        return AnalyzeAsync(LargeStack, source.ToString());
     }
 
     [TestMethod]
@@ -53,7 +79,7 @@ public class DeepCodeTests
         source.AppendLine();
         source.AppendLine(Sources.Guard);
 
-        return Verify.AnalyzerAsync(source.ToString(), [.. Enumerable.Range(0, Branches).Select(i => Verify.CopyByAssignment(i, "Guard"))]);
+        return AnalyzeAsync(LargeStack, source.ToString(), [.. Enumerable.Range(0, Branches).Select(i => Verify.CopyByAssignment(i, "Guard"))]);
     }
 
     [TestMethod]
@@ -72,7 +98,7 @@ public class DeepCodeTests
             }
             """;
 
-        return Verify.AnalyzerAsync(source, Verify.NestedTooDeeply(0, "C.Sum(string)"), Verify.NestedTooDeeply(1, "C.All(bool)"));
+        return AnalyzeAsync(SmallStack, source, Verify.NestedTooDeeply(0, "C.Sum(string)"), Verify.NestedTooDeeply(1, "C.All(bool)"));
     }
 
     [TestMethod]
@@ -80,10 +106,8 @@ public class DeepCodeTests
     {
         var conditional = new StringBuilder();
 
-        // The depth has to sit between two limits that both depend on the machine. Below about 700 the analyzer gets through the
-        // expression and reports nothing. From about 980, the compiler of the newest SDK runs out of stack itself while it makes the
-        // operations, before the analyzer is called, which ends the test process.
-        for (int i = 0; i < 850; i++)
+        // The compiler makes these by recursion: see the remarks of the class for the depth.
+        for (int i = 0; i < Conditionals; i++)
             conditional.Append($"k == {i} ? {i} : ");
 
         conditional.Append("-1");
@@ -95,7 +119,7 @@ public class DeepCodeTests
             }
             """;
 
-        return Verify.AnalyzerAsync(source, Verify.NestedTooDeeply(0, "C.F(int)"));
+        return AnalyzeAsync(SmallStack, source, Verify.NestedTooDeeply(0, "C.F(int)"));
     }
 
     [TestMethod]
@@ -125,7 +149,161 @@ public class DeepCodeTests
             }
             """;
 
-        return Verify.AnalyzerAsync(source, Verify.NestedTooDeeply(0, "C.F(Builder)"));
+        return AnalyzeAsync(SmallStack, source, Verify.NestedTooDeeply(0, "C.F(Builder)"));
+    }
+
+    // Under the updated rules the report is strict only where the member's code involves a value that is unsafe to copy: a type that says
+    // so, or a marked type parameter that does not say UnsafeToCopy = false. Under the current rules each is the ordinary warning.
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public Task TooDeep_IsStrictUnderTheUpdatedRulesOnlyWhereAValueIsUnsafeToCopy(bool updatedRules)
+    {
+        string sum = string.Join(" + ", Enumerable.Repeat("a", 2000));
+        string calls = string.Concat(Enumerable.Repeat(".Add(1)", CallsInChain));
+
+        string source = $$"""
+            using Singulink.CodeAnalysis;
+
+            class C
+            {
+                string {|#0:Plain|}(string a) => {{sum}};
+
+                string {|#1:Marked|}<[NonCopyable] T>(string a, ref T value) => {{sum}};
+
+                string {|#2:MarkedTrue|}<[NonCopyable(UnsafeToCopy = true)] T>(string a, ref T value) => {{sum}};
+
+                string {|#3:MarkedFalse|}<[NonCopyable(UnsafeToCopy = false)] T>(string a, ref T value) => {{sum}};
+
+                string {|#4:Unmarked|}<T>(string a, ref T value) => {{sum}};
+
+                void {|#5:Build|}(Builder builder)
+                {
+                    builder{{calls}}.Dispose();
+                }
+
+                void {|#6:BuildUnsafe|}(UnsafeBuilder builder)
+                {
+                    builder{{calls}}.Dispose();
+                }
+            }
+
+            [NonCopyable]
+            struct Builder
+            {
+                public readonly Builder Add(int value) => default;
+
+                public void Dispose() { }
+            }
+
+            [NonCopyable(UnsafeToCopy = true)]
+            struct UnsafeBuilder
+            {
+                public readonly UnsafeBuilder Add(int value) => default;
+
+                public void Dispose() { }
+            }
+            """;
+
+        DiagnosticResult[] expected = [
+            Verify.NestedTooDeeply(0, "C.Plain(string)"),
+            Verify.NestedTooDeeply(1, "C.Marked<T>(string, ref T)").AsError(updatedRules),
+            Verify.NestedTooDeeply(2, "C.MarkedTrue<T>(string, ref T)").AsError(updatedRules),
+            Verify.NestedTooDeeply(3, "C.MarkedFalse<T>(string, ref T)"),
+            Verify.NestedTooDeeply(4, "C.Unmarked<T>(string, ref T)"),
+            Verify.NestedTooDeeply(5, "C.Build(Builder)"),
+            Verify.NestedTooDeeply(6, "C.BuildUnsafe(UnsafeBuilder)").AsError(updatedRules),
+        ];
+
+        return updatedRules ? AnalyzeUnderUpdatedRulesAsync(SmallStack, source, expected) : AnalyzeAsync(SmallStack, source, expected);
+    }
+
+    // A value that is unsafe to copy counts wherever the code has it: in a local that is declared deep in the member, and not only in
+    // its signature.
+    [TestMethod]
+    public Task TooDeep_IsStrictWhereALocalIsUnsafeToCopy()
+    {
+        string sum = string.Join(" + ", Enumerable.Repeat("a", 2000));
+
+        string source = $$"""
+            class C
+            {
+                string {|#0:Sum|}(string a)
+                {
+                    Guard guard = default;
+                    guard.Dispose();
+                    return {{sum}};
+                }
+            }
+
+            {{Sources.UnsafeGuard}}
+            """;
+
+        return AnalyzeUnderUpdatedRulesAsync(SmallStack, source, Verify.NestedTooDeeply(0, "C.Sum(string)").AsError());
+    }
+
+    // A value that can be of any type counts as one that is unsafe to copy, as for the rules that have no type: a call of
+    // MemberwiseClone, which copies the fields of the class and of any class below it, whatever their types, a call of
+    // RuntimeHelpers.GetObjectValue, and a value of a marked type parameter converted to a type that hides what is bound to it, which can
+    // be a container of a type that is unsafe to copy also where the type parameter says UnsafeToCopy = false.
+    [TestMethod]
+    public Task TooDeep_IsStrictWhereAValueCanBeOfAnyType()
+    {
+        string sum = string.Join(" + ", Enumerable.Repeat("a", 2000));
+
+        string source = $$"""
+            using System.Runtime.CompilerServices;
+
+            class Holder
+            {
+                UG _unsafe;
+
+                public object {|#0:Clone|}(string a)
+                {
+                    _ = {{sum}};
+                    return MemberwiseClone();
+                }
+            }
+
+            sealed class Plain
+            {
+                public object {|#1:Clone|}(string a)
+                {
+                    _ = {{sum}};
+                    return MemberwiseClone();
+                }
+            }
+
+            class C
+            {
+                object {|#2:Boxed|}(string a, object boxed)
+                {
+                    _ = {{sum}};
+                    return RuntimeHelpers.GetObjectValue(boxed);
+                }
+
+                object {|#3:Converted|}<[Singulink.CodeAnalysis.NonCopyable(UnsafeToCopy = false)] T>(string a, T value)
+                    where T : class
+                {
+                    _ = {{sum}};
+                    return value;
+                }
+
+                string {|#4:Sum|}(string a) => {{sum}};
+            }
+
+            [Singulink.CodeAnalysis.NonCopyable(UnsafeToCopy = true)]
+            struct UG { }
+            """;
+
+        return AnalyzeUnderUpdatedRulesAsync(
+            SmallStack,
+            source,
+            Verify.NestedTooDeeply(0, "Holder.Clone(string)").AsError(),
+            Verify.NestedTooDeeply(1, "Plain.Clone(string)").AsError(),
+            Verify.NestedTooDeeply(2, "C.Boxed(string, object)").AsError(),
+            Verify.NestedTooDeeply(3, "C.Converted<T>(string, T)").AsError(),
+            Verify.NestedTooDeeply(4, "C.Sum(string)"));
     }
 
     [TestMethod]
@@ -155,7 +333,8 @@ public class DeepCodeTests
             {{Sources.Guard}}
             """;
 
-        return Verify.AnalyzerAsync(
+        return AnalyzeAsync(
+            SmallStack,
             source,
             Verify.CopyByAssignment(0, "Guard"),
             Verify.NestedTooDeeply(1, "C.Sum(string)"),
@@ -187,6 +366,29 @@ public class DeepCodeTests
         source.AppendLine();
         source.AppendLine(Sources.Guard);
 
-        return Verify.AnalyzerAsync(source.ToString(), Verify.CopyByAssignment(0, "Guard"));
+        return AnalyzeAsync(LargeStack, source.ToString(), Verify.CopyByAssignment(0, "Guard"));
+    }
+
+    private static Task AnalyzeAsync(int stackSize, string source, params DiagnosticResult[] expected)
+    {
+        var test = new Verify.Test { TestCode = source, AnalysisStackSize = stackSize };
+        test.ExpectedDiagnostics.AddRange(expected);
+        return test.RunAsync();
+    }
+
+    private static Task AnalyzeUnderUpdatedRulesAsync(int stackSize, string source, params DiagnosticResult[] expected)
+    {
+        if (!Verify.CompilerHasUpdatedRules)
+            Assert.Inconclusive("The compiler of this target does not apply the updated memory safety rules.");
+
+        var test = new Verify.Test {
+            TestCode = source,
+            AnalysisStackSize = stackSize,
+            LanguageVersion = LanguageVersion.Preview,
+            Features = [Verify.UpdatedRulesFeature],
+        };
+
+        test.ExpectedDiagnostics.AddRange(expected);
+        return test.RunAsync();
     }
 }
