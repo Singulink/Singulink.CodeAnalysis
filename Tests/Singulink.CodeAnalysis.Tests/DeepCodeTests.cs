@@ -80,7 +80,10 @@ public class DeepCodeTests
     {
         var conditional = new StringBuilder();
 
-        for (int i = 0; i < 1000; i++)
+        // The depth has to sit between two limits that both depend on the machine. Below about 700 the analyzer gets through the
+        // expression and reports nothing. From about 980, the compiler of the newest SDK runs out of stack itself while it makes the
+        // operations, before the analyzer is called, which ends the test process.
+        for (int i = 0; i < 850; i++)
             conditional.Append($"k == {i} ? {i} : ");
 
         conditional.Append("-1");
