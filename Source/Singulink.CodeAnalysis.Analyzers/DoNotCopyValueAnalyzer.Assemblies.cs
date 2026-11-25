@@ -29,6 +29,7 @@ public sealed partial class DoNotCopyValueAnalyzer
     /// </remarks>
     private static void AnalyzeUncheckedReferences(
         CompilationAnalysisContext context,
+        Severities severities,
         SafeMemberList list,
         NonCopyableTypes types,
         IReadOnlyList<(AdditionalText File, SourceText Text)> listFiles,
@@ -57,7 +58,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                 usesNonCopyableTypes.Add(assembly);
 
                 if (!list.IsTrusted(assembly))
-                    context.ReportDiagnostic(Diagnostic.Create(Rules.UncheckedAssembly, Location.None, assembly.Name, found.Assembly.Name, found.Type));
+                    context.ReportDiagnostic(severities.Create(Rules.UncheckedAssembly, Location.None, assembly.Name, found.Assembly.Name, found.Type));
             }
         }
 
@@ -90,7 +91,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                     usesNonCopyableTypes.Add(assembly);
 
                     if (!list.IsTrusted(assembly))
-                        context.ReportDiagnostic(Diagnostic.Create(Rules.UncheckedFriendAssembly, Location.None, assembly.Name, reference.Name));
+                        context.ReportDiagnostic(severities.Create(Rules.UncheckedFriendAssembly, Location.None, assembly.Name, reference.Name));
 
                     break;
                 }
@@ -106,7 +107,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                 // The member can be of an assembly that the reference forwards a type to, so its own assembly is the one that is named.
                 if (!list.IsTrusted(assembly))
                 {
-                    context.ReportDiagnostic(Diagnostic.Create(
+                    context.ReportDiagnostic(severities.Create(
                         Rules.UncheckedAssemblyOfExposedValue, Location.None, assembly.Name, exposed.ContainingAssembly.Name, Display(exposed)));
                 }
 
@@ -186,7 +187,7 @@ public sealed partial class DoNotCopyValueAnalyzer
             usesNonCopyableTypes.Add(assembly);
 
             if (!list.IsTrusted(assembly))
-                context.ReportDiagnostic(Diagnostic.Create(Rules.UncheckedReferenceAssembly, Location.None, assembly.Name, within.Name, why));
+                context.ReportDiagnostic(severities.Create(Rules.UncheckedReferenceAssembly, Location.None, assembly.Name, within.Name, why));
         }
 
         hasEffect.UnionWith(usesNonCopyableTypes);
@@ -206,7 +207,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                 if (GetWhyTrustedHasNoEffect(name, compilation, referenced, hasEffect) is { } why)
                 {
                     var location = Location.Create(file.Path, entry.Line.Span, text.Lines.GetLinePositionSpan(entry.Line.Span));
-                    context.ReportDiagnostic(Diagnostic.Create(Rules.SafeListTrustedHasNoEffect, location, name, why));
+                    context.ReportDiagnostic(severities.Create(Rules.SafeListTrustedHasNoEffect, location, name, why));
                 }
             }
         }
@@ -517,7 +518,7 @@ public sealed partial class DoNotCopyValueAnalyzer
     /// Gets the assemblies of the compilation that declare a non-copyable type, the compilation's own included, each with one such type,
     /// and the assemblies that forward one there. A type counts that a [NonCopyable] mark makes non-copyable, or a 'noncopyable' line of a
     /// list file where the type is of checked code, and that no 'copyable' line takes out. The built-in non-copyable types do not: every
-    /// assembly references the framework.
+    /// assembly references the framework, and every assembly of WPF references WindowsBase.
     /// </summary>
     /// <remarks>
     /// A struct that a list line names is found by its ID, and its assembly is not read. The types are read only in an assembly that can

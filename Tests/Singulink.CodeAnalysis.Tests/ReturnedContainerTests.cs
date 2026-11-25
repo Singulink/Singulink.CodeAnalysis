@@ -7,7 +7,7 @@ namespace Singulink.CodeAnalysis.Tests;
 /// Tests of the rule that a method hands over the container that it returns, and of <c>[Borrowed]</c> for a method that keeps it.
 /// </summary>
 /// <remarks>
-/// Docs: articles/concepts/returning-containers.md.
+/// Docs: articles/rules/returning-containers.md.
 /// </remarks>
 [PrefixTestClass]
 public class ReturnedContainerTests

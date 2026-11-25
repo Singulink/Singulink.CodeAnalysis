@@ -67,7 +67,7 @@ public class SafeListTests
                 var handleCopy = handle;
 
                 // A struct that the file names as non-copyable.
-                var opaqueCopy {|#2:= _opaque|};
+                var opaqueCopy = {|#2:_opaque|};
 
                 // The built-in list still applies.
                 var list = new List<Guard>();
@@ -208,7 +208,7 @@ public class SafeListTests
 
         test.ExpectedDiagnostics.Add(new DiagnosticResult(DiagnosticIds.SafeListLine, DiagnosticSeverity.Warning)
             .WithSpan(SecondLibraryFile, 2, 1, 2, 24)
-            .WithMessage("This line of the symbol list file cannot be parsed: unknown marker 'unknown'; the markers are 'new', 'borrows', 'drains', 'owned', 'view', 'noncopyable', 'copyable', 'erasable' and 'clones', and 'trusted' for an assembly"));
+            .WithMessage("This line of the symbol list file cannot be parsed: unknown marker 'unknown'; the markers are 'new', 'borrows', 'drains', 'owned', 'borrowswhen', 'view', 'noncopyable', 'copyable', 'erasable' and 'clones', and 'trusted' for an assembly"));
 
         return test.RunAsync();
     }
@@ -228,12 +228,12 @@ public class SafeListTests
             {
                 // The built-in list has SpinLock as non-copyable and Stack<T>.Peek without 'new'. Where two entries disagree, the one that
                 // claims less applies, so the user file changes neither.
-                SpinLock copy {|#0:= _lock|};
+                SpinLock copy = {|#0:_lock|};
                 Guard peeked = {|#1:stack.Peek()|};
 
                 // It can tighten: a view becomes non-copyable.
-                Span<Guard> spanCopy {|#2:= span|};
-                Span<Guard> last = span;
+                Span<Guard> spanCopy = {|#2:span|};
+                Span<Guard> last = {|#3:span|};
 
                 // A line whose 'for=' names a type parameter that the member does not have is reported and ignored, like any other line
                 // that cannot be parsed: the built-in entry stays as it is.
@@ -251,7 +251,7 @@ public class SafeListTests
         """,
         Verify.CopyByAssignment(0, "System.Threading.SpinLock"),
         Verify.ReadFromStoredContainer(1, "'Stack<T>.Peek()'", "Guard"),
-        Verify.CopyByAssignment(2, "System.Span<Guard>"),
+        Verify.UsedAfterHandOff(3, "span", "System.Span<Guard>", "its value was assigned to \'spanCopy\'", 2),
         Verify.SafeListLine(4, 1, 52, "'TNone' is not a type parameter of the member or of a type that contains it"));
 
     [TestMethod]
@@ -315,9 +315,9 @@ public class SafeListTests
         Verify.SafeListLine(7, 1, 3, "expected a documentation comment ID that starts with 'M:', 'P:', 'E:' or 'T:', or the name of an assembly after 'A:'"),
         Verify.SafeListLine(8, 1, 8, "a type needs the marker 'view', 'noncopyable', 'copyable', 'erasable' or 'clones'; there is no entry for every member of a type"),
         Verify.SafeListLine(9, 1, 19, "the marker 'new' is for a member; a type takes 'view', 'noncopyable', 'copyable', 'erasable' or 'clones'"),
-        Verify.SafeListLine(10, 1, 18, "the marker 'view' is for a type; a member takes 'new', 'borrows', 'drains', 'owned', 'clones' or no marker"),
-        Verify.SafeListLine(11, 1, 25, "the marker 'noncopyable' is for a type; a member takes 'new', 'borrows', 'drains', 'owned', 'clones' or no marker"),
-        Verify.SafeListLine(12, 1, 18, "unknown marker 'safe'; the markers are 'new', 'borrows', 'drains', 'owned', 'view', 'noncopyable', 'copyable', 'erasable' and 'clones', and 'trusted' for an assembly"),
+        Verify.SafeListLine(10, 1, 18, "the marker 'view' is for a type; a member takes 'new', 'borrows', 'drains', 'owned', 'borrowswhen', 'clones' or no marker"),
+        Verify.SafeListLine(11, 1, 25, "the marker 'noncopyable' is for a type; a member takes 'new', 'borrows', 'drains', 'owned', 'borrowswhen', 'clones' or no marker"),
+        Verify.SafeListLine(12, 1, 18, "unknown marker 'safe'; the markers are 'new', 'borrows', 'drains', 'owned', 'borrowswhen', 'view', 'noncopyable', 'copyable', 'erasable' and 'clones', and 'trusted' for an assembly"),
         Verify.SafeListLine(13, 1, 21, "an entry has one marker, which 'for=' can follow"),
         Verify.SafeListLine(14, 1, 14, "a documentation comment ID has no white space"),
         Verify.SafeListLine(16, 1, 27, "'for=' is for a member"),
@@ -410,24 +410,40 @@ public class SafeListTests
         string list = ReadBuiltInList();
 
         // As a user file the built-in list reports every line that cannot be parsed, every 'for=' name that its member does not have and every
-        // 'erasable' that is not on a generic class or interface. Its 'clones' lines name classes of the desktop pack as well.
+        // 'erasable' that is not on a generic class or interface. Its 'clones' lines name classes of the desktop pack as well. A 'clones'
+        // line that names nothing gets a warning in a user file, so the lines marked "# netfx" are read on the .NET Framework below.
         var asUserFile = new Verify.Test {
             TestCode = "class C { }",
             ReferenceAssemblies = Verify.Test.NetReferenceAssemblies.AddPackages([new PackageIdentity("Microsoft.WindowsDesktop.App.Ref", "10.0.0")]),
         };
 
-        asUserFile.TestState.AdditionalFiles.Add((Verify.ListFileName, list));
+        string[] lines = list.Split('\n');
+        asUserFile.TestState.AdditionalFiles.Add((Verify.ListFileName, string.Join("\n", lines.Select(l => IsNetFrameworkLine(l) ? string.Empty : l))));
 
         // The core pack has a WindowsBase of its own with none of WPF's types, which the desktop pack's would otherwise give way to.
         asUserFile.TestState.AdditionalReferences.Add((await ResolvePackAsync("Microsoft.WindowsDesktop.App.Ref", "10.0.0")).Single(r => Path.GetFileName(r.Display) is "WindowsBase.dll"));
         asUserFile.CompilerDiagnostics = CompilerDiagnostics.None;
         await asUserFile.RunAsync();
 
-        // The framework of .NET 10 with ASP.NET Core, whose HybridCache has entries, and that of .NET 11 for a line marked "# net11+".
+        var netFrameworkAsUserFile = new Verify.Test {
+            TestCode = "class C { }",
+            ReferenceAssemblies = FrameworkScanTests.NetFrameworkReferencePackage,
+            CompilerDiagnostics = CompilerDiagnostics.None,
+        };
+
+        netFrameworkAsUserFile.TestState.AdditionalFiles.Add((Verify.ListFileName, string.Join("\n", lines.Where(IsNetFrameworkLine))));
+        netFrameworkAsUserFile.TestState.AdditionalReferences.AddRange((await FrameworkScanTests.GetNetFrameworkReferenceAssembliesAsync()).Where(r => Path.GetFileName(r.Display) is not "mscorlib.dll"));
+        await netFrameworkAsUserFile.RunAsync();
+
+        // The framework of .NET 10 with ASP.NET Core, whose HybridCache has entries, that of .NET 11 for a line marked "# net11+", and the
+        // reference assemblies of the .NET Framework 4.8.1 for a line marked "# netfx".
         var compilation = await CreateFrameworkCompilationAsync("10.0.0");
         var compilation11 = await CreateFrameworkCompilationAsync("11.0.0");
+        var netFramework = CSharpCompilation.Create("Test", references: await FrameworkScanTests.GetNetFrameworkReferenceAssembliesAsync());
+
         var unresolved = new List<string>();
-        int count = 0;
+        var onNet = new List<string>();
+        int count = 0, netFrameworkCount = 0;
 
         foreach (string line in list.Split('\n'))
         {
@@ -439,15 +455,32 @@ public class SafeListTests
             string id = entry.Split(';', ' ')[0];
             count++;
 
-            var symbols = DocumentationCommentId.GetSymbolsForDeclarationId(id, entry.EndsWith("# net11+", StringComparison.Ordinal) ? compilation11 : compilation);
+            var framework = IsNetFrameworkLine(entry)
+                ? netFramework
+                : entry.EndsWith("# net11+", StringComparison.Ordinal) ? compilation11 : compilation;
+
+            var symbols = DocumentationCommentId.GetSymbolsForDeclarationId(id, framework);
+
+            // A line of the .NET Framework names nothing of .NET, where it would apply as well.
+            if (framework == netFramework)
+            {
+                netFrameworkCount++;
+
+                if (DocumentationCommentId.GetSymbolsForDeclarationId(id, compilation).Length > 0 || DocumentationCommentId.GetSymbolsForDeclarationId(id, compilation11).Length > 0)
+                    onNet.Add(id);
+            }
 
             // A protected member is one that a class of another assembly that derives from the class can call.
             if (symbols is not [{ DeclaredAccessibility: Accessibility.Public or Accessibility.Protected or Accessibility.ProtectedOrInternal }])
                 unresolved.Add(id);
         }
 
-        Assert.AreEqual(877, count);
-        Assert.IsEmpty(unresolved, "Entries that do not name one public symbol of .NET 10: " + string.Join(", ", unresolved));
+        Assert.AreEqual(893, count);
+        Assert.AreEqual(13, netFrameworkCount);
+        Assert.IsEmpty(unresolved, "Entries that do not name one public symbol of their framework: " + string.Join(", ", unresolved));
+        Assert.IsEmpty(onNet, "Entries marked \"# netfx\" that name a symbol of .NET 10 or .NET 11: " + string.Join(", ", onNet));
+
+        static bool IsNetFrameworkLine(string line) => line.TrimEnd().EndsWith("# netfx", StringComparison.Ordinal);
     }
 
     // A member that the list names for other type parameters than the one that a non-copyable type or a container is bound to gets a
@@ -603,19 +636,31 @@ public class SafeListTests
     [TestMethod]
     public void Diagnostics_EveryDescriptorOfTheRulesIsSupported()
     {
-        // The class is internal to the analyzer.
-        var declared = typeof(DoNotCopyValueAnalyzer).Assembly.GetType("Singulink.CodeAnalysis.Analyzers.Rules", throwOnError: true)!
+        // The classes are internal to the analyzer. Each rule has a descriptor for every severity that it can be reported with.
+        var assembly = typeof(DoNotCopyValueAnalyzer).Assembly;
+        var ruleType = assembly.GetType("Singulink.CodeAnalysis.Analyzers.Rule", throwOnError: true)!;
+        var descriptorsOfRule = ruleType.GetProperty("Descriptors")!;
+
+        var declared = assembly.GetType("Singulink.CodeAnalysis.Analyzers.Rules", throwOnError: true)!
             .GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
-            .Where(field => field.FieldType == typeof(DiagnosticDescriptor))
+            .Where(field => field.FieldType == ruleType)
             .ToList();
 
         var supported = new DoNotCopyValueAnalyzer().SupportedDiagnostics;
+        int count = 0;
 
         Assert.IsNotEmpty(declared);
-        Assert.HasCount(declared.Count, supported);
 
         foreach (var field in declared)
-            Assert.IsTrue(supported.Any(descriptor => ReferenceEquals(descriptor, field.GetValue(null))), $"Rules.{field.Name} is not in Rules.All.");
+        {
+            foreach (var descriptor in (IEnumerable<DiagnosticDescriptor>)descriptorsOfRule.GetValue(field.GetValue(null))!)
+            {
+                Assert.IsTrue(supported.Any(supported => ReferenceEquals(supported, descriptor)), $"Rules.{field.Name} is not in Rules.All.");
+                count++;
+            }
+        }
+
+        Assert.HasCount(count, supported);
     }
 
     [TestMethod]
@@ -624,7 +669,7 @@ public class SafeListTests
         var descriptors = new DoNotCopyValueAnalyzer().SupportedDiagnostics;
 
         string[] ids = [
-            "SCA1001", "SCA1002", "SCA1003", "SCA1004", "SCA1005", "SCA1006", "SCA1007", "SCA1008", "SCA1009", "SCA1010", "SCA1011", "SCA1012", "SCA1013", "SCA1014", "SCA1015", "SCA1020", "SCA1021",
+            "SCA1001", "SCA1002", "SCA1003", "SCA1004", "SCA1005", "SCA1006", "SCA1007", "SCA1008", "SCA1009", "SCA1010", "SCA1011", "SCA1012", "SCA1013", "SCA1014", "SCA1015", "SCA1016", "SCA1020", "SCA1021",
             "SCA1022", "SCA1023", "SCA1024", "SCA1025", "SCA1030", "SCA1031", "SCA1032", "SCA1033", "SCA1040", "SCA1041", "SCA1042", "SCA1043", "SCA1044", "SCA1045",
             "SCA1046", "SCA1047", "SCA1048",
         ];
@@ -637,7 +682,6 @@ public class SafeListTests
                 "https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/diagnostics/" + descriptor.Id.ToLowerInvariant() + ".html",
                 descriptor.HelpLinkUri);
             Assert.AreEqual("Reliability", descriptor.Category);
-            Assert.AreEqual(DiagnosticSeverity.Warning, descriptor.DefaultSeverity);
             Assert.IsTrue(descriptor.IsEnabledByDefault);
         }
     }
@@ -747,6 +791,8 @@ public class SafeListTests
 
                 // Any other member is given a copy that it may keep, also one that a list names with no marker or with 'new'.
                 int c = Native.Keep({|#0:_guard|});
+
+                // A 'borrows' line cannot loosen a built-in entry with no marker, and gets a warning for claiming more.
                 list.Add({|#1:_guard|});
 
                 // A user file cannot loosen the built-in list, and can tighten it: where two entries disagree, no marker wins.
@@ -767,6 +813,7 @@ public class SafeListTests
         Verify.CopyOfStoredValue(0, "'Native.Keep(Guard)' receives", "Guard"),
         Verify.CopyOfStoredValue(1, "'List<Guard>.Add(Guard)' receives", "Guard"),
         Verify.CopyOfStoredValue(2, "'GCHandle.ToIntPtr(GCHandle)' receives", "System.Runtime.InteropServices.GCHandle"),
+        Verify.SafeListBorrowsBeyondBuiltIn(3, 52, "M:System.Collections.Generic.List`1.Add(`0)", "with no marker"),
         Verify.SafeListLine(5, 1, 16, "the marker 'borrows' is for a member; a type takes 'view', 'noncopyable', 'copyable', 'erasable' or 'clones'"),
         Verify.SafeListLine(6, 1, 54, "an entry has one marker, which 'for=' can follow"));
 
@@ -1738,7 +1785,7 @@ public class SafeListTests
                 var box = new StrongBox<Guard>(rwLock.Enter());
                 box.Value.Dispose();
                 _box.Value = rwLock.Enter();
-                Guard copy {|#0:= _box.Value|};
+                Guard copy = {|#0:_box.Value|};
             }
         }
 
@@ -1772,7 +1819,7 @@ public class SafeListTests
                 var pair = _pair;
                 var first = handles[0];
                 var same = Identity(_handle);
-                var spinLock {|#0:= _spinLock|};
+                var spinLock = {|#0:_spinLock|};
             }
         }
 
@@ -1799,7 +1846,7 @@ public class SafeListTests
                     void M()
                     {
                         var lease = _lease;
-                        var ticket {|#0:= _ticket|};
+                        var ticket = {|#0:_ticket|};
                     }
                 }
                 """,
@@ -1839,7 +1886,7 @@ public class SafeListTests
 
             void M()
             {
-                var own {|#0:= _own|};
+                var own = {|#0:_own|};
             }
         }
 
@@ -1868,7 +1915,7 @@ public class SafeListTests
             "nothing makes the type non-copyable by itself, neither the built-in list nor an attribute; a struct that holds a non-copyable value stays non-copyable through it"),
         Verify.SafeListCopyableHasNoEffect(3, 1, 21, "T:Not.There", "the compilation has no type of that ID"),
         Verify.SafeListLine(4, 1, 25, "the marker 'copyable' is for a struct"),
-        Verify.SafeListLine(5, 1, 20, "the marker 'copyable' is for a type; a member takes 'new', 'borrows', 'drains', 'owned', 'clones' or no marker"));
+        Verify.SafeListLine(5, 1, 20, "the marker 'copyable' is for a type; a member takes 'new', 'borrows', 'drains', 'owned', 'borrowswhen', 'clones' or no marker"));
 
     // Where one file says 'copyable' and another 'noncopyable' of the same type, 'noncopyable' applies. The built-in list is no such file:
     // overriding it is what the marker is for.
@@ -1885,7 +1932,7 @@ public class SafeListTests
 
                     void M()
                     {
-                        var handle {|#0:= _handle|};
+                        var handle = {|#0:_handle|};
                     }
                 }
                 """,

@@ -6,7 +6,7 @@ namespace Singulink.CodeAnalysis.Tests;
 /// Tests of conversions that lose the non-copyable type: a container that is used as an untyped collection or as an opaque type.
 /// </summary>
 /// <remarks>
-/// Docs: articles/concepts/conversions.md.
+/// Docs: articles/rules/conversions.md.
 /// </remarks>
 [PrefixTestClass]
 public class ConversionTests
@@ -221,7 +221,7 @@ public class ConversionTests
         Verify.ReadFromStoredContainer(1, "'Stores.Take<T>(Store<T>)'", "Guard"),
         Verify.SafeListLine(3, 1, 24, "the marker 'erasable' is for a generic class or interface"),
         Verify.SafeListLine(4, 1, 17, "the marker 'erasable' is for a generic class or interface"),
-        Verify.SafeListLine(5, 1, 38, "the marker 'erasable' is for a type; a member takes 'new', 'borrows', 'drains', 'owned', 'clones' or no marker"));
+        Verify.SafeListLine(5, 1, 38, "the marker 'erasable' is for a type; a member takes 'new', 'borrows', 'drains', 'owned', 'borrowswhen', 'clones' or no marker"));
 
     [TestMethod]
     public Task ConversionWithNoCastWritten() => Verify.AnalyzerAsync(
@@ -329,16 +329,16 @@ public class ConversionTests
                 object q = {|#3:maybe|};
 
                 // Each is read again here, so none of the conversions above is at the last use of its variable.
-                _ = (guard, pending, maybe);
+                _ = ({|#4:guard|}, {|#5:pending|}, {|#6:maybe|});
             }
         }
 
         {{Sources.Guard}}
         """,
-        Verify.Boxing(0, "Guard", "object"),
-        Verify.Boxing(1, "System.Threading.Tasks.ValueTask<Guard>", "object"),
-        Verify.Boxing(2, "Guard", "System.IDisposable"),
-        Verify.Boxing(3, "Guard?", "object"));
+        Verify.UsedAfterHandOff(2, "guard", "Guard", "its value was converted to \'object\'", 0),
+        Verify.UsedAfterHandOff(5, "pending", "System.Threading.Tasks.ValueTask<Guard>", "its value was converted to \'object\'", 1),
+        Verify.UsedAfterHandOff(4, "guard", "Guard", "its value was converted to \'IDisposable\'", 2),
+        Verify.UsedAfterHandOff(6, "maybe", "Guard?", "its value was converted to \'object\'", 3));
 
     [TestMethod]
     public Task ErasableType_HidesWhatIsInsideIt() => Verify.AnalyzerAsync(
@@ -1187,14 +1187,14 @@ public class ConversionTests
             void M(List<List<Guard>> lists, Guard[] array, RwLock rwLock)
             {
                 // A container becomes a type that hides its elements, with no conversion written.
-                foreach ({|#0:IList|} list in lists) { }
-                foreach ({|#1:object|} list in lists) { }
+                foreach (IList list in {|#0:lists|}) { }
+                foreach (object list in {|#1:lists|}) { }
                 foreach (IReadOnlyList<Guard> list in lists) { }
                 foreach (var list in lists) { }
 
                 // A stored value is boxed, which is a copy.
-                foreach ({|#2:object|} item in array) { }
-                foreach ({|#3:IDisposable|} item in array) { }
+                foreach (object item in {|#2:array|}) { }
+                foreach (IDisposable item in {|#3:array|}) { }
 
                 // A new one is moved into the box.
                 foreach (IDisposable item in rwLock.CreateGuards()) { }
@@ -1203,7 +1203,7 @@ public class ConversionTests
             void Generic<[NonCopyable] T>()
             {
                 // With a container bound to the type parameter there is no box.
-                foreach ({|#4:object|} item in Create<T>()) { }
+                foreach (object item in {|#4:Create<T>()|}) { }
             }
         }
 

@@ -17,6 +17,7 @@ It does not restate the rules. Where a rule is named here, follow the link for t
 - [Attributes and Marks](#attributes-and-marks)
 - [Code Not Built With the Analyzer](#code-not-built-with-the-analyzer)
 - [Symbol List](#symbol-list)
+- [Errors and Warnings](#errors-and-warnings)
 - [Alternatives That Were Given Up](#alternatives-that-were-given-up)
 - [Warnings on Correct Code That Were Accepted](#warnings-on-correct-code-that-were-accepted)
 - [Limits That Were Accepted](#limits-that-were-accepted)
@@ -81,6 +82,46 @@ still be reached by something else after the read, so the last read of them says
 A local that holds a container is moved from only if the method can be seen to own it. Two locals can hold the same task, so the last
 use of one says nothing about the other. A local of a non-copyable type needs no such test: every assignment between variables is
 already a copy or a move, so each variable owns its value.
+
+A read by value that is no last use only because the variable is used after it is a copy, and it is reported at the first use after it
+on each path (SCA1016), with the read as an additional location: that is where the code goes wrong, as in
+`queue.Enqueue(lease); lease.Dispose();`, where `Enqueue` was given the value and `Dispose` runs on the variable that still holds it.
+The message leads with what happened, "'lease' is used after 'Queue<Lease>.Enqueue(Lease)' received its value, so that hand-off was a
+copy", with the words of the hand-off in the past tense (`NonCopyableWalker.DescribeHandOff`), and its variants for a handler keep their
+second halves after the same opening.
+A later use is every use that a path from the read reaches without passing another use; an assignment of the whole variable ends a
+path, and an exception that can leave a block leads to its handlers (`MemberFlow.FindFirstLaterUses`). Only the place and the ID of
+the report change, never what is accepted, and that is made sure of by how the report is moved: a second walk of the member takes
+those reads for last uses, and a report of the first walk that contains such a read and that the second walk does not make is the
+one that the read made (`DoNotCopyValueAnalyzer.HandOffs.cs`). The second walk runs only for a member that has such a report. A later
+use is reported once, whatever hand-offs reach it, and a later use that is itself a hand-off is the hand-off for what follows it.
+The report stays at the read where the read is its own later use, the next time round a loop, where a later use has no place of its
+own in the source, where the later uses follow only the end of a `finally` that an exception leads to, and for every read that the
+last use does not apply to: a field, a `ref` parameter, a captured variable, a variable that a reference can outlive, a read in an
+exception filter, and two uses at one operation. A variable that holds a container is left out: what a read of one hands over is the
+container, which is judged by whether the method owns it.
+
+Each use of a variable has a place in the compiler's control-flow graph, in the order in which the code runs
+(`MemberFlow.Classify`): a read where it stands, a call on the variable where the call runs, after its arguments, and a setter of a
+property or an indexer, a store into a field and the accessor of an event where the assignment is made, after the value that is
+assigned. A compound assignment, `??=` included, reads its target before its value runs and writes it after, so its target is used
+at two places: in `lease.Uses += Reset(out lease)` the getter runs on the value that a hand-off before it gave away, and the setter
+on the one that `Reset` assigned. Where the graph captures the target before a branch in the value, the read is where the target is
+captured. An operator of the target's own type that is an instance member is called on the target in place, after the value, and reads
+nothing first. A getter whose value the graph captures, as in an operand of `&&`, `||` or `?:`, runs where the capture is made, on its
+branch only, not where the value of the operator is used after the branches meet. The earlier place of a reference counts on the paths
+from every other use, and only the latest decides whether the reference itself is a last use (`VariableUse.IsEarlier`).
+
+A hand-off to a member that the symbol list marks `borrowswhen` is followed only on the branch where the member has taken the value,
+where the result of the call decides a branch (see
+[Members That Take a Value Only Where They Say So](#members-that-take-a-value-only-where-they-say-so)). On the other branch the caller
+still holds the value: a use there is no use after the hand-off, and it does not keep the hand-off from being a last use. So
+`if (!writer.TryWrite(lease)) lease.Dispose();` is clean, since `ChannelWriter<T>.TryWrite` has `borrowswhen=false`. The read records the
+blocks of that branch (`VariableUse.SuccessorsWhereTaken`), and the three walks from a read, for the last use, for the first later uses
+and for the message about handlers, start from them in place of every successor of its block.
+
+A member that throws may have taken the value. So the handlers of the block of a read follow every hand-off, whatever the entry of the
+member says, and a `catch`, an exception filter or a `finally` that uses the variable after it is reported.
 
 The [commit at the end of a `try` block](Docs/articles/rules/commit.md) exists to keep the common shape "acquire, set up, commit, or
 dispose on failure" free of warnings.
@@ -317,8 +358,8 @@ assembly made. A call is judged by the member that it binds to, so code behind i
 seen. Code can name a type only where its assembly references the assembly that declares the type, so that reference is what gets the
 warning (SCA1025), once per assembly, with the `trusted` line of a symbol list file as the answer.
 
-The reference to a declaring assembly says nothing of three kinds of value. The ten built-in non-copyable types are declared by the
-framework, which every assembly references. A struct of unchecked code that only a symbol list file makes non-copyable is the same: a
+The reference to a declaring assembly says nothing of three kinds of value. The eleven built-in non-copyable types are declared by the
+framework, which every assembly references, or every assembly of WPF for `DispatcherProcessingDisabled`. A struct of unchecked code that only a symbol list file makes non-copyable is the same: a
 line for a struct of the framework would otherwise give a warning on every assembly of the framework. And a value that is bound to a
 marked type parameter is copied by generic code that names no type at all. These are covered from the other side:
 
@@ -388,11 +429,61 @@ field, and sometimes an array element reached through a span. So the list covers
 the marshal classes, pools, `Interlocked`, everything that `await` calls), and the general-purpose collections get their basic members.
 A gap there costs a warning that a project can suppress, or answer with a line of its own symbol list file.
 
-`FrameworkScanTests` keeps one part of the list complete. A member of the framework that takes one of the ten built-in types other than
+`FrameworkScanTests` keeps one part of the list complete. A member of the framework that takes one of the built-in types other than
 by value needs a `borrows` entry, and one that hands out a container of one needs `new` (see
 [Code Not Built With the Analyzer](#code-not-built-with-the-analyzer)). The test loads every assembly of the shared frameworks that the
 tests run on, finds every such member, and fails where one has no entry with the marker that it needs. Since it reads the runtime that
-the tests run on, each test target scans its own version of .NET.
+the tests run on, each test target scans its own version of .NET. `DispatcherProcessingDisabled` is of WindowsBase, which of the
+shared frameworks only Microsoft.WindowsDesktop.App has; where that is not installed, as on a machine that is not Windows, the scan
+does not expect it. The .NET Framework 4.8.1 is scanned as well, where it is installed
+(see below).
+
+#### The .NET Framework 4.8.1
+
+The analyzer works in a project for the .NET Framework as in one for .NET, and the built-in framework symbol list is checked against
+the .NET Framework 4.8.1, its last version, as it is against .NET:
+
+- **How.** Each scan of `FrameworkScanTests` has a second test, `NetFramework_...`, that reads the implementation assemblies of the
+  .NET Framework 4.8.1 of the machine: every assembly that `RedistList/FrameworkList.xml` of its reference assemblies names, 235 of
+  them, from the global assembly cache or from the folder of the runtime. The list comes from the NuGet package
+  `Microsoft.NETFramework.ReferenceAssemblies.net481`. The reference assemblies have no method bodies, so they serve to resolve lines
+  of the list, and not for the scans. A name that the list has and the machine does not fails the test, except
+  `System.Activities.Statements`, which exists neither as a reference assembly nor in the runtime.
+- **Where.** The scans read the same assemblies on every target of the tests, so they run in the test run of net10.0 only. Elsewhere, on
+  a machine that is not Windows, and on one whose registry has no release of 4.8.1, each is skipped as inconclusive with a message
+  that says why. The output of a test run lists the skipped tests with their messages, so a run shows whether they ran. The deepest
+  scan follows every virtual call to the overrides of every class below the called one, and works those out once per member that is
+  called: walked again at each call, as they were at first, they made it take 366 seconds on the .NET Framework and 163 on .NET 10,
+  against 13 and 10 now, with the same results.
+- **What they check.** What the scans of .NET check: the members that get at a built-in non-copyable type other than by value, the
+  classes that clone themselves, the members that clone, and the members of a class whose line says `clones=complete` whose object
+  reaches other code. The .NET Framework has four of the eleven built-in types in the box, `SpinLock`, `GCHandle`, `AsyncFlowControl` and
+  `DispatcherProcessingDisabled`, and the test of the members checks that it finds exactly those four. No member of it needs an entry that .NET does not.
+- **Lines that only the .NET Framework has** end in the comment `# netfx`, as a line of a member that exists from .NET 11 on ends in
+  `# net11+`. The parser needs nothing for it: a line applies to its ID wherever the ID resolves, and names nothing elsewhere.
+  `SafeListTests` resolves each such line against the reference assemblies of 4.8.1, reads them as a symbol list file there, and
+  fails for one that names a symbol of .NET 10 or .NET 11, where it would apply as well. They are the `clones` lines of the seven
+  classes that clone themselves and that only the .NET Framework has, and of their six public `Clone` methods. Their assemblies are
+  not in `FrameworkAssemblies.txt`, so a class that derives from one got the warning of an unknown base class before; it now gets the
+  one of a class that clones itself.
+- **What was judged.** The scan of what reaches other code flags 14 members of `PrinterSettings` and `PageSettings` there that it does
+  not flag on .NET. They have no line, since a line applies on every framework and would add warnings on .NET, and one of them is
+  `PrinterSettings.ToString`, which no `clones` line may name (see the row of the code that the compiler writes for a record below).
+  Nine members of `PrinterSettings`, `ToString` among them, reach code that can throw `new InvalidPrinterException(this)`; the
+  exception keeps the settings, and they get out of it only through its `GetObjectData`, to a serialization. That is judged not to
+  be a hand-on that matters: no member of the exception hands them to code, and a formatter does with them what it does with any
+  serializable object, which `PrinterSettings` is on its own. On .NET the exception keeps nothing. Five members of `PageSettings`
+  give `new HandleRef(this, handle)` to native methods, and a `HandleRef` keeps nothing past the call. Both are entries of the
+  evidence. And `MemberwiseClone` has no body on the .NET Framework, so the scan, which takes a method with no body to keep its
+  arguments, would flag every `Clone`; it is taken to keep nothing, since the clone itself is what the scan of what clones finds.
+- **No test of the assembly names.** `FrameworkAssemblies_NameEveryAssemblyOfTheSharedFrameworks` has no counterpart for the .NET
+  Framework. Its assemblies that `FrameworkAssemblies.txt` names are among those that the scans read, so what the list says of them is
+  checked. The others, such as `System.Messaging`, are other libraries for the analyzer by design, and a fixed list of their names
+  would pin a set that cannot change.
+- **No package is read.** A package that brings part of .NET to the .NET Framework, such as System.Memory, can have the name of an
+  assembly of a shared framework, and the analyzer then takes it for the framework. The scans do not read packages. A one-off read
+  of System.Memory, System.Buffers, Microsoft.Bcl.AsyncInterfaces, System.Threading.Channels, System.Collections.Immutable and
+  System.Runtime.CompilerServices.Unsafe for the .NET Framework found nothing that needs a line, and no test repeats it.
 
 #### Merging
 
@@ -406,15 +497,90 @@ line that names nothing gets a warning all the same: a mistyped ID there would l
 
 There is no MSBuild property to mark a type or take one out. The symbol list is the one place for both.
 
+#### Members That Take a Value Only Where They Say So
+
+A member that is given a value by value takes it, as far as the last use goes. Some members take it only where they return true, as
+`TryAdd` and `TrySetResult` do, and the caller still holds the value where they return false. The marker `borrowswhen` of a method entry
+says so. It is named after `borrows`, since it makes the same claim, that the member uses what it is given during the call and keeps
+nothing of it, limited to one result of the call. Its value is that result, `true` or `false`. Where the member returned the other
+result, or threw, it has taken the value.
+
+| Entry | Meaning |
+|---|---|
+| `borrows` | Keeps nothing of the value, whatever happens |
+| `borrowswhen=false` | Keeps nothing of it where it returned false; has taken it where it returned true or threw |
+| `borrowswhen=true` | The mirror image of `borrowswhen=false` |
+| No marker | Takes the value, whatever happens |
+
+A member that throws may have taken the value, whatever its entry says (see
+[Alternatives That Were Given Up](#alternatives-that-were-given-up) for the outcome that would have said otherwise).
+
+The marker was first written the other way round, as `takeswhen` with the outcomes in which the member has taken the value. That form
+listed what the member does in the common case, so that an outcome left out of it was a claim that the member keeps nothing there.
+`borrowswhen` lists the claims: nothing is implied, and an outcome that a line leaves out, or that the analyzer does not know, is the
+safe reading. `takeswhen` was removed with no alias before a release had it.
+
+The rules of the marker:
+
+1. **The outcomes come in any order, each once,** separated by commas, with white space allowed around the `=` and the `,`, as around
+   the `=` of `for=`. One marker per entry, and `for=` can follow it, as for every marker:
+   ``M:...Dictionary`2.TryAdd(`0,`1);borrowswhen=false;for=TValue``.
+2. **It needs a method that returns `bool`, `Task<bool>` or `ValueTask<bool>`,** and is called by its name; for a task the outcome is
+   the awaited result. A constructor, an operator, a conversion and an accessor have no call that the analyzer follows for the marker,
+   and their lines get SCA1042.
+3. **`true` and `false` together are rejected,** with a reason that points to `borrows`: they would say that the member takes the value
+   only where it throws, which no member was found to do.
+4. **An outcome that the analyzer does not know is skipped,** so the line claims less. The project that owns the file gets SCA1042 for
+   it, as for a line that widens the built-in list (`IsFileOfAPackage`); a project that gets the file from a library gets nothing, since
+   it has nothing to fix. A line whose every outcome is unknown is a line with no marker. A whole marker that the analyzer does not know
+   leaves the line out, as before.
+5. **It is about values only.** It covers every parameter that the member takes by value whose type in the member's definition is a type
+   parameter that can be a struct, or a struct, where `for=` covers every type parameter that the type mentions. Only a value of a
+   non-copyable type is followed. Unlike `borrows`, it says nothing of a container that the member is given through a parameter over
+   its type parameter, and has no effect on the keeping check.
+6. **A stored value is still a copy.** A field or another stored value that is passed by value to such a member is reported as before:
+   in the outcome where the member takes it there are two.
+7. **The branch is followed only where the result of the call goes straight into a condition,** the way `[NotNullWhen]` narrows only
+   there. The compiler's control-flow graph splits `if`, `while`, `do`, the condition of a `for`, `!`, `&&`, `||` and `?:` into blocks
+   that branch on the call, also in a `return` and in the value of a conditional, so the call or the operator around it is the value
+   that a block branches on. Around the call the analyzer follows `!`, `==` and `!=` with the constant `true` or `false` on either side,
+   and `is true`, `is false`, `is not true` and `is not false` (`MemberFlow.FindSuccessorsWhereTaken`). A result that is stored in a
+   local, passed on, or combined with `&` or `|` gets the normal judgement, as if the entry had no such marker. A call that returns
+   `Task<bool>` or `ValueTask<bool>` must be awaited where it is made, directly or behind `ConfigureAwait` of the task's own type; a
+   task that is stored first is judged as any other hand-off.
+8. **The merge takes the outcomes that every line lists.** An entry is the set of outcomes in which the member borrows, `borrows` the
+   full set and a line with any other marker, or none, the empty set, and the entry that claims less applies, as everywhere:
+   `borrows` and `borrowswhen=false` merge to `borrowswhen=false`, and `true` and `false` to no marker
+   (`SafeListEntry.BorrowedOutcomes`).
+
+Besides that, an entry with the marker is an ordinary entry: the member is safe to use, as with no marker. It is a claim that the
+analyzer does not check, like `borrows`, also for a method that the project declares itself. A line that cannot work gets SCA1042: the
+marker on a type, a property or an event, an empty or repeated outcome, `true` with `false`, the marker on a method that is not called
+by its name or that returns anything but `bool`, `Task<bool>` or `ValueTask<bool>`, and a method with no parameter that the marker can
+cover.
+
+Rule 8 has a consequence: a file cannot add the marker to a member that the built-in framework symbol list names without it, nor add an
+outcome, since the entry that claims less applies. A `borrowswhen` line that lists an outcome which the built-in entry does not list
+gets SCA1042 for it in the project that owns the file, as a line that names a member for more type parameters does
+(`SafeMemberList.FindOutcomesBeyondBuiltIn`). A `borrows` line for a member that the built-in entry names with `borrowswhen` or with no
+marker claims more as well, and gets SCA1042 in the same way (`SafeMemberList.FindBorrowsBeyondBuiltIn`). It does not where its `for=`
+leaves out a type parameter that the built-in entry covers: that line takes the entry away for the type parameter, which is an effect.
+Nor does it over a built-in entry with another marker, such as `new`, which the line takes away.
+
+The built-in list has `borrowswhen=false` for the members that return false before they keep anything of the item:
+`TaskCompletionSource<T>.TrySetResult`, the `TryAdd` of the two dictionaries and of their alternate lookups, the four `TryAdd` of
+`BlockingCollection<T>`, and `ChannelWriter<T>.TryWrite`. The evidence file shows, for each, where it returns false
+("Members That Keep Nothing of a Value in Some Outcomes"). The adds that return nothing, such as `List<T>.Add`, have no marker.
+
 #### Built-in Types Through a Library
 
-The ten built-in non-copyable types are on in a project that references one of the two packages, and off in a project that gets the
+The eleven built-in non-copyable types are on in a project that references one of the two packages, and off in a project that gets the
 analyzers only through a library. A library that marks its guards brings the analyzers to everyone who uses it, so that they cannot copy
 those guards. It must not bring warnings about their own `GCHandle` code with it. See
 [Leaving out the built-in non-copyable types](Docs/articles/guides/built-in-types.md).
 
 The default is set by the package's targets file, and not by a props file, because the project's items are not known when props files
-are read. The analyzer takes only `true` for on, so that a build in which the targets file did not run has the ten off.
+are read. The analyzer takes only `true` for on, so that a build in which the targets file did not run has them off.
 
 #### Classes That Clone Themselves
 
@@ -435,7 +601,10 @@ That leaves the base classes of which nothing is known. They get the warning too
   for another target, such as `netstandard`, `mscorlib` and `System`, are among them, so a project for .NET Standard or the
   .NET Framework is judged by the same names. A library of Microsoft's that is no part of a shared framework, such as WinUI, was not
   read, so it is another library. So is an assembly that only the .NET Framework has, such as `System.Messaging`, or that only a
-  platform has, such as `Mono.Android`: 82 of the 133 reference assemblies of .NET Framework 4.8 are not in the file. The name was
+  platform has, such as `Mono.Android`: 80 of the 131 reference assemblies of .NET Framework 4.8 and 4.8.1 are not in the file (their
+  folder has 133 files, of which `System.EnterpriseServices.Thunk` and `System.EnterpriseServices.Wrapper` are not assemblies), and
+  88 of the 236 assemblies that their `FrameworkList.xml` names, facades included. The scans read those of 4.8.1 all the same (see
+  [The .NET Framework 4.8.1](#the-net-framework-481)), and a class of them that clones itself has a line. The name was
   chosen over the publisher on purpose: the list says what was checked, not who wrote the code.
 - **A `clones=none` line counts only for a class that is not known.** For a class of checked code or of the framework it has no
   effect, gets SCA1042, and does not end the walk, so it cannot vouch for an unknown class above it by the way.
@@ -458,7 +627,8 @@ leaves the other. Its descriptors are the field, the binding, and the uses below
   class it names, and the generic classes that derive from it. The framework's own derived classes, every `Encoding` and every
   `Calendar`, need no line for the warning on a field, and the built-in framework symbol list has 11 class lines that clone where one
   per derived class would have about 100.
-- **The list is not picked by hand.** `FrameworkScanTests` reads the IL of the shared frameworks of both targets, finds every call of
+- **The list is not picked by hand.** `FrameworkScanTests` reads the IL of the shared frameworks of both targets, and of the .NET
+  Framework 4.8.1 where it is installed, finds every call of
   `MemberwiseClone` on `this`, or on the argument of a static member of the class, in a class that another assembly can derive from,
   and fails for a class with no line of its own or of a base class, and for a public or protected method that clones and has no line
   of its own. `Delegate` and `MarshalByRefObject` are the two exceptions, with their reasons in the test.
@@ -595,7 +765,8 @@ statement:
   the encoder and decoder fallbacks and their buffers, `Encoder` and `Decoder`, the buffers that an encoding makes for one call, the
   `GregorianCalendarHelper` of the calendars, and the `StrokeNodeIterator` and `StrokeInfo` of a stroke; an application's own subclass
   of a fallback, an `Encoder` or a `Decoder` does receive the object. And the methods of `Monitor` and the identity hash code, which have
-  no body to read, are taken to keep nothing.
+  no body to read, are taken to keep nothing, and so is `MemberwiseClone` of the .NET Framework. Both passes also run on the .NET
+  Framework 4.8.1, with what was judged there in [The .NET Framework 4.8.1](#the-net-framework-481).
 - **Signatures.** Whatever a member's signature shows is checked by the first way, whatever the list says of the member's class, for a
   member of the bound class, of a class between, and an override. One walk over the types of the signature decides it, by polarity and
   variance. A result, a `ref` or `out` parameter, and what can be read start at "out"; a parameter, what can be set, and an event's
@@ -647,6 +818,145 @@ statement:
   class that clones itself. They are two routes: writing the copy out answers the call, and not the base class's clone. So the call
   gets SCA1005 and the field gets SCA1009, and suppressing the one leaves the other.
 
+## Errors and Warnings
+
+The memory safety rules of the compilation decide how the analyzer reports, through `UnsafeContext.UsesUpdatedRules`.
+
+**Under the current rules** every rule is an ordinary warning, as in release 0.7.5: `#pragma`, NoWarn, `[SuppressMessage]` and severity
+configuration all work as for any analyzer warning, at a declaration as well, and whether code is in an unsafe context plays no part.
+The model of errors below belongs to the updated rules for two reasons. Under the current rules the language itself makes no promise
+about code outside an unsafe context, so an error that cannot be suppressed would promise more than the compiler does. And marking
+one place needs what only the updated rules and their language version have: the `unsafe(expr)` expression, and `await` in an unsafe
+context. Without them a hand-off that is awaited can only be covered through an extra local.
+
+**Under the updated rules** a copy of a non-copyable value is a defect, so the analyzer reports it as an error that cannot be
+suppressed. The one place where code may take that on itself is an unsafe context, where the language already lets the author answer
+for what the compiler cannot check: there a copy is a warning, suppressed next to the code. Under the updated rules only an `unsafe`
+block, an `unsafe(expr)` expression and the initializer of an `unsafe` constructor are unsafe contexts, so the author names the place.
+
+Each ID is in one of three groups, which `Rules.GetGroup` holds:
+
+| Group | IDs | Current rules | Updated rules, in code in an unsafe context | Updated rules, everywhere else |
+|---|---|---|---|---|
+| Enforced (`RuleGroup.Enforced`) | SCA1001 to SCA1016, SCA1020 to SCA1024, SCA1030 to SCA1033, SCA1040, SCA1041, SCA1043, SCA1044, SCA1046, SCA1048 | Warning, suppressible in every way | Warning: `#pragma`, NoWarn and severity configuration (`.editorconfig`, `.globalconfig`) suppress it, `[SuppressMessage]` does not | Error, not suppressible |
+| Plain warnings (`RuleGroup.Plain`) | SCA1042, SCA1045, SCA1047 | Warning, suppressible in every way | The same | The same |
+| Unchecked assembly (`RuleGroup.UncheckedAssembly`) | SCA1025 | Warning in a project that references a package itself, message (Info) in one that gets the analyzer through another package | The same | The same |
+
+Under the updated rules the place of a report decides the severity of an enforced rule, not its ID. A report in code follows the unsafe
+context of its place. A report at a declaration is always the error: a declaration has no unsafe context under the updated rules. Code
+is a body, an initializer of a field or a property, a constructor initializer, the arguments of a primary constructor's base type, a
+lambda and a top-level statement; a local function and a lambda are declared in code, so their parameters are code as well
+(`UnsafeContext.ContainsCode`). So SCA1009 is an error at a field and a warning at `culture.Clone()` in an unsafe block, and SCA1022 is
+an error at the covariant return of an override.
+
+The test for whether a rule is enforced is whether the person who gets the error can properly fix it in their own code. The three plain
+warnings fail that test or are meant to be suppressed. SCA1042 is a line of a symbol list file, which has no unsafe context. SCA1045 is
+an attribute named NonCopyable that is not the analyzer's, which a project can keep on purpose for another tool, and which breaks
+nothing: the attribute is not recognized. SCA1047 is meant to be suppressed by the author of the method once it is checked, with
+`#pragma` or `[SuppressMessage]`. SCA1025 is reported for the whole compilation, with no place in code, and its fix is in someone
+else's code; a project that only gets the analyzer through a library did not choose to vouch for the assemblies that it references.
+
+A message is true under both rule sets. Most say nothing of the severity, and call a report a report. A message that advises a
+suppression has a second text for the current rules, where a suppression can be anywhere; under the updated rules it advises an unsafe
+context, or nothing where the report is at a declaration (`Rules.CreateWithCurrentRulesMessage`).
+
+#### How a Severity Is Made
+
+An enforced rule has three descriptors with the same ID: the ordinary warning of the current rules, with no tag of its own; the error of
+the updated rules, with the custom tags `NotConfigurable` and `Compiler`; and the warning of an unsafe context, with the tag `Compiler`.
+SCA1025 has a warning and an Info message, and a plain warning has one warning. All of them are in `SupportedDiagnostics`.
+`NotConfigurable` keeps NoWarn, `.editorconfig` and rule sets off the error, and the compiler does not apply `#pragma` to an error.
+`NotConfigurable` alone still lets `[SuppressMessage]` through: the `Compiler` tag is what makes Roslyn ignore that attribute, for the
+error and for the warning of an unsafe context alike. A tag is read from the descriptor of the reported diagnostic, so the ordinary
+warning can be configured and suppressed although another descriptor of its ID is not configurable; `SeverityTests` checks that. The
+same holds for the warning of an unsafe context, which has no `NotConfigurable` tag: under the updated rules severity configuration, in
+an `.editorconfig` or a `.globalconfig` file, turns it off as NoWarn does, and leaves the error as it is. So the ways to suppress that
+warning are `#pragma`, NoWarn and severity configuration, and not `[SuppressMessage]`.
+
+`Rules.cs` holds a `Rule` for each message, not a `DiagnosticDescriptor`, so nothing can report a rule with `Diagnostic.Create` by itself.
+Every report goes through the `Severities` of the compilation (`DoNotCopyValueAnalyzer.Severities.cs`), made once at the start of the
+compilation, which chooses the descriptor. It reads the MSBuild properties and the memory safety rules of the compilation once.
+
+#### The Unsafe Context
+
+Only the updated rules ask for it. The context is that of the syntax node at the place of the report, and follows the C# language
+(`UnsafeContext.cs`):
+
+- An `unsafe` block and an `unsafe(expr)` expression are unsafe. The compiler that the analyzer is built against has no `unsafe(expr)`,
+  so its kind is looked up by name (`UnsafeExpression`) in the compiler that runs the analyzer, never by a reference that the build
+  would need.
+- The `: base(...)` or `: this(...)` initializer of an `unsafe` constructor is unsafe. No other modifier makes anything unsafe.
+- From C# 13 on the body of an iterator is safe, so a local function that is an iterator is safe inside an unsafe block, and an `unsafe`
+  block in it is unsafe again.
+
+Which rules a compilation uses is read from `IModuleSymbol.MemorySafetyRulesVersion` of its source module, by reflection, since the
+property is newer than the compiler that the analyzer is built against. A compiler without it, which may still know the updated rules,
+has only the feature flag `updated-memory-safety-rules` of the parse options. `CSharpCompilationOptions.MemorySafetyRulesVersion` is not
+read: it was seen to stay 1 where the module's version was 2. The compiler that the analyzer is built against (5.0.0) does not know the
+updated rules: it accepts the feature flag and goes on with the current rules. So the flag counts only in a compiler that has the
+`unsafe(expr)` expression, which came with the updated rules (it is missing in 5.0.0 and present from the 5.9 compiler of the later
+.NET 10 SDKs on), and in a compiler without it the analyzer applies the current rules as the compiler does.
+
+The rules were checked against the compiler of the .NET 11 SDK, place by place; `SeverityTests` holds that matrix.
+
+#### Where a Report in Code Is Placed
+
+Under the updated rules a report in code is covered by an `unsafe(expr)` expression only where the report lands inside the expression.
+So a copy is reported at the expression that makes it, not at a declaration, a designation or a keyword:
+
+- The copy into a declared local is reported at its value (`var copy = _guard;` at `_guard`), not at `= _guard`: an `unsafe` block
+  around the declaration would end the scope of the local.
+- What a `foreach` does with each element is reported at the collection: the copy into the variable, the copy before a `Deconstruct`
+  method, the conversion to the type of the variable, and the variables of a deconstruction. The alternative was an `unsafe` block
+  around the whole loop, its body included.
+- The variables of a deconstruction that are given an element of a value are reported at the value (`var (a, b) = _pair;` at `_pair`):
+  a deconstruction declaration cannot be in an expression, and an `unsafe` block would end the scope of its variables.
+- What a spread does with each element is reported at its operand, not at `..`.
+
+These were looked at and left where they are:
+
+- The parts of a pattern, a pattern variable among them, in an `is` expression and a `switch` expression: the whole expression can be
+  in `unsafe(...)`, and a pattern variable declared there stays in scope after it. In a `switch` statement, an `unsafe` block around the
+  statement holds the case, and its variables are scoped to the section anyway.
+- An `await`: `unsafe(await task)` holds it, and the updated rules allow an `await` in an unsafe context.
+- A member of an anonymous type: the creation expression can be in `unsafe(...)`.
+- A parameter of a lambda or of a local function, as SCA1012 reports for an iterator: the lambda can be in `unsafe(...)`, and the local
+  function in an `unsafe` block.
+
+The `Dispose` or `DisposeAsync` method that a `using` calls (SCA1020, SCA1024 and the other reports of a member that is used) is
+reported at the value of the resource, as a copy is. For a declaration, `using var pool = CreatePool();` or `await using var`, and for
+a statement that declares its variables, `using (var pool = CreatePool())`, that is the initializer of each variable, so
+`using var pool = unsafe(CreatePool());` covers it: an `unsafe` block around the declaration would end the scope of the variable. For
+`using (expression)` it is the expression, as it was. `ReportPlaceTests` holds each form under both rule sets.
+
+#### The Way Out and the Marker
+
+The MSBuild property `NonCopyableErrorsAsWarnings` makes the analyzer report as it does under the current rules: every enforced rule
+is the ordinary warning, with the message of the current rules, every suppression works (`#pragma`, NoWarn, `[SuppressMessage]` and
+severity configuration), at a declaration as well, and whether code is in an unsafe context plays no part. So under the current rules
+it changes nothing at all. It is for a project that has to get past a defect of the analyzer, or that prefers the warnings.
+
+The build does not tie the marker of an analyzed build to the property: a project gets the marker whether the property is on or not
+(see [Code Not Built With the Analyzer](#code-not-built-with-the-analyzer)). The property is only a preference for how reports appear
+and how they are suppressed. The author still gets every report, so the assembly is as checked as one built under the current rules,
+which has the marker too.
+
+Whether the project references `Singulink.CodeAnalysis` or `Singulink.CodeAnalysis.Analyzers` itself is worked out by the targets file
+into `_NonCopyableReferencesPackage`, always, whatever the project sets for the built-in types, and the props file makes it visible to
+the compiler. A build without it, such as a test, counts as one that references a package.
+
+#### Testing the Severities
+
+The tests run under the current rules, and expect each result as the ordinary warning. A test under the updated rules runs through
+`Verify.UpdatedRulesAsync`, which turns the feature flag on with the preview version of the language and is inconclusive in a compiler
+without the updated rules, and expects an error with `AsError`. Two things of the testing library needed changing in `Verify.Test`. It
+takes a diagnostic with the `Compiler` tag for one of the compiler, and leaves it out by the level of compiler diagnostics that the test
+checks; `IsCompilerDiagnosticIncluded` takes every diagnostic of the analyzer in. And it runs each test again under a
+`#pragma warning disable` line, taking a diagnostic to be suppressible or not by its ID: not where any descriptor of the ID is not
+configurable, which holds for every enforced ID. That run is turned off (`SkipSuppressionCheck`), and `SeverityTests` checks what
+`#pragma`, `[SuppressMessage]`, NoWarn and severity configuration do under both rule sets, and with `NonCopyableErrorsAsWarnings`
+under the updated rules, where one test compares every report with the one of the current rules: place, severity, tags and message.
+
 ## Alternatives That Were Given Up
 
 | Tried or considered | Why it was given up |
@@ -676,6 +986,7 @@ statement:
 | The built-in types on in every project | A library would bring warnings about its users' own `GCHandle` code |
 | Setting the default of the built-in types in a props file | The project's items are not known when props files are read |
 | An MSBuild property to mark a type or take one out | The symbol list is the one place for both |
+| The outcome `throws` of `borrowswhen`, which let a `catch` use a value that a member had not taken where it threw | It was built and reviewed, and left out for two reasons. What a member may throw, and when, has too much nuance to expect people to classify members accurately, even with a careful review of the source: classifying the framework's own took several passes and needed a rule for which cases count. And the analyzer can never check whether a member keeps a value where it throws, since nearly anything can throw, so the outcome would always rest on manual marking. `true` and `false` differ there: a later checked attribute can verify them against the body of a method. A later analyzer can add an outcome word without breaking a symbol list file, since an unknown outcome word is skipped |
 
 ## Warnings on Correct Code That Were Accepted
 
@@ -685,7 +996,7 @@ gets a warning. These were accepted:
 | Shape | Why it stays | Where it is told |
 |---|---|---|
 | An `async` helper that fills a container which its caller awaits | The helper keeps running after its first `await`, and nothing shows that the caller waits for it | [Correct Code That Still Gets a Warning](Docs/articles/guides/correct-code-with-warnings.md) |
-| Handing a value over and keeping it on failure (`TryWrite`, `TrySetResult`) | What the analyzer sees is a value passed by value and used again | The same |
+| Handing a value over and keeping it on failure, through a member with no `borrowswhen` marker, or with a `catch` or a `finally` that uses the value (`ChannelWriter<T>.WriteAsync`) | What the analyzer sees is a value passed by value and used again, which is reported at the use after the hand-off (SCA1016). A member that throws may have taken the value, so a `catch` is reported after a member with the marker too | [Correct Code That Still Gets a Warning](Docs/articles/guides/correct-code-with-warnings.md) |
 | A race between two tasks that hold a guard | The same | The same |
 | `ManualResetValueTaskSourceCore<T>.GetResult` in a value task source | `GetResult` leaves the result in the core until `Reset`, so the warning is accurate; it is suppressed there | [Value Task Sources](Docs/articles/rules/listed-members.md#value-task-sources) |
 | A lambda of an expression tree that keeps its parameter (SCA1032) | The lambda is not made into a delegate where it stands, so nothing says what its callers take, and it is judged as a method is. A tree that is compiled and run that way is rare | [Lambdas](Docs/articles/rules/keeping-containers.md#lambdas) |
@@ -753,14 +1064,16 @@ There is one analyzer, `DoNotCopyValueAnalyzer`, split into partial files by con
 | `DoNotCopyValueAnalyzer.Kept.cs` | Container parameters that must not be kept |
 | `DoNotCopyValueAnalyzer.OwnedTask.cs` | The `owned` task of a completion source |
 | `DoNotCopyValueAnalyzer.Moves.cs` | `[MovedFrom]`, generic moves and moves of containers |
-| `DoNotCopyValueAnalyzer.Flow.cs`, `.FunctionGraph.cs`, `.LastUse.cs` | The paths through a function: the last use, the commit, and the path checks of `[MovedFrom]` |
+| `DoNotCopyValueAnalyzer.Flow.cs`, `.FunctionGraph.cs`, `.LastUse.cs` | The paths through a function: the last use, the branch of a `borrowswhen` member that takes the value, the commit, and the path checks of `[MovedFrom]` |
+| `DoNotCopyValueAnalyzer.HandOffs.cs` | The check of a member, and the report of a copy that a hand-off made at the first uses after it |
 | `DoNotCopyValueAnalyzer.WhatRuns.cs`, `.KnownReferences.cs` | What runs no other code and cannot throw, and which references are known to refer to something |
 | `DoNotCopyValueAnalyzer.Declarations.cs` | Checks of declarations: fields, structs, attribute classes, the marks of types and members, erasable bases, covariant returns |
 | `DoNotCopyValueAnalyzer.Assemblies.cs`, `AnalyzedAssemblies.cs` | The marker of an analyzed build, and SCA1025 |
 | `NonCopyableTypes.cs` | Which types are non-copyable, containers, views or erasable, and which member uses are safe. A compilation has two instances: one for checked code, and one for the bodies of `[RequiresCopyable]` members, in which marked type parameters count as copyable |
 | `SafeMemberList.cs` | The symbol list: the parser, the merge, and the built-in framework symbol list from the embedded `NonCopyableSymbols.txt` |
 | `CarriedSymbols.cs` | What a container parameter may be used in, and what each of those operations carries |
-| `DiagnosticIds.cs`, `Rules.cs` | The IDs and the descriptors |
+| `DiagnosticIds.cs`, `Rules.cs`, `Rule.cs` | The IDs, the rules and their descriptors, and the group of each ID |
+| `DoNotCopyValueAnalyzer.Severities.cs`, `UnsafeContext.cs` | The choice of the descriptor of each report, and the unsafe context of a place (see [Errors and Warnings](#errors-and-warnings)) |
 
 The rules for values come from Roslyn's `RS0042` rule (`DoNotCopyValue`), and `Acquire` in `NewValues.cs` keeps Roslyn's name. It
 returns `RefKind.None` for a new value, and any other `RefKind` for a stored one. How this analyzer differs from RS0042 is in
@@ -768,13 +1081,15 @@ returns `RefKind.None` for a new value, and any other `RefKind` for a stored one
 
 #### Messages
 
-Every warning is a `DiagnosticDescriptor` in `Rules.cs`, made by `Create(id, title, message, description)`. The title, the message and
-the description are constants at the top of the file. One ID can have several descriptors, each with a message for one case, and they
-share the ID's title. All descriptors are warnings in the category Reliability, and the help link of each is the address of its
-article: `https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/diagnostics/` followed by the ID in lower case and `.html`. That
-address is fixed from the first release on.
+Every message is a `Rule` in `Rules.cs`, made by `Create(id, title, message, description)`. The title, the message and the description
+are constants at the top of the file. One ID can have several rules, each with a message for one case, and they share the ID's title.
+Each rule has a descriptor for every severity that its group can report it with (see [Errors and Warnings](#errors-and-warnings)). All
+descriptors are in the category Reliability, and the help link of each is the address of its article:
+`https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/diagnostics/` followed by the ID in lower case and `.html`. That address
+is fixed from the first release on.
 
-`Rules.All` lists every descriptor, and is what the analyzer supports. A test fails if a descriptor is missing from it.
+`Rules.All` lists every rule, and `Rules.Descriptors` every descriptor of them, which is what the analyzer supports. A test fails if a
+rule is missing from it.
 
 The tests compare the whole text of each message. `Tests/Singulink.CodeAnalysis.Tests/Verify.cs` has one helper per descriptor that
 builds the expected message, so a change of wording in `Rules.cs` is a change in `Verify.cs` too. `MessageTests` pins the parts of
@@ -788,14 +1103,18 @@ messages that say why: what made a local not the method's own, what makes a clas
 | `ThirdPartyDefensiveCopyTests` | The test cases of the defensive-copy rules of hamarb123.Analyzers, with every struct and every type parameter marked |
 | `BehaviorTests`, `StoredValueTests`, `LanguageConstructTests`, `CompilerCopyTests` | New and stored values, and the constructs and copies of the language and the compiler |
 | `LastUseTests`, `NestedFunctionTests`, `KnownReferenceTests`, `WhatRunsTests` | The paths: the last use, functions inside functions, references known to refer to something, and what runs no other code |
+| `HandOffTests` | Where a copy that a hand-off made is reported: at the first uses after it (SCA1016), and what stays at the read |
+| `BorrowsWhenTests` | The `borrowswhen` marker: the forms of a condition that are followed, the branch where the value was not taken, a `catch` and a `finally` after the hand-off, which are reported, the lines that the parser takes and reports, an outcome that the analyzer does not know, the merge of two entries, and the built-in entries that have the marker |
 | `MoveTests` | `[MovedFrom]` and `NonCopyable.Move` |
 | `TypeParameterTests`, `UnmarkedGenericTests`, `GenericStructTests` | Marked and unmarked generics, `[RequiresCopyable]`, kept marks, and generic structs and views |
 | `ListedMemberTests`, `OwnedTaskTests`, `ReturnedContainerTests`, `ContainerOwnershipTests`, `OwnershipListTests`, `ConversionTests` | Containers: what a listed member hands out, returning, keeping, owning, moving and converting them |
 | `CarriedSymbolTests` | The list of `CarriedSymbols.cs` against the compiler's API, by reflection |
-| `RecordAndCloneTests`, `BuiltInTypeTests`, `AttributeTests` | Records and clones, the ten built-in types and their property, and how attributes are recognized |
+| `RecordAndCloneTests`, `BuiltInTypeTests`, `AttributeTests` | Records and clones, the eleven built-in types and their property, and how attributes are recognized |
 | `UncheckedCodeTests`, `UncheckedAssemblyTests` | Code not built with the analyzer: the marker, SCA1024 and SCA1025 |
+| `SeverityTests` | Errors and warnings: the ordinary warning of the current rules, the unsafe contexts of the updated rules, what `#pragma`, `[SuppressMessage]`, NoWarn and configuration do under each, NonCopyableErrorsAsWarnings, and SCA1025 as a message |
+| `ReportPlaceTests` | That a copy in code, and the `Dispose` that a `using` calls, is reported at the expression that makes it, which `unsafe(expr)` can hold |
 | `SafeListTests` | The symbol list format, the merge, the built-in framework symbol list, and the diagnostics' help links and articles |
-| `FrameworkScanTests` | The built-in framework symbol list against the shared frameworks (see [Symbol List](#symbol-list)) |
+| `FrameworkScanTests` | The built-in framework symbol list against the shared frameworks, and against the .NET Framework 4.8.1 where it is installed (see [Symbol List](#symbol-list)) |
 | `MessageTests` | The parts of messages that say why, and the fixes that the README and the guides give |
 | `DeepCodeTests`, `EdgeCaseTests` | Deep and long code, and the paths that only unusual code reaches |
 | `ProbeTests` | The probe projects under `Probes`, each with a `baseline.txt` of every warning by file, line, column and ID |
@@ -814,8 +1133,8 @@ A new ID touches all of these:
 
 1. `DiagnosticIds.cs`: the ID, in the group of its range (see the table of groups in
    [What the Analyzer Does](Docs/articles/start/what-it-does.md)).
-2. `Rules.cs`: the descriptor or descriptors, and each one in `Rules.All`.
-3. `Verify.cs`: a helper per descriptor, with the whole message.
+2. `Rules.cs`: the rule or rules, and each one in `Rules.All`; and the ID in its group in `Rules.GetGroup`.
+3. `Verify.cs`: a helper per rule, with the whole message; and the ID in `EnforcedIds` if it is in the enforced group.
 4. `Docs/articles/diagnostics/scaNNNN.md`: the article that the help link leads to.
 5. `Docs/articles/diagnostics/toc.yml`: the article, in order of ID.
 6. `Docs/articles/all-diagnostics.md`: a row in the table. No test checks this one.
@@ -829,9 +1148,10 @@ in order of ID.
 
 1. Read the member in the runtime's source, and write what shows that it makes no copy in
    [NonCopyableSymbols.evidence.md](Source/Singulink.CodeAnalysis.Analyzers/NonCopyableSymbols.evidence.md).
-2. Add the line to `NonCopyableSymbols.txt`. A member that exists only from .NET 11 on gets the trailing comment `# net11+`.
-3. Run the tests on both targets: `FrameworkScanTests` checks the members that reach the ten built-in types against the runtime that
-   the tests run on.
+2. Add the line to `NonCopyableSymbols.txt`. A member that exists only from .NET 11 on gets the trailing comment `# net11+`, and a
+   symbol that only the .NET Framework has gets `# netfx`.
+3. Run the tests on both targets: `FrameworkScanTests` checks the members that reach the built-in types against the runtime that
+   the tests run on, and the run of net10.0 checks the .NET Framework 4.8.1 on a machine that has it.
 4. Update [Built-in Framework Symbol List](Docs/articles/rules/framework-symbol-list.md) where the change is one that a user would
    notice.
 

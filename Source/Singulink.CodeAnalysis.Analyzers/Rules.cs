@@ -4,7 +4,8 @@ using Microsoft.CodeAnalysis;
 namespace Singulink.CodeAnalysis.Analyzers;
 
 /// <summary>
-/// The descriptors of the diagnostics that <see cref="DoNotCopyValueAnalyzer"/> reports. An ID can have more than one message.
+/// The rules of the diagnostics that <see cref="DoNotCopyValueAnalyzer"/> reports, each with its descriptors. An ID can have more than one
+/// message, and each message has a descriptor for every severity that it can be reported with: see <see cref="RuleGroup"/>.
 /// </summary>
 internal static class Rules
 {
@@ -97,6 +98,29 @@ internal static class Rules
         "The analyzer does not know that this use of a value of non-copyable type '{0}' makes no copy (a '{1}' operation). Use the value in " +
         "place or by reference, or move it out first with NonCopyable.Move.";
 
+    private const string UsedAfterHandOffTitle = "Do not use a variable after its non-copyable value was handed over";
+
+    private const string UsedAfterHandOffMessage =
+        "'{0}' is used after {2}, so that hand-off was a copy of non-copyable type '{1}'. Use '{0}' only before the hand-off, pass it by " +
+        "reference, or hand over NonCopyable.Move(ref {0}).";
+
+    private const string UsedAfterHandOffInHandlerMessage =
+        "'{0}' is used after {2}, so that hand-off was a copy of non-copyable type '{1}': a 'catch', a 'finally' or an exception filter " +
+        "that uses '{0}' can still run after the hand-off. Use '{0}' only before the hand-off, or, where a 'catch' uses it, store the value " +
+        "at the end of the 'try' block, after everything that can throw.";
+
+    private const string UsedAfterHandOffBeforeNullReferenceMessage =
+        "'{0}' is used after {2}, so that hand-off was a copy of non-copyable type '{1}': the 'try' block then reads or writes through " +
+        "'{3}', which can be a null reference, so this can still run. Check the reference first, with NonCopyable.ThrowIfNullRef(in {3}) " +
+        "or with a method whose parameter is marked [NotNullRef], which counts only in an assembly that was built with the analyzer.";
+
+    private const string UsedAfterHandOffDescription =
+        "Reading a local or a by-value parameter by value moves its value where nothing uses the variable again, its last use. Where the " +
+        "variable is used after the read, on any path that the code or an exception can take, the read was a copy, and the first use " +
+        "after it on each path is reported, with the hand-off as an additional location. A 'catch', a 'finally' and an exception filter " +
+        "that use the variable count as uses after a read in the 'try' block, except where the value is stored at the end of the 'try' " +
+        "block and nothing that can throw follows.";
+
     private const string UnsupportedUseDescription =
         "A value of a non-copyable type can only be used where it is known not to be copied. This use may copy it, or it is one the analyzer does " +
         "not know to be safe.";
@@ -147,13 +171,13 @@ internal static class Rules
     private const string CloningBaseDescription =
         "A class that the symbol list marks 'clones' clones its objects field by field with MemberwiseClone in code that the analyzer " +
         "cannot read, and the clone copies every field of a class that derives from it. So a class of the compilation that derives from " +
-        "one gets the warning on each field that holds a non-copyable value, and a non-copyable type bound to a type parameter of such a " +
-        "class gets it where it is bound, as a base class or in an object creation. Where the binding is in the type of a value, as in a " +
-        "'Tagged<Guard>' that a call returns, or in the base list of a class of another assembly, the value gets the warning wherever it is " +
+        "one is reported on each field that holds a non-copyable value, and a non-copyable type bound to a type parameter of such a " +
+        "class is reported where it is bound, as a base class or in an object creation. Where the binding is in the type of a value, as in a " +
+        "'Tagged<Guard>' that a call returns, or in the base list of a class of another assembly, the value is reported wherever it is " +
         "used as a type that hands it to the cloning code: the receiver of a member of the cloning class or of a class above it, a " +
         "conversion to one of those or to an interface, and a call of a member that clones. A base class of an assembly that was not built " +
         "with the analyzer, and that is no part of the framework, may clone itself too, and nothing tells the analyzer: a class of the " +
-        "compilation that derives from one gets the warning on each field that holds a non-copyable value until a symbol list line says " +
+        "compilation that derives from one is reported on each field that holds a non-copyable value until a symbol list line says " +
         "what the base class does. 'clones' says that it clones itself, 'clones=none' that neither it nor a class above it does, and a " +
         "'trusted' line for its assembly that no code of the assembly copies a non-copyable value.";
 
@@ -164,13 +188,24 @@ internal static class Rules
         "it does, or 'A:{2};trusted' if no code of the assembly copies a non-copyable value. Or hold the value in an object of a class that " +
         "'{0}' refers to, which a clone shares.";
 
+    // A message that advises a suppression has a second text for the current memory safety rules, under which a suppression can be
+    // anywhere. Under the updated rules only code in an unsafe context can suppress a report, and a declaration never can.
     private const string MemberwiseCloneOfTypeParameterThroughListedBaseMessage =
         "'{0}' derives from '{1}', whose own code clones an object field by field with MemberwiseClone, so a clone of an object of '{0}' " +
+        "copies its {2} of type '{3}' with the non-copyable value that a project binds to its type parameter. Hold the value in an object " +
+        "of a class that '{0}' refers to, which the clone shares.";
+
+    private const string MemberwiseCloneOfTypeParameterThroughListedBaseCurrentRulesMessage =
+        "'{0}' derives from '{1}', whose own code clones an object field by field with MemberwiseClone, so a clone of an object of '{0}' " +
         "copies its {2} of type '{3}' with the non-copyable value that a project binds to its type parameter. Suppress this warning only " +
-        "where the code of '{0}' never clones its objects: a project that binds a non-copyable type gets a warning of its own where it hands " +
+        "where the code of '{0}' never clones its objects: a project that binds a non-copyable type gets a report of its own where it hands " +
         "such an object to the code of '{1}'. Or hold the value in an object of a class that '{0}' refers to, which the clone shares.";
 
     private const string CloningBindingMessage =
+        "Non-copyable type '{0}' is bound to a type parameter of '{1}', whose objects the own code of '{2}' clones field by field with " +
+        "MemberwiseClone, so a clone copies the '{0}' that it holds. Bind a class that refers to the value instead, which a clone shares.";
+
+    private const string CloningBindingCurrentRulesMessage =
         "Non-copyable type '{0}' is bound to a type parameter of '{1}', whose objects the own code of '{2}' clones field by field with " +
         "MemberwiseClone, so a clone copies the '{0}' that it holds. Bind a class that refers to the value instead, which a clone shares, or " +
         "suppress this warning where no object of '{1}' is ever cloned.";
@@ -178,10 +213,22 @@ internal static class Rules
     private const string CloningUseConversionMessage =
         "'{0}' is converted to '{1}', which hands the object, or what holds it, to code that can clone it: the own code of '{2}' clones its " +
         "objects field by field with MemberwiseClone, and a clone copies the non-copyable '{3}' that is bound to a type parameter of '{4}'. " +
+        "Keep the value as '{0}' or bind a class that refers to the value instead, which a clone shares. Code that never clones the object " +
+        "can convert it in an unsafe context and suppress the warning there.";
+
+    private const string CloningUseConversionCurrentRulesMessage =
+        "'{0}' is converted to '{1}', which hands the object, or what holds it, to code that can clone it: the own code of '{2}' clones its " +
+        "objects field by field with MemberwiseClone, and a clone copies the non-copyable '{3}' that is bound to a type parameter of '{4}'. " +
         "Keep the value as '{0}', bind a class that refers to the value instead, which a clone shares, or suppress this warning where the " +
         "object is never cloned.";
 
     private const string CloningUseMemberMessage =
+        "'{0}' uses '{1}' as '{2}', which hands the object to code that can clone it: the own code of '{3}' clones its objects field by " +
+        "field with MemberwiseClone, and a clone copies the non-copyable '{4}' that is bound to a type parameter of '{5}'. Bind a class that " +
+        "refers to the value instead, which a clone shares, or add '{6}' to a NonCopyableSymbols.txt file if the member does not clone the " +
+        "object. Code that never clones the object can use '{0}' in an unsafe context and suppress the warning there.";
+
+    private const string CloningUseMemberCurrentRulesMessage =
         "'{0}' uses '{1}' as '{2}', which hands the object to code that can clone it: the own code of '{3}' clones its objects field by " +
         "field with MemberwiseClone, and a clone copies the non-copyable '{4}' that is bound to a type parameter of '{5}'. Bind a class that " +
         "refers to the value instead, which a clone shares, add '{6}' to a NonCopyableSymbols.txt file if the member does not clone the " +
@@ -239,15 +286,27 @@ internal static class Rules
     private const string MemberClonesWithoutLineMessage =
         "'{0}' clones its object through '{1}', and an object of '{2}' can hold a non-copyable value that another project derives or " +
         "binds, where nothing shows the clone. Add '{3};clones' to the symbol list file that ships with the library, so that a call of " +
-        "'{0}' on such an object gets a warning where it is made{4}.";
+        "'{0}' on such an object is reported where it is made{4}.";
 
     private const string CloningUseTypeArgumentMessage =
+        "'{0}' binds '{1}' to type parameter '{2}', which is not marked [NonCopyable], so the generic can use the object as a type that " +
+        "hands it to code that can clone it: the own code of '{3}' clones its objects field by field with MemberwiseClone, and a clone " +
+        "copies the non-copyable '{4}' that is bound to a type parameter of '{5}'. Bind a class that refers to the value instead, which a " +
+        "clone shares. Code that never clones the object can use '{0}' in an unsafe context and suppress the warning there.";
+
+    private const string CloningUseTypeArgumentCurrentRulesMessage =
         "'{0}' binds '{1}' to type parameter '{2}', which is not marked [NonCopyable], so the generic can use the object as a type that " +
         "hands it to code that can clone it: the own code of '{3}' clones its objects field by field with MemberwiseClone, and a clone " +
         "copies the non-copyable '{4}' that is bound to a type parameter of '{5}'. Bind a class that refers to the value instead, which a " +
         "clone shares, or suppress this warning where the object is never cloned.";
 
     private const string CloningUseConstraintMessage =
+        "'{0}' binds '{1}' to type parameter '{2}', whose constraint '{3}' lets the generic use the object as a type that hands it to code " +
+        "that can clone it: the own code of '{4}' clones its objects field by field with MemberwiseClone, and a clone copies the " +
+        "non-copyable '{5}' that is bound to a type parameter of '{6}'. Bind a class that refers to the value instead, which a clone shares. " +
+        "Code that never clones the object can use '{0}' in an unsafe context and suppress the warning there.";
+
+    private const string CloningUseConstraintCurrentRulesMessage =
         "'{0}' binds '{1}' to type parameter '{2}', whose constraint '{3}' lets the generic use the object as a type that hands it to code " +
         "that can clone it: the own code of '{4}' clones its objects field by field with MemberwiseClone, and a clone copies the " +
         "non-copyable '{5}' that is bound to a type parameter of '{6}'. Bind a class that refers to the value instead, which a clone shares, " +
@@ -272,27 +331,39 @@ internal static class Rules
 
     private const string MemberwiseCloneThroughListedBaseMessage =
         "'{0}' derives from '{1}', whose own code clones an object field by field with MemberwiseClone, so a clone of an object of '{0}' " +
+        "copies its {2} of non-copyable type '{3}'. Hold the value in an object of a class that '{0}' refers to, which the clone shares.";
+
+    private const string MemberwiseCloneThroughListedBaseCurrentRulesMessage =
+        "'{0}' derives from '{1}', whose own code clones an object field by field with MemberwiseClone, so a clone of an object of '{0}' " +
         "copies its {2} of non-copyable type '{3}'. Hold the value in an object of a class that '{0}' refers to, which the clone shares, " +
         "or suppress this warning where no object of '{0}' is ever cloned.";
 
     private const string GetObjectValueDescription =
         "RuntimeHelpers.GetObjectValue returns a clone of a boxed struct, field by field, so it copies every non-copyable value that the " +
-        "struct holds; for any other object it returns the object itself. Every use of it gets a warning, a call and a method group alike, " +
+        "struct holds; for any other object it returns the object itself. Every use of it is reported, a call and a method group alike, " +
         "whatever the type of its argument: nobody calls it on something that cannot be a boxed struct.";
 
     private const string MemberwiseCloneOfOpenClassMessage =
         "MemberwiseClone of '{0}' clones an object of whatever class derives from it, and '{0}' can be derived from in another assembly, " +
+        "where a derived class can hold a non-copyable value that the clone copies. Seal the class or copy its fields in a constructor " +
+        "instead. Where no derived class may hold a non-copyable value, call MemberwiseClone in an unsafe context and suppress the warning " +
+        "there. To keep the class open and cloneable in a library, add '{1};clones' to the symbol list file that ships with the library, so " +
+        "that a class that derives from it in another project is reported for a non-copyable value, and then suppress the warning in " +
+        "the same way.";
+
+    private const string MemberwiseCloneOfOpenClassCurrentRulesMessage =
+        "MemberwiseClone of '{0}' clones an object of whatever class derives from it, and '{0}' can be derived from in another assembly, " +
         "where a derived class can hold a non-copyable value that the clone copies. Seal the class, copy its fields in a constructor " +
         "instead, or suppress this warning as a rule that no derived class may hold a non-copyable value. To keep the class open and " +
         "cloneable in a library, add '{1};clones' to the symbol list file that ships with the library, so that a class that derives from " +
-        "it in another project gets a warning for a non-copyable value, and then suppress this warning.";
+        "it in another project is reported for a non-copyable value, and then suppress this warning.";
 
     private const string MemberwiseCloneOfOpenClassDescription =
         "MemberwiseClone clones the object that it is called on, whatever its class, so a call on a class with no field of a non-copyable " +
         "type copies one of a derived class all the same. A class that can be derived from in another assembly can have such a derived " +
         "class that the analyzer does not see: it, or a class of the compilation that derives from it, is not sealed, is reachable from " +
         "outside its assembly, and has a constructor that a derived class there can call. An assembly with InternalsVisibleTo counts its internal types and constructors as reachable. A derived " +
-        "class in the same compilation that has such a field gets a warning as a definite copy (SCA1005).";
+        "class in the same compilation that has such a field is reported as a definite copy (SCA1005).";
 
     private const string FieldOfRecordDescription =
         "A record copies its fields in 'with', in its copy constructor and in the members that the compiler writes for it (Equals, GetHashCode " +
@@ -314,7 +385,7 @@ internal static class Rules
         "The compiler keeps the arguments of an iterator in the object that the method returns, and copies them into every enumerator that is " +
         "made from it. Everything that the iterator does with a by-value parameter of a non-copyable type then runs on a copy, once for each " +
         "enumeration. Create the value inside the iterator, or pass a reference to an object that holds it. An iterator that returns an " +
-        "enumerator and not a sequence keeps its arguments once, and gets no warning.";
+        "enumerator and not a sequence keeps its arguments once, and is not reported.";
 
     private const string AsyncOrIteratorMemberMessage =
         "'{0}' is an {2} member of non-copyable struct '{1}', so it runs on a copy of 'this' that the compiler keeps in its state machine: " +
@@ -409,15 +480,15 @@ internal static class Rules
         "A call is judged by the member that it binds to, so code of an assembly that was not built with the analyzer and that runs behind " +
         "a type of checked code or of the framework is not seen: an implementation of an interface or of an abstract class, a delegate or a " +
         "function pointer that it made, an object of a class that holds a non-copyable value. Such code can use a non-copyable type only " +
-        "where its assembly references the assembly that declares it, so that reference gets a warning, once for each assembly. A type " +
+        "where its assembly references the assembly that declares it, so that reference is reported, once for each assembly. A type " +
         "counts that a [NonCopyable] mark or a 'noncopyable' line of a symbol list file makes non-copyable, and that no 'copyable' line takes " +
         "out. The built-in non-copyable types of the framework are declared where every assembly references them, so for them, and for " +
         "what is bound to a marked type parameter, the reference that counts is one to an assembly of checked code whose members let " +
         "other code get at such a value: a field, a member that returns a reference or a container, or a member that other code can " +
         "implement and that is given one. The internal members of an assembly are not seen where it is referenced, so an assembly that " +
-        "checked code names in an InternalsVisibleTo attribute gets the warning whatever that code holds. A reference assembly, which a " +
+        "checked code names in an InternalsVisibleTo attribute is reported whatever that code holds. A reference assembly, which a " +
         "build is given for a project of the same solution, names only the assemblies that its reachable members use, so what its code " +
-        "uses is not known: such an assembly gets the warning where another assembly that it can reference declares a non-copyable type " +
+        "uses is not known: such an assembly is reported where another assembly that it can reference declares a non-copyable type " +
         "or lets a value out. A line 'A:<name>;trusted' of a symbol list file vouches for one assembly.";
 
     private const string SafeListTrustedHasNoEffectMessage =
@@ -511,9 +582,23 @@ internal static class Rules
         "Container '{1}' is bound to type parameter '{2}' of '{0}', which is not marked [NonCopyable], and the symbol list names the member " +
         "for '{3}' only, which says nothing of what it does with a value of '{2}'. Keep the container out of '{2}', or avoid the use.";
 
+    private const string SafeListUnknownOutcomeMessage =
+        "This line of the symbol list file gives 'borrowswhen' the outcome '{0}', which the analyzer does not know. It is left out, so the " +
+        "line claims less of the member: the outcomes are 'true' and 'false'.";
+
     private const string SafeListWidensBuiltInMessage =
         "This line of the symbol list file names '{0}' for {1}, where the built-in framework symbol list names it for '{2}' only. It has no " +
         "effect, because a line of a file can claim less of a member than the built-in list, not more.";
+
+    private const string SafeListClaimsMoreOutcomesThanBuiltInMessage =
+        "This line of the symbol list file lists {1} for '{0}' with 'borrowswhen', which the built-in framework symbol list does not list " +
+        "for that member. That claims more than the built-in list does, and has no effect, because a line of a file can claim less of a " +
+        "member than the built-in list, not more.";
+
+    private const string SafeListBorrowsBeyondBuiltInMessage =
+        "This line of the symbol list file marks '{0}' with 'borrows', where the built-in framework symbol list names it {1}. That claims " +
+        "more than the built-in list does, and has no effect, because a line of a file can claim less of a member than the built-in list, " +
+        "not more.";
 
     private const string OpaqueTypeDescription =
         "Code that receives a container as object, as a base class or interface that does not name the non-copyable type, or through a type " +
@@ -572,7 +657,7 @@ internal static class Rules
         "it read from a field, a property, an indexer, an element or a parameter, or a local that it also stored somewhere, passed to " +
         "something that keeps it, put a stored container into, or that a lambda captures. Every caller would read its non-copyable values as " +
         "new. That goes for an array and an ArraySegment<T> as well; a Span<T> and a Memory<T> are not checked, since every by-value read " +
-        "of an element through one gets a warning whatever it came from. A method whose return value is marked [Borrowed] keeps what it returns, and its " +
+        "of an element through one is reported whatever it came from. A method whose return value is marked [Borrowed] keeps what it returns, and its " +
         "callers treat the result as stored, as they treat what a property returns.";
 
     private const string KeepsUnmarkedParameterMessage =
@@ -620,7 +705,8 @@ internal static class Rules
         "the method owns: one that it only filled, never stored elsewhere and never passed to something that keeps it. A [MovedFrom] " +
         "parameter of the method itself is its own as well, unless the member that its caller sees, which it overrides, implements or is " +
         "converted to as a delegate, gives the parameter the type of a type parameter: the caller is then generic code, which passes a slot " +
-        "without knowing what it holds. Nothing can show that a container in a field is unshared, so taking it out of one needs a suppression.";
+        "without knowing what it holds. Nothing can show that a container in a field is unshared, so taking it out of one needs a " +
+        "suppression, which under the updated memory safety rules only code in an unsafe context can have.";
 
     private const string MovedFromAddedMessage =
         "Parameter '{0}' of '{1}' cannot be marked [MovedFrom] because {2} does not mark it: a caller through that passes anything, and not " +
@@ -704,12 +790,12 @@ internal static class Rules
 
     private const string ForeignNonCopyableAttributeMessage =
         "'{0}' is not the attribute that the analyzer reads: only 'Singulink.CodeAnalysis.NonCopyableAttribute' is recognised, so a " +
-        "struct that is marked with this class is copied with no warning. Declare the class in the namespace 'Singulink.CodeAnalysis', " +
+        "struct that is marked with this class is copied with nothing reported. Declare the class in the namespace 'Singulink.CodeAnalysis', " +
         "or suppress this warning if the attribute is meant for something else.";
 
     private const string NonCopyableAttributeWithNoSuffixMessage =
         "'{0}' is not the attribute that the analyzer reads: only 'Singulink.CodeAnalysis.NonCopyableAttribute' is recognised, by that " +
-        "name, so a struct that is marked with this class is copied with no warning. Name the class 'NonCopyableAttribute' and declare " +
+        "name, so a struct that is marked with this class is copied with nothing reported. Name the class 'NonCopyableAttribute' and declare " +
         "it in the namespace 'Singulink.CodeAnalysis', or suppress this warning if the attribute is meant for something else.";
 
     private const string ForeignNonCopyableAttributeUseMessage =
@@ -779,7 +865,7 @@ internal static class Rules
 
     private const string NotNullRefNotCheckedMessage =
         "The analyzer does not check that '{1}' returns only if the reference that it is given for parameter '{0}' refers to something, " +
-        "as [NotNullRef] says: its warnings about a [MovedFrom] parameter and about a value that is committed at the end of a 'try' " +
+        "as [NotNullRef] says: its reports about a [MovedFrom] parameter and about a value that is committed at the end of a 'try' " +
         "block rest on that. Verify and test the method, then suppress this warning here.";
 
     private const string NestedTooDeeplyMessage =
@@ -788,7 +874,7 @@ internal static class Rules
 
     private const string NestedTooDeeplyDescription =
         "The analyzer walks an expression by recursion and stops before the stack runs out: a chain of thousands of operators or of a " +
-        "thousand calls is deeper than it can follow. The member is then not checked at all, and this warning says so, so that a member " +
+        "thousand calls is deeper than it can follow. The member is then not checked at all, and this report says so, so that a member " +
         "that is not checked never looks clean.";
 
     private const string NotNullRefDescription =
@@ -865,605 +951,631 @@ internal static class Rules
         "vouches for the assembly of that simple name, which then gets no warning as unchecked code that uses a non-copyable type. A line that starts with " +
         "'#' is a comment, and so is the rest of a line after white space and '#'.";
 
-    public static readonly DiagnosticDescriptor CopyByAssignment = Create(
+    public static readonly Rule CopyByAssignment = Create(
         DiagnosticIds.CopyByAssignment,
         CopyByAssignmentTitle,
         CopyByAssignmentMessage,
         CopyByAssignmentDescription);
 
-    public static readonly DiagnosticDescriptor CopyByAssignmentIntoVariable = Create(
+    public static readonly Rule CopyByAssignmentIntoVariable = Create(
         DiagnosticIds.CopyByAssignment,
         CopyByAssignmentTitle,
         "Variable '{1}' is a copy of a stored value of non-copyable type '{0}'",
         CopyByAssignmentIntoVariableDescription);
 
-    public static readonly DiagnosticDescriptor CopyByAssignmentIntoForEachVariable = Create(
+    public static readonly Rule CopyByAssignmentIntoForEachVariable = Create(
         DiagnosticIds.CopyByAssignment,
         CopyByAssignmentTitle,
         CopyByAssignmentIntoForEachVariableMessage,
         CopyByAssignmentIntoVariableDescription);
 
-    public static readonly DiagnosticDescriptor CopyByAssignmentIntoSecondVariable = Create(
+    public static readonly Rule CopyByAssignmentIntoSecondVariable = Create(
         DiagnosticIds.CopyByAssignment,
         CopyByAssignmentTitle,
         "Variable '{1}' is a copy of a value of non-copyable type '{0}' that the pattern gives to another variable as well. A value goes to one variable only.",
         CopyByAssignmentIntoVariableDescription);
 
-    public static readonly DiagnosticDescriptor CopyByAssignmentForDeconstruct = Create(
+    public static readonly Rule CopyByAssignmentForDeconstruct = Create(
         DiagnosticIds.CopyByAssignment,
         CopyByAssignmentTitle,
         CopyByAssignmentForDeconstructMessage,
         CopyByAssignmentIntoVariableDescription);
 
-    public static readonly DiagnosticDescriptor DeconstructionOfStoredValue = Create(
+    public static readonly Rule DeconstructionOfStoredValue = Create(
         DiagnosticIds.CopyByAssignment,
         CopyByAssignmentTitle,
         DeconstructionOfStoredValueMessage,
         CopyByAssignmentIntoVariableDescription);
 
-    public static readonly DiagnosticDescriptor CopyByAssignmentOutOfBox = Create(
+    public static readonly Rule CopyByAssignmentOutOfBox = Create(
         DiagnosticIds.CopyByAssignment,
         CopyByAssignmentTitle,
         "Converting '{1}' to non-copyable type '{0}' copies the value out of the box",
         CopyByAssignmentOutOfBoxDescription);
 
-    public static readonly DiagnosticDescriptor CopyByReturnOfLivingVariable = Create(
+    public static readonly Rule CopyByReturnOfLivingVariable = Create(
         DiagnosticIds.CopyByReturn,
         CopyByReturnTitle,
         CopyByReturnOfLivingVariableMessage,
         CopyByReturnOfLivingVariableDescription);
 
-    public static readonly DiagnosticDescriptor CopyByReturnOfVariableUsedAfter = Create(
+    public static readonly Rule CopyByReturnOfVariableUsedAfter = Create(
         DiagnosticIds.CopyByReturn,
         CopyByReturnTitle,
         CopyByReturnOfVariableUsedAfterMessage,
         CopyByReturnOfLivingVariableDescription);
 
-    public static readonly DiagnosticDescriptor CopyByReturn = Create(
+    public static readonly Rule CopyByReturn = Create(
         DiagnosticIds.CopyByReturn,
         CopyByReturnTitle,
         "Do not return a stored value of non-copyable type '{0}' by value",
         CopyByReturnDescription);
 
-    public static readonly DiagnosticDescriptor UnsupportedUse = Create(
+    public static readonly Rule UsedAfterHandOff = Create(
+        DiagnosticIds.UsedAfterHandOff,
+        UsedAfterHandOffTitle,
+        UsedAfterHandOffMessage,
+        UsedAfterHandOffDescription);
+
+    public static readonly Rule UsedAfterHandOffInHandler = Create(
+        DiagnosticIds.UsedAfterHandOff,
+        UsedAfterHandOffTitle,
+        UsedAfterHandOffInHandlerMessage,
+        UsedAfterHandOffDescription);
+
+    public static readonly Rule UsedAfterHandOffBeforeNullReference = Create(
+        DiagnosticIds.UsedAfterHandOff,
+        UsedAfterHandOffTitle,
+        UsedAfterHandOffBeforeNullReferenceMessage,
+        UsedAfterHandOffDescription);
+
+    public static readonly Rule UnsupportedUse = Create(
         DiagnosticIds.UnsupportedUse,
         UnsupportedUseTitle,
         UnsupportedUseMessage,
         UnsupportedUseDescription);
 
-    public static readonly DiagnosticDescriptor ValuePassedTwice = Create(
+    public static readonly Rule ValuePassedTwice = Create(
         DiagnosticIds.UnsupportedUse,
         UnsupportedUseTitle,
         ValuePassedTwiceMessage,
         UnsupportedUseDescription);
 
-    public static readonly DiagnosticDescriptor DelegatesCombined = Create(
+    public static readonly Rule DelegatesCombined = Create(
         DiagnosticIds.UnsupportedUse,
         UnsupportedUseTitle,
         DelegatesCombinedMessage,
         UnsupportedUseDescription);
 
-    public static readonly DiagnosticDescriptor CopyOfStoredValue = Create(
+    public static readonly Rule CopyOfStoredValue = Create(
         DiagnosticIds.UnsupportedUse,
         UnsupportedUseTitle,
         CopyOfStoredValueMessage,
         UnsupportedUseDescription);
 
-    public static readonly DiagnosticDescriptor SwitchStatementMatchesCopy = Create(
+    public static readonly Rule SwitchStatementMatchesCopy = Create(
         DiagnosticIds.UnsupportedUse,
         UnsupportedUseTitle,
         SwitchStatementMatchesCopyMessage,
         UnsupportedUseDescription);
 
-    public static readonly DiagnosticDescriptor SwitchExpressionWithWhenMatchesCopy = Create(
+    public static readonly Rule SwitchExpressionWithWhenMatchesCopy = Create(
         DiagnosticIds.UnsupportedUse,
         UnsupportedUseTitle,
         SwitchExpressionWithWhenMatchesCopyMessage,
         UnsupportedUseDescription);
 
-    public static readonly DiagnosticDescriptor PartUsedTwiceInPattern = Create(
+    public static readonly Rule PartUsedTwiceInPattern = Create(
         DiagnosticIds.UnsupportedUse,
         UnsupportedUseTitle,
         PartUsedTwiceInPatternMessage,
         UnsupportedUseDescription);
 
-    public static readonly DiagnosticDescriptor MemberOnReadOnlyReference = Create(
+    public static readonly Rule MemberOnReadOnlyReference = Create(
         DiagnosticIds.MemberOnReadOnlyReference,
         MemberOnReadOnlyReferenceTitle,
         MemberOnReadOnlyReferenceMessage,
         MemberOnReadOnlyReferenceDescription);
 
-    public static readonly DiagnosticDescriptor MemberOnReadOnlyTypeParameter = Create(
+    public static readonly Rule MemberOnReadOnlyTypeParameter = Create(
         DiagnosticIds.MemberOnReadOnlyReference,
         MemberOnReadOnlyReferenceTitle,
         MemberOnReadOnlyTypeParameterMessage,
         MemberOnReadOnlyReferenceDescription);
 
-    public static readonly DiagnosticDescriptor Boxing = Create(
+    public static readonly Rule Boxing = Create(
         DiagnosticIds.Boxing,
         "Do not box a stored non-copyable value",
         "Converting a stored value of non-copyable type '{0}' to '{1}' boxes a copy of it",
         BoxingDescription);
 
-    public static readonly DiagnosticDescriptor MemberwiseCloneCall = Create(
+    public static readonly Rule MemberwiseCloneCall = Create(
         DiagnosticIds.MemberwiseCloneCall,
         MemberwiseCloneTitle,
         "MemberwiseClone of '{0}' copies its {2} of non-copyable type '{1}'",
         MemberwiseCloneCallDescription);
 
-    public static readonly DiagnosticDescriptor MemberwiseCloneCallOnValue = Create(
+    public static readonly Rule MemberwiseCloneCallOnValue = Create(
         DiagnosticIds.MemberwiseCloneCall,
         MemberwiseCloneTitle,
         "MemberwiseClone copies a value of non-copyable type '{0}'",
         MemberwiseCloneCallDescription);
 
-    public static readonly DiagnosticDescriptor MemberwiseCloneThroughListedBase = Create(
+    public static readonly Rule MemberwiseCloneThroughListedBase = CreateWithCurrentRulesMessage(
         DiagnosticIds.CloningBase,
         CloningBaseTitle,
         MemberwiseCloneThroughListedBaseMessage,
+        MemberwiseCloneThroughListedBaseCurrentRulesMessage,
         CloningBaseDescription);
 
-    public static readonly DiagnosticDescriptor MemberwiseCloneOfTypeParameterThroughListedBase = Create(
+    public static readonly Rule MemberwiseCloneOfTypeParameterThroughListedBase = CreateWithCurrentRulesMessage(
         DiagnosticIds.CloningBase,
         CloningBaseTitle,
         MemberwiseCloneOfTypeParameterThroughListedBaseMessage,
+        MemberwiseCloneOfTypeParameterThroughListedBaseCurrentRulesMessage,
         CloningBaseDescription);
 
-    public static readonly DiagnosticDescriptor FieldBehindUnknownBase = Create(
+    public static readonly Rule FieldBehindUnknownBase = Create(
         DiagnosticIds.CloningBase,
         CloningBaseTitle,
         FieldBehindUnknownBaseMessage,
         CloningBaseDescription);
 
-    public static readonly DiagnosticDescriptor CloningBinding = Create(
+    public static readonly Rule CloningBinding = CreateWithCurrentRulesMessage(
         DiagnosticIds.CloningBase,
         CloningBaseTitle,
         CloningBindingMessage,
+        CloningBindingCurrentRulesMessage,
         CloningBaseDescription);
 
-    public static readonly DiagnosticDescriptor CloningUseConversion = Create(
+    public static readonly Rule CloningUseConversion = CreateWithCurrentRulesMessage(
         DiagnosticIds.CloningBase,
         CloningBaseTitle,
         CloningUseConversionMessage,
+        CloningUseConversionCurrentRulesMessage,
         CloningBaseDescription);
 
-    public static readonly DiagnosticDescriptor CloningUseMember = Create(
+    public static readonly Rule CloningUseMember = CreateWithCurrentRulesMessage(
         DiagnosticIds.CloningBase,
         CloningBaseTitle,
         CloningUseMemberMessage,
+        CloningUseMemberCurrentRulesMessage,
         CloningBaseDescription);
 
-    public static readonly DiagnosticDescriptor CloningUseOfCloningMember = Create(
+    public static readonly Rule CloningUseOfCloningMember = Create(
         DiagnosticIds.CloningBase,
         CloningBaseTitle,
         CloningUseOfCloningMemberMessage,
         CloningBaseDescription);
 
-    public static readonly DiagnosticDescriptor CloningUseHandsBack = Create(
+    public static readonly Rule CloningUseHandsBack = Create(
         DiagnosticIds.CloningBase,
         CloningBaseTitle,
         CloningUseHandsBackMessage,
         CloningBaseDescription);
 
-    public static readonly DiagnosticDescriptor CloningUseOfMemberOfUncoveredClass = Create(
+    public static readonly Rule CloningUseOfMemberOfUncoveredClass = Create(
         DiagnosticIds.CloningBase,
         CloningBaseTitle,
         CloningUseOfMemberOfUncoveredClassMessage,
         CloningBaseDescription);
 
-    public static readonly DiagnosticDescriptor CloningUseRunsMemberThatClones = Create(
+    public static readonly Rule CloningUseRunsMemberThatClones = Create(
         DiagnosticIds.CloningBase,
         CloningBaseTitle,
         CloningUseRunsMemberThatClonesMessage,
         CloningBaseDescription);
 
-    public static readonly DiagnosticDescriptor CloningUseRunsOverrideOfCloningClass = Create(
+    public static readonly Rule CloningUseRunsOverrideOfCloningClass = Create(
         DiagnosticIds.CloningBase,
         CloningBaseTitle,
         CloningUseRunsOverrideOfCloningClassMessage,
         CloningBaseDescription);
 
-    public static readonly DiagnosticDescriptor CloningUseRunsUnknownMember = Create(
+    public static readonly Rule CloningUseRunsUnknownMember = Create(
         DiagnosticIds.CloningBase,
         CloningBaseTitle,
         CloningUseRunsUnknownMemberMessage,
         CloningBaseDescription);
 
-    public static readonly DiagnosticDescriptor CloningUseOfUnknownMember = Create(
+    public static readonly Rule CloningUseOfUnknownMember = Create(
         DiagnosticIds.CloningBase,
         CloningBaseTitle,
         CloningUseOfUnknownMemberMessage,
         CloningBaseDescription);
 
-    public static readonly DiagnosticDescriptor CloningUseTypeArgument = Create(
+    public static readonly Rule CloningUseTypeArgument = CreateWithCurrentRulesMessage(
         DiagnosticIds.CloningBase,
         CloningBaseTitle,
         CloningUseTypeArgumentMessage,
+        CloningUseTypeArgumentCurrentRulesMessage,
         CloningBaseDescription);
 
-    public static readonly DiagnosticDescriptor CloningUseConstraint = Create(
+    public static readonly Rule CloningUseConstraint = CreateWithCurrentRulesMessage(
         DiagnosticIds.CloningBase,
         CloningBaseTitle,
         CloningUseConstraintMessage,
+        CloningUseConstraintCurrentRulesMessage,
         CloningBaseDescription);
 
-    public static readonly DiagnosticDescriptor MemberwiseCloneOfDerivedClass = Create(
+    public static readonly Rule MemberwiseCloneOfDerivedClass = Create(
         DiagnosticIds.MemberwiseCloneCall,
         MemberwiseCloneTitle,
         "MemberwiseClone of '{0}' clones an object of '{1}' as well, which derives from it, and copies its {3} of non-copyable type '{2}'",
         MemberwiseCloneCallDescription);
 
-    public static readonly DiagnosticDescriptor MemberwiseCloneOfOpenClass = Create(
+    public static readonly Rule MemberwiseCloneOfOpenClass = CreateWithCurrentRulesMessage(
         DiagnosticIds.MemberwiseCloneOfOpenClass,
         "Do not call MemberwiseClone on a class that another assembly can derive from",
         MemberwiseCloneOfOpenClassMessage,
+        MemberwiseCloneOfOpenClassCurrentRulesMessage,
         MemberwiseCloneOfOpenClassDescription);
 
-    public static readonly DiagnosticDescriptor MemberClonesWithoutLine = Create(
+    public static readonly Rule MemberClonesWithoutLine = Create(
         DiagnosticIds.MemberwiseCloneOfOpenClass,
         "Do not call MemberwiseClone on a class that another assembly can derive from",
         MemberClonesWithoutLineMessage,
         MemberwiseCloneOfOpenClassDescription);
 
-    public static readonly DiagnosticDescriptor GetObjectValueCall = Create(
+    public static readonly Rule GetObjectValueCall = Create(
         DiagnosticIds.GetObjectValue,
         "Do not use RuntimeHelpers.GetObjectValue",
         "RuntimeHelpers.GetObjectValue clones a boxed struct field by field, a non-copyable value included. Use the object as it is.",
         GetObjectValueDescription);
 
-    public static readonly DiagnosticDescriptor FieldOfCopyableType = Create(
+    public static readonly Rule FieldOfCopyableType = Create(
         DiagnosticIds.FieldOfCopyableType,
         FieldOfCopyableTypeTitle,
         "Copyable field '{1}' cannot have non-copyable type '{0}'",
         FieldOfCopyableTypeDescription);
 
-    public static readonly DiagnosticDescriptor FieldOfRecord = Create(
+    public static readonly Rule FieldOfRecord = Create(
         DiagnosticIds.FieldOfCopyableType,
         FieldOfCopyableTypeTitle,
         "Field '{1}' of a record cannot have non-copyable type '{0}'",
         FieldOfRecordDescription);
 
-    public static readonly DiagnosticDescriptor FieldByPrimaryConstructor = Create(
+    public static readonly Rule FieldByPrimaryConstructor = Create(
         DiagnosticIds.FieldOfCopyableType,
         FieldOfCopyableTypeTitle,
         FieldByPrimaryConstructorMessage,
         FieldOfCopyableTypeDescription);
 
-    public static readonly DiagnosticDescriptor AutoProperty = Create(
+    public static readonly Rule AutoProperty = Create(
         DiagnosticIds.AutoProperty,
         "Do not declare an auto-property of a non-copyable type",
         "Auto-property '{1}' cannot have non-copyable type '{0}'",
         AutoPropertyDescription);
 
-    public static readonly DiagnosticDescriptor AnonymousTypeMember = Create(
+    public static readonly Rule AnonymousTypeMember = Create(
         DiagnosticIds.AutoProperty,
         "Do not declare an auto-property of a non-copyable type",
         AnonymousTypeMemberMessage,
         AutoPropertyDescription);
 
-    public static readonly DiagnosticDescriptor PositionalParameterReadByDeconstruct = Create(
+    public static readonly Rule PositionalParameterReadByDeconstruct = Create(
         DiagnosticIds.AutoProperty,
         "Do not declare an auto-property of a non-copyable type",
         PositionalParameterReadByDeconstructMessage,
         AutoPropertyDescription);
 
-    public static readonly DiagnosticDescriptor IteratorParameter = Create(
+    public static readonly Rule IteratorParameter = Create(
         DiagnosticIds.IteratorParameter,
         "Do not give an iterator that returns a sequence a by-value parameter of a non-copyable type",
         IteratorParameterMessage,
         IteratorParameterDescription);
 
-    public static readonly DiagnosticDescriptor DefaultInterfaceMember = Create(
+    public static readonly Rule DefaultInterfaceMember = Create(
         DiagnosticIds.DefaultInterfaceMember,
         DefaultInterfaceMemberTitle,
         DefaultInterfaceMemberMessage,
         DefaultInterfaceMemberDescription);
 
-    public static readonly DiagnosticDescriptor DefaultInterfaceMemberBound = Create(
+    public static readonly Rule DefaultInterfaceMemberBound = Create(
         DiagnosticIds.DefaultInterfaceMember,
         DefaultInterfaceMemberTitle,
         DefaultInterfaceMemberBoundMessage,
         DefaultInterfaceMemberDescription);
 
-    public static readonly DiagnosticDescriptor AsyncOrIteratorMember = Create(
+    public static readonly Rule AsyncOrIteratorMember = Create(
         DiagnosticIds.AsyncOrIteratorMember,
         "Do not make an instance member of a non-copyable struct async or an iterator",
         AsyncOrIteratorMemberMessage,
         AsyncOrIteratorMemberDescription);
 
-    public static readonly DiagnosticDescriptor MemberListedForOtherTypeParameter = Create(
+    public static readonly Rule MemberListedForOtherTypeParameter = Create(
         DiagnosticIds.UnlistedMember,
         "Do not use a member of an unmarked generic with a non-copyable type",
         MemberListedForOtherTypeParameterMessage,
         UnlistedMemberDescription);
 
-    public static readonly DiagnosticDescriptor UnlistedMember = Create(
+    public static readonly Rule UnlistedMember = Create(
         DiagnosticIds.UnlistedMember,
         "Do not use a member of an unmarked generic with a non-copyable type",
         UnlistedMemberMessage,
         UnlistedMemberDescription);
 
-    public static readonly DiagnosticDescriptor UnlistedMemberOfUncheckedCode = Create(
+    public static readonly Rule UnlistedMemberOfUncheckedCode = Create(
         DiagnosticIds.UnlistedMember,
         "Do not use a member of an unmarked generic with a non-copyable type",
         UnlistedMemberOfUncheckedCodeMessage,
         UnlistedMemberDescription);
 
-    public static readonly DiagnosticDescriptor UnlistedMemberThatClones = Create(
+    public static readonly Rule UnlistedMemberThatClones = Create(
         DiagnosticIds.UnlistedMember,
         "Do not use a member of an unmarked generic with a non-copyable type",
         UnlistedMemberThatClonesMessage,
         UnlistedMemberDescription);
 
-    public static readonly DiagnosticDescriptor UncheckedMember = Create(
+    public static readonly Rule UncheckedMember = Create(
         DiagnosticIds.UncheckedMember,
         "Do not give a non-copyable value other than by value to code that was not built with the analyzer",
         UncheckedMemberMessage,
         UncheckedMemberDescription);
 
-    public static readonly DiagnosticDescriptor UncheckedAssembly = Create(
+    public static readonly Rule UncheckedAssembly = Create(
         DiagnosticIds.UncheckedAssembly,
         "Build an assembly that uses a non-copyable type with the analyzer",
         UncheckedAssemblyMessage,
         UncheckedAssemblyDescription,
         WellKnownDiagnosticTags.CompilationEnd);
 
-    public static readonly DiagnosticDescriptor UncheckedAssemblyOfExposedValue = Create(
+    public static readonly Rule UncheckedAssemblyOfExposedValue = Create(
         DiagnosticIds.UncheckedAssembly,
         "Build an assembly that uses a non-copyable type with the analyzer",
         UncheckedAssemblyOfExposedValueMessage,
         UncheckedAssemblyDescription,
         WellKnownDiagnosticTags.CompilationEnd);
 
-    public static readonly DiagnosticDescriptor UncheckedFriendAssembly = Create(
+    public static readonly Rule UncheckedFriendAssembly = Create(
         DiagnosticIds.UncheckedAssembly,
         "Build an assembly that uses a non-copyable type with the analyzer",
         UncheckedFriendAssemblyMessage,
         UncheckedAssemblyDescription,
         WellKnownDiagnosticTags.CompilationEnd);
 
-    public static readonly DiagnosticDescriptor UncheckedReferenceAssembly = Create(
+    public static readonly Rule UncheckedReferenceAssembly = Create(
         DiagnosticIds.UncheckedAssembly,
         "Build an assembly that uses a non-copyable type with the analyzer",
         UncheckedReferenceAssemblyMessage,
         UncheckedAssemblyDescription,
         WellKnownDiagnosticTags.CompilationEnd);
 
-    public static readonly DiagnosticDescriptor RequiresCopyableMember = Create(
+    public static readonly Rule RequiresCopyableMember = Create(
         DiagnosticIds.RequiresCopyable,
         "Do not use a member that requires a copyable type with a non-copyable type",
         "'{0}' requires a copyable type and cannot be used with non-copyable type '{1}' as '{2}'. Use a member that does not copy.",
         RequiresCopyableMemberDescription);
 
-    public static readonly DiagnosticDescriptor UntypedCollectionConversion = Create(
+    public static readonly Rule UntypedCollectionConversion = Create(
         DiagnosticIds.UntypedCollection,
         UntypedCollectionTitle,
         UntypedCollectionConversionMessage,
         UntypedCollectionDescription);
 
-    public static readonly DiagnosticDescriptor UntypedCollectionVariance = Create(
+    public static readonly Rule UntypedCollectionVariance = Create(
         DiagnosticIds.UntypedCollection,
         UntypedCollectionTitle,
         UntypedCollectionVarianceMessage,
         UntypedCollectionDescription);
 
-    public static readonly DiagnosticDescriptor UntypedCollectionMember = Create(
+    public static readonly Rule UntypedCollectionMember = Create(
         DiagnosticIds.UntypedCollection,
         UntypedCollectionTitle,
         UntypedCollectionMemberMessage,
         UntypedCollectionDescription);
 
-    public static readonly DiagnosticDescriptor UntypedCollectionReturn = Create(
+    public static readonly Rule UntypedCollectionReturn = Create(
         DiagnosticIds.UntypedCollection,
         UntypedCollectionTitle,
         UntypedCollectionReturnMessage,
         UntypedCollectionDescription);
 
-    public static readonly DiagnosticDescriptor UntypedCollectionMethodGroup = Create(
+    public static readonly Rule UntypedCollectionMethodGroup = Create(
         DiagnosticIds.UntypedCollection,
         UntypedCollectionTitle,
         UntypedCollectionMethodGroupMessage,
         UntypedCollectionDescription);
 
-    public static readonly DiagnosticDescriptor UntypedCollectionConstraint = Create(
+    public static readonly Rule UntypedCollectionConstraint = Create(
         DiagnosticIds.UntypedCollection,
         UntypedCollectionTitle,
         UntypedCollectionConstraintMessage,
         UntypedCollectionDescription);
 
-    public static readonly DiagnosticDescriptor OpaqueConversion = Create(
+    public static readonly Rule OpaqueConversion = Create(
         DiagnosticIds.OpaqueType,
         OpaqueTypeTitle,
         OpaqueConversionMessage,
         OpaqueTypeDescription);
 
-    public static readonly DiagnosticDescriptor OpaqueVariance = Create(
+    public static readonly Rule OpaqueVariance = Create(
         DiagnosticIds.OpaqueType,
         OpaqueTypeTitle,
         OpaqueVarianceMessage,
         OpaqueTypeDescription);
 
-    public static readonly DiagnosticDescriptor OpaqueMember = Create(
+    public static readonly Rule OpaqueMember = Create(
         DiagnosticIds.OpaqueType,
         OpaqueTypeTitle,
         OpaqueMemberMessage,
         OpaqueTypeDescription);
 
-    public static readonly DiagnosticDescriptor OpaqueMemberThatClones = Create(
+    public static readonly Rule OpaqueMemberThatClones = Create(
         DiagnosticIds.OpaqueType,
         OpaqueTypeTitle,
         OpaqueMemberThatClonesMessage,
         OpaqueTypeDescription);
 
-    public static readonly DiagnosticDescriptor OpaqueReturn = Create(
+    public static readonly Rule OpaqueReturn = Create(
         DiagnosticIds.OpaqueType,
         OpaqueTypeTitle,
         OpaqueReturnMessage,
         OpaqueTypeDescription);
 
-    public static readonly DiagnosticDescriptor OpaqueMethodGroup = Create(
+    public static readonly Rule OpaqueMethodGroup = Create(
         DiagnosticIds.OpaqueType,
         OpaqueTypeTitle,
         OpaqueMethodGroupMessage,
         OpaqueTypeDescription);
 
-    public static readonly DiagnosticDescriptor OpaqueTypeParameterConversion = Create(
+    public static readonly Rule OpaqueTypeParameterConversion = Create(
         DiagnosticIds.OpaqueType,
         OpaqueTypeTitle,
         OpaqueTypeParameterConversionMessage,
         OpaqueTypeDescription);
 
-    public static readonly DiagnosticDescriptor OpaqueConstraint = Create(
+    public static readonly Rule OpaqueConstraint = Create(
         DiagnosticIds.OpaqueType,
         OpaqueTypeTitle,
         OpaqueConstraintMessage,
         OpaqueTypeDescription);
 
-    public static readonly DiagnosticDescriptor OpaqueBoxing = Create(
+    public static readonly Rule OpaqueBoxing = Create(
         DiagnosticIds.OpaqueType,
         OpaqueTypeTitle,
         OpaqueBoxingMessage,
         OpaqueTypeDescription);
 
-    public static readonly DiagnosticDescriptor OpaqueLambdaBoxing = Create(
+    public static readonly Rule OpaqueLambdaBoxing = Create(
         DiagnosticIds.OpaqueType,
         OpaqueTypeTitle,
         OpaqueLambdaBoxingMessage,
         OpaqueTypeDescription);
 
-    public static readonly DiagnosticDescriptor OpaqueTypeArgumentListedForOther = Create(
+    public static readonly Rule OpaqueTypeArgumentListedForOther = Create(
         DiagnosticIds.OpaqueType,
         OpaqueTypeTitle,
         OpaqueTypeArgumentListedForOtherMessage,
         OpaqueTypeDescription);
 
-    public static readonly DiagnosticDescriptor OpaqueTypeArgument = Create(
+    public static readonly Rule OpaqueTypeArgument = Create(
         DiagnosticIds.OpaqueType,
         OpaqueTypeTitle,
         OpaqueTypeArgumentMessage,
         OpaqueTypeDescription);
 
-    public static readonly DiagnosticDescriptor ReadFromStoredContainer = Create(
+    public static readonly Rule ReadFromStoredContainer = Create(
         DiagnosticIds.ReadFromStoredContainer,
         ReadFromStoredContainerTitle,
         ReadFromStoredContainerMessage,
         ReadFromStoredContainerDescription);
 
-    public static readonly DiagnosticDescriptor CreatedFromStoredContainer = Create(
+    public static readonly Rule CreatedFromStoredContainer = Create(
         DiagnosticIds.ReadFromStoredContainer,
         ReadFromStoredContainerTitle,
         CreatedFromStoredContainerMessage,
         ReadFromStoredContainerDescription);
 
-    public static readonly DiagnosticDescriptor OpaqueLambdaResult = Create(
+    public static readonly Rule OpaqueLambdaResult = Create(
         DiagnosticIds.OpaqueType,
         OpaqueTypeTitle,
         OpaqueLambdaResultMessage,
         OpaqueTypeDescription);
 
-    public static readonly DiagnosticDescriptor UnownedContainerReturned = Create(
+    public static readonly Rule UnownedContainerReturned = Create(
         DiagnosticIds.UnownedContainerReturned,
         UnownedContainerReturnedTitle,
         UnownedContainerReturnedMessage,
         UnownedContainerReturnedDescription);
 
-    public static readonly DiagnosticDescriptor DelegateHandsOutStoredContainer = Create(
+    public static readonly Rule DelegateHandsOutStoredContainer = Create(
         DiagnosticIds.UnownedContainerReturned,
         UnownedContainerReturnedTitle,
         DelegateHandsOutStoredContainerMessage,
         UnownedContainerReturnedDescription);
 
-    public static readonly DiagnosticDescriptor DelegateOverTypeParameter = Create(
+    public static readonly Rule DelegateOverTypeParameter = Create(
         DiagnosticIds.UnownedContainerReturned,
         UnownedContainerReturnedTitle,
         DelegateOverTypeParameterMessage,
         UnownedContainerReturnedDescription);
 
-    public static readonly DiagnosticDescriptor HolderReturnedByOverride = Create(
+    public static readonly Rule HolderReturnedByOverride = Create(
         DiagnosticIds.UnownedContainerReturned,
         UnownedContainerReturnedTitle,
         HolderReturnedByOverrideMessage,
         UnownedContainerReturnedDescription);
 
-    public static readonly DiagnosticDescriptor HolderLostByVariance = Create(
+    public static readonly Rule HolderLostByVariance = Create(
         DiagnosticIds.UnownedContainerReturned,
         UnownedContainerReturnedTitle,
         HolderLostByVarianceMessage,
         UnownedContainerReturnedDescription);
 
-    public static readonly DiagnosticDescriptor TypeParameterMarkNotPassedOn = Create(
+    public static readonly Rule TypeParameterMarkNotPassedOn = Create(
         DiagnosticIds.MarkNotKept,
         MarkNotKeptTitle,
         "Type parameter '{0}' is passed to [NonCopyable] type parameter '{1}' of '{2}' and must be marked [NonCopyable] as well",
         MarkNotKeptDescription);
 
-    public static readonly DiagnosticDescriptor TypeParameterMarkNotKept = Create(
+    public static readonly Rule TypeParameterMarkNotKept = Create(
         DiagnosticIds.MarkNotKept,
         MarkNotKeptTitle,
         TypeParameterMarkNotKeptMessage,
         MarkNotKeptDescription);
 
-    public static readonly DiagnosticDescriptor RequiresCopyableNotOnBaseMember = Create(
+    public static readonly Rule RequiresCopyableNotOnBaseMember = Create(
         DiagnosticIds.MarkNotKept,
         MarkNotKeptTitle,
         "'{0}' cannot be marked [RequiresCopyable] because '{1}', which it overrides or implements, is not",
         MarkNotKeptDescription);
 
-    public static readonly DiagnosticDescriptor RequiresCopyableNotOnBaseCopyConstructor = Create(
+    public static readonly Rule RequiresCopyableNotOnBaseCopyConstructor = Create(
         DiagnosticIds.MarkNotKept,
         MarkNotKeptTitle,
         RequiresCopyableNotOnBaseCopyConstructorMessage,
         MarkNotKeptDescription);
 
-    public static readonly DiagnosticDescriptor RequiresCopyableOnMemberNeverCalled = Create(
+    public static readonly Rule RequiresCopyableOnMemberNeverCalled = Create(
         DiagnosticIds.MarkNotKept,
         MarkNotKeptTitle,
         RequiresCopyableOnMemberNeverCalledMessage,
         MarkNotKeptDescription);
 
-    public static readonly DiagnosticDescriptor BorrowedNotOnBaseMember = Create(
+    public static readonly Rule BorrowedNotOnBaseMember = Create(
         DiagnosticIds.MarkNotKept,
         MarkNotKeptTitle,
         BorrowedNotOnBaseMemberMessage,
         MarkNotKeptDescription);
 
-    public static readonly DiagnosticDescriptor BorrowedNotOnDelegate = Create(
+    public static readonly Rule BorrowedNotOnDelegate = Create(
         DiagnosticIds.MarkNotKept,
         MarkNotKeptTitle,
         BorrowedNotOnDelegateMessage,
         MarkNotKeptDescription);
 
-    public static readonly DiagnosticDescriptor KeepsUnmarkedParameter = Create(
+    public static readonly Rule KeepsUnmarkedParameter = Create(
         DiagnosticIds.KeptParameter,
         "Mark a container parameter that the method keeps",
         KeepsUnmarkedParameterMessage,
         KeepsUnmarkedParameterDescription);
 
-    public static readonly DiagnosticDescriptor ParameterUsedInAWayNotFollowed = Create(
+    public static readonly Rule ParameterUsedInAWayNotFollowed = Create(
         DiagnosticIds.KeptParameter,
         "Mark a container parameter that the method keeps",
         ParameterUsedInAWayNotFollowedMessage,
         KeepsUnmarkedParameterDescription);
 
-    public static readonly DiagnosticDescriptor PassesParameterToUncheckedCode = Create(
+    public static readonly Rule PassesParameterToUncheckedCode = Create(
         DiagnosticIds.KeptParameter,
         "Mark a container parameter that the method keeps",
         PassesParameterToUncheckedCodeMessage,
         KeepsUnmarkedParameterDescription);
 
-    public static readonly DiagnosticDescriptor KeepsParameterAfterReturning = Create(
+    public static readonly Rule KeepsParameterAfterReturning = Create(
         DiagnosticIds.KeptParameter,
         "Mark a container parameter that the method keeps",
         KeepsParameterAfterReturningMessage,
         KeepsUnmarkedParameterDescription);
 
-    public static readonly DiagnosticDescriptor ContainerMovedFromUnowned = Create(
+    public static readonly Rule ContainerMovedFromUnowned = Create(
         DiagnosticIds.ContainerNotOwned,
         ContainerNotOwnedTitle,
         ContainerMovedFromUnownedMessage,
         ContainerNotOwnedDescription);
 
-    public static readonly DiagnosticDescriptor ContainerMovedFromSlotParameter = Create(
+    public static readonly Rule ContainerMovedFromSlotParameter = Create(
         DiagnosticIds.ContainerNotOwned,
         ContainerNotOwnedTitle,
         ContainerMovedFromSlotParameterMessage,
@@ -1472,267 +1584,284 @@ internal static class Rules
     /// <summary>
     /// The same finding for a method that is used as a method group, which is known only when the whole compilation has been seen.
     /// </summary>
-    public static readonly DiagnosticDescriptor ContainerMovedFromSlotParameterOfMethodGroup = Create(
+    public static readonly Rule ContainerMovedFromSlotParameterOfMethodGroup = Create(
         DiagnosticIds.ContainerNotOwned,
         ContainerNotOwnedTitle,
         ContainerMovedFromSlotParameterMessage,
         ContainerNotOwnedDescription,
         WellKnownDiagnosticTags.CompilationEnd);
 
-    public static readonly DiagnosticDescriptor SlotGivenToOwner = Create(
+    public static readonly Rule SlotGivenToOwner = Create(
         DiagnosticIds.ContainerNotOwned,
         ContainerNotOwnedTitle,
         SlotGivenToOwnerMessage,
         ContainerNotOwnedDescription);
 
-    public static readonly DiagnosticDescriptor MovedFromAdded = Create(
+    public static readonly Rule MovedFromAdded = Create(
         DiagnosticIds.MarkNotKept,
         MarkNotKeptTitle,
         MovedFromAddedMessage,
         MarkNotKeptDescription);
 
-    public static readonly DiagnosticDescriptor MovedFromAddedOverUncheckedMark = Create(
+    public static readonly Rule MovedFromAddedOverUncheckedMark = Create(
         DiagnosticIds.MarkNotKept,
         MarkNotKeptTitle,
         MovedFromAddedOverUncheckedMarkMessage,
         MarkNotKeptDescription);
 
-    public static readonly DiagnosticDescriptor MovedFromDropped = Create(
+    public static readonly Rule MovedFromDropped = Create(
         DiagnosticIds.MarkNotKept,
         MarkNotKeptTitle,
         MovedFromDroppedMessage,
         MarkNotKeptDescription);
 
-    public static readonly DiagnosticDescriptor MovedFromDroppedWithNoParameterList = Create(
+    public static readonly Rule MovedFromDroppedWithNoParameterList = Create(
         DiagnosticIds.MarkNotKept,
         MarkNotKeptTitle,
         MovedFromDroppedWithNoParameterListMessage,
         MarkNotKeptDescription);
 
-    public static readonly DiagnosticDescriptor KeptNotOnBaseMember = Create(
+    public static readonly Rule KeptNotOnBaseMember = Create(
         DiagnosticIds.MarkNotKept,
         MarkNotKeptTitle,
         KeptNotOnBaseMemberMessage,
         MarkNotKeptDescription);
 
-    public static readonly DiagnosticDescriptor KeptNotOnDelegate = Create(
+    public static readonly Rule KeptNotOnDelegate = Create(
         DiagnosticIds.MarkNotKept,
         MarkNotKeptTitle,
         KeptNotOnDelegateMessage,
         MarkNotKeptDescription);
 
-    public static readonly DiagnosticDescriptor KeepingNotOnInterfaceMember = Create(
+    public static readonly Rule KeepingNotOnInterfaceMember = Create(
         DiagnosticIds.MarkNotKept,
         MarkNotKeptTitle,
         KeepingNotOnInterfaceMemberMessage,
         MarkNotKeptDescription);
 
-    public static readonly DiagnosticDescriptor KeepingNotOnDelegate = Create(
+    public static readonly Rule KeepingNotOnDelegate = Create(
         DiagnosticIds.MarkNotKept,
         MarkNotKeptTitle,
         KeepingNotOnDelegateMessage,
         MarkNotKeptDescription);
 
-    public static readonly DiagnosticDescriptor ImplementationNotChecked = Create(
+    public static readonly Rule ImplementationNotChecked = Create(
         DiagnosticIds.MarkNotKept,
         MarkNotKeptTitle,
         ImplementationNotCheckedMessage,
         MarkNotKeptDescription);
 
-    public static readonly DiagnosticDescriptor MovedFromNotOnRefParameter = Create(
+    public static readonly Rule MovedFromNotOnRefParameter = Create(
         DiagnosticIds.MovedFromMisuse,
         MovedFromTitle,
         "[MovedFrom] can only be applied to a 'ref' parameter",
         MovedFromDescription);
 
-    public static readonly DiagnosticDescriptor MovedFromOnPrimaryConstructor = Create(
+    public static readonly Rule MovedFromOnPrimaryConstructor = Create(
         DiagnosticIds.MovedFromMisuse,
         MovedFromTitle,
         MovedFromOnPrimaryConstructorMessage,
         MovedFromDescription);
 
-    public static readonly DiagnosticDescriptor MovedFromPathsNotChecked = Create(
+    public static readonly Rule MovedFromPathsNotChecked = Create(
         DiagnosticIds.MovedFromMisuse,
         MovedFromTitle,
         MovedFromPathsNotCheckedMessage,
         MovedFromDescription,
         WellKnownDiagnosticTags.CompilationEnd);
 
-    public static readonly DiagnosticDescriptor MovedFromParameterNotAssigned = Create(
+    public static readonly Rule MovedFromParameterNotAssigned = Create(
         DiagnosticIds.MovedFromMisuse,
         MovedFromTitle,
         MovedFromParameterNotAssignedMessage,
         MovedFromDescription);
 
-    public static readonly DiagnosticDescriptor MovedFromParameterReadAgain = Create(
+    public static readonly Rule MovedFromParameterReadAgain = Create(
         DiagnosticIds.MovedFromMisuse,
         MovedFromTitle,
         MovedFromParameterReadAgainMessage,
         MovedFromDescription);
 
-    public static readonly DiagnosticDescriptor MovedFromParameterNotAssignedAtOnce = Create(
+    public static readonly Rule MovedFromParameterNotAssignedAtOnce = Create(
         DiagnosticIds.MovedFromMisuse,
         MovedFromTitle,
         MovedFromParameterNotAssignedAtOnceMessage,
         MovedFromDescription);
 
-    public static readonly DiagnosticDescriptor MovedFromParameterReassigned = Create(
+    public static readonly Rule MovedFromParameterReassigned = Create(
         DiagnosticIds.MovedFromMisuse,
         MovedFromTitle,
         MovedFromParameterReassignedMessage,
         MovedFromDescription);
 
-    public static readonly DiagnosticDescriptor GenericMoveReturnsSomethingElse = Create(
+    public static readonly Rule GenericMoveReturnsSomethingElse = Create(
         DiagnosticIds.MovedFromMisuse,
         MovedFromTitle,
         GenericMoveReturnsSomethingElseMessage,
         MovedFromDescription);
 
-    public static readonly DiagnosticDescriptor GenericMoveLeavesSomethingElse = Create(
+    public static readonly Rule GenericMoveLeavesSomethingElse = Create(
         DiagnosticIds.MovedFromMisuse,
         MovedFromTitle,
         GenericMoveLeavesSomethingElseMessage,
         MovedFromDescription);
 
-    public static readonly DiagnosticDescriptor MovedFromContainerNotOwned = Create(
+    public static readonly Rule MovedFromContainerNotOwned = Create(
         DiagnosticIds.MovedFromMisuse,
         MovedFromTitle,
         MovedFromContainerNotOwnedMessage,
         MovedFromDescription);
 
-    public static readonly DiagnosticDescriptor MovedFromContainerExposed = Create(
+    public static readonly Rule MovedFromContainerExposed = Create(
         DiagnosticIds.MovedFromMisuse,
         MovedFromTitle,
         MovedFromContainerExposedMessage,
         MovedFromDescription);
 
-    public static readonly DiagnosticDescriptor SafeListLine = Create(
+    public static readonly Rule SafeListLine = Create(
         DiagnosticIds.SafeListLine,
         "Fix the line of the symbol list file",
         "This line of the symbol list file cannot be parsed: {0}",
         SafeListLineDescription);
 
-    public static readonly DiagnosticDescriptor SafeListNonCopyableNamesNothing = Create(
+    public static readonly Rule SafeListNonCopyableNamesNothing = Create(
         DiagnosticIds.SafeListLine,
         "Fix the line of the symbol list file",
         SafeListNonCopyableNamesNothingMessage,
         SafeListLineDescription);
 
-    public static readonly DiagnosticDescriptor SafeListCopyableHasNoEffect = Create(
+    public static readonly Rule SafeListCopyableHasNoEffect = Create(
         DiagnosticIds.SafeListLine,
         "Fix the line of the symbol list file",
         SafeListCopyableHasNoEffectMessage,
         SafeListLineDescription);
 
-    public static readonly DiagnosticDescriptor SafeListWidensBuiltIn = Create(
+    public static readonly Rule SafeListWidensBuiltIn = Create(
         DiagnosticIds.SafeListLine,
         "Fix the line of the symbol list file",
         SafeListWidensBuiltInMessage,
         SafeListLineDescription);
 
-    public static readonly DiagnosticDescriptor SafeListContradictsClones = Create(
+    public static readonly Rule SafeListClaimsMoreOutcomesThanBuiltIn = Create(
+        DiagnosticIds.SafeListLine,
+        "Fix the line of the symbol list file",
+        SafeListClaimsMoreOutcomesThanBuiltInMessage,
+        SafeListLineDescription);
+
+    public static readonly Rule SafeListBorrowsBeyondBuiltIn = Create(
+        DiagnosticIds.SafeListLine,
+        "Fix the line of the symbol list file",
+        SafeListBorrowsBeyondBuiltInMessage,
+        SafeListLineDescription);
+
+    public static readonly Rule SafeListUnknownOutcome = Create(
+        DiagnosticIds.SafeListLine,
+        "Fix the line of the symbol list file",
+        SafeListUnknownOutcomeMessage,
+        SafeListLineDescription);
+
+    public static readonly Rule SafeListContradictsClones = Create(
         DiagnosticIds.SafeListLine,
         "Fix the line of the symbol list file",
         SafeListContradictsClonesMessage,
         SafeListLineDescription);
 
-    public static readonly DiagnosticDescriptor SafeListNamesAccessor = Create(
+    public static readonly Rule SafeListNamesAccessor = Create(
         DiagnosticIds.SafeListLine,
         "Fix the line of the symbol list file",
         SafeListNamesAccessorMessage,
         SafeListLineDescription);
 
-    public static readonly DiagnosticDescriptor SafeListClonesHasNoEffect = Create(
+    public static readonly Rule SafeListClonesHasNoEffect = Create(
         DiagnosticIds.SafeListLine,
         "Fix the line of the symbol list file",
         SafeListClonesHasNoEffectMessage,
         SafeListLineDescription);
 
     // Whether the line has an effect is known only once the references of the whole compilation have been looked at.
-    public static readonly DiagnosticDescriptor SafeListTrustedHasNoEffect = Create(
+    public static readonly Rule SafeListTrustedHasNoEffect = Create(
         DiagnosticIds.SafeListLine,
         "Fix the line of the symbol list file",
         SafeListTrustedHasNoEffectMessage,
         SafeListLineDescription,
         WellKnownDiagnosticTags.CompilationEnd);
 
-    public static readonly DiagnosticDescriptor NonCopyableAwaiter = Create(
+    public static readonly Rule NonCopyableAwaiter = Create(
         DiagnosticIds.NonCopyableAwaiter,
         "Do not await with an awaiter of a non-copyable type",
         NonCopyableAwaiterMessage,
         NonCopyableAwaiterDescription);
 
-    public static readonly DiagnosticDescriptor ConditionalMarker = Create(
+    public static readonly Rule ConditionalMarker = Create(
         DiagnosticIds.ConditionalMarker,
         ConditionalMarkerTitle,
         ConditionalMarkerMessage,
         ConditionalMarkerDescription);
 
-    public static readonly DiagnosticDescriptor ConditionalMarkerBase = Create(
+    public static readonly Rule ConditionalMarkerBase = Create(
         DiagnosticIds.ConditionalMarker,
         ConditionalMarkerTitle,
         ConditionalMarkerBaseMessage,
         ConditionalMarkerDescription);
 
-    public static readonly DiagnosticDescriptor ConditionalMarkerUse = Create(
+    public static readonly Rule ConditionalMarkerUse = Create(
         DiagnosticIds.ConditionalMarker,
         ConditionalMarkerTitle,
         ConditionalMarkerUseMessage,
         ConditionalMarkerDescription);
 
-    public static readonly DiagnosticDescriptor ForeignNonCopyableAttribute = Create(
+    public static readonly Rule ForeignNonCopyableAttribute = Create(
         DiagnosticIds.ForeignNonCopyableAttribute,
         ForeignNonCopyableAttributeTitle,
         ForeignNonCopyableAttributeMessage,
         ForeignNonCopyableAttributeDescription);
 
-    public static readonly DiagnosticDescriptor NonCopyableAttributeWithNoSuffix = Create(
+    public static readonly Rule NonCopyableAttributeWithNoSuffix = Create(
         DiagnosticIds.ForeignNonCopyableAttribute,
         ForeignNonCopyableAttributeTitle,
         NonCopyableAttributeWithNoSuffixMessage,
         ForeignNonCopyableAttributeDescription);
 
-    public static readonly DiagnosticDescriptor ForeignNonCopyableAttributeUse = Create(
+    public static readonly Rule ForeignNonCopyableAttributeUse = Create(
         DiagnosticIds.ForeignNonCopyableAttribute,
         ForeignNonCopyableAttributeTitle,
         ForeignNonCopyableAttributeUseMessage,
         ForeignNonCopyableAttributeDescription);
 
-    public static readonly DiagnosticDescriptor NotNullRefMisplaced = Create(
+    public static readonly Rule NotNullRefMisplaced = Create(
         DiagnosticIds.NotNullRefMisplaced,
         "Put [NotNullRef] on a reference parameter of a method that is not virtual",
         NotNullRefMisplacedMessage,
         NotNullRefDescription);
 
-    public static readonly DiagnosticDescriptor NotNullRefNotChecked = Create(
+    public static readonly Rule NotNullRefNotChecked = Create(
         DiagnosticIds.NotNullRefNotChecked,
         "Verify a method with a [NotNullRef] parameter, then suppress this warning on it",
         NotNullRefNotCheckedMessage,
         NotNullRefDescription);
 
-    public static readonly DiagnosticDescriptor NestedTooDeeply = Create(
+    public static readonly Rule NestedTooDeeply = Create(
         DiagnosticIds.NestedTooDeeply,
         "Break up code that is nested too deeply to be checked",
         NestedTooDeeplyMessage,
         NestedTooDeeplyDescription);
 
-    public static readonly DiagnosticDescriptor MovedFromParameterNotAssignedAtOnceThroughReference = Create(
+    public static readonly Rule MovedFromParameterNotAssignedAtOnceThroughReference = Create(
         DiagnosticIds.MovedFromMisuse,
         MovedFromTitle,
         MovedFromParameterNotAssignedAtOnceThroughReferenceMessage,
         MovedFromDescription);
 
-    public static readonly DiagnosticDescriptor ErasableBaseNotKept = Create(
+    public static readonly Rule ErasableBaseNotKept = Create(
         DiagnosticIds.ErasableBase,
         "Keep a type that derives from an erasable type erasable",
         ErasableBaseMessage,
         ErasableBaseDescription);
 
     /// <summary>
-    /// Every descriptor of this class, which is what the analyzer supports. A descriptor that is added above is added here: a test
-    /// fails if one is missing.
+    /// Every rule of this class. A rule that is added above is added here: a test fails if one is missing.
     /// </summary>
-    public static readonly ImmutableArray<DiagnosticDescriptor> All = [
+    public static readonly ImmutableArray<Rule> All = [
         CopyByAssignment,
         CopyByAssignmentIntoVariable,
         CopyByAssignmentIntoForEachVariable,
@@ -1747,6 +1876,9 @@ internal static class Rules
         ValuePassedTwice,
         DelegatesCombined,
         CopyOfStoredValue,
+        UsedAfterHandOff,
+        UsedAfterHandOffInHandler,
+        UsedAfterHandOffBeforeNullReference,
         SwitchStatementMatchesCopy,
         SwitchExpressionWithWhenMatchesCopy,
         PartUsedTwiceInPattern,
@@ -1862,6 +1994,9 @@ internal static class Rules
         SafeListNamesAccessor,
         SafeListContradictsClones,
         SafeListWidensBuiltIn,
+        SafeListClaimsMoreOutcomesThanBuiltIn,
+        SafeListBorrowsBeyondBuiltIn,
+        SafeListUnknownOutcome,
         SafeListTrustedHasNoEffect,
         NonCopyableAwaiter,
         ConditionalMarker,
@@ -1877,6 +2012,94 @@ internal static class Rules
         NestedTooDeeply,
     ];
 
-    private static DiagnosticDescriptor Create(string id, string title, string messageFormat, string description, params string[] customTags) => new(
-        id, title, messageFormat, Category, DiagnosticSeverity.Warning, isEnabledByDefault: true, description, HelpLinkBaseUri + id.ToLowerInvariant() + ".html", customTags);
+    /// <summary>
+    /// Every descriptor of every rule, which is what the analyzer supports.
+    /// </summary>
+    public static readonly ImmutableArray<DiagnosticDescriptor> Descriptors = [.. All.SelectMany(rule => rule.Descriptors)];
+
+    /// <summary>
+    /// Gets the group of a diagnostic ID, which decides the severities that its rules can be reported with. Every ID is in one group: a
+    /// new ID is added here, or no rule of it can be created.
+    /// </summary>
+    public static RuleGroup GetGroup(string id) => id switch {
+        DiagnosticIds.CopyByAssignment or
+        DiagnosticIds.CopyByReturn or
+        DiagnosticIds.UnsupportedUse or
+        DiagnosticIds.Boxing or
+        DiagnosticIds.MemberwiseCloneCall or
+        DiagnosticIds.MemberOnReadOnlyReference or
+        DiagnosticIds.GetObjectValue or
+        DiagnosticIds.MemberwiseCloneOfOpenClass or
+        DiagnosticIds.UnlistedMember or
+        DiagnosticIds.RequiresCopyable or
+        DiagnosticIds.UntypedCollection or
+        DiagnosticIds.OpaqueType or
+        DiagnosticIds.UncheckedMember or
+        DiagnosticIds.ReadFromStoredContainer or
+        DiagnosticIds.UnownedContainerReturned or
+        DiagnosticIds.ContainerNotOwned or
+        DiagnosticIds.CloningBase or
+        DiagnosticIds.FieldOfCopyableType or
+        DiagnosticIds.AutoProperty or
+        DiagnosticIds.IteratorParameter or
+        DiagnosticIds.DefaultInterfaceMember or
+        DiagnosticIds.AsyncOrIteratorMember or
+        DiagnosticIds.NonCopyableAwaiter or
+        DiagnosticIds.UsedAfterHandOff or
+        DiagnosticIds.KeptParameter or
+        DiagnosticIds.MarkNotKept or
+        DiagnosticIds.MovedFromMisuse or
+        DiagnosticIds.ErasableBase or
+        DiagnosticIds.ConditionalMarker or
+        DiagnosticIds.NotNullRefMisplaced or
+        DiagnosticIds.NestedTooDeeply => RuleGroup.Enforced,
+
+        DiagnosticIds.SafeListLine or
+        DiagnosticIds.ForeignNonCopyableAttribute or
+        DiagnosticIds.NotNullRefNotChecked => RuleGroup.Plain,
+
+        DiagnosticIds.UncheckedAssembly => RuleGroup.UncheckedAssembly,
+
+        _ => throw new ArgumentException($"Diagnostic ID '{id}' is in no group.", nameof(id)),
+    };
+
+    /// <summary>
+    /// Creates a rule with the descriptors of its group. The ordinary warning is the one of the current memory safety rules. The error
+    /// of the updated rules is not configurable and carries the tag of a compiler diagnostic, which is what makes the compiler ignore a
+    /// [SuppressMessage] for it; without that tag, 'NotConfigurable' alone still lets one through. The warning of an unsafe context under
+    /// the updated rules carries the tag of a compiler diagnostic too, so that only '#pragma' and NoWarn suppress it.
+    /// </summary>
+    private static Rule Create(string id, string title, string messageFormat, string description, params string[] customTags) =>
+        CreateWithCurrentRulesMessage(id, title, messageFormat, messageFormat, description, customTags);
+
+    /// <summary>
+    /// Creates a rule whose message under the current memory safety rules gives other advice than under the updated rules: where to
+    /// suppress it, which only an unsafe context can do under the updated rules.
+    /// </summary>
+    private static Rule CreateWithCurrentRulesMessage(
+        string id, string title, string messageFormat, string currentRulesMessageFormat, string description, params string[] customTags)
+    {
+        var group = GetGroup(id);
+
+        return group switch {
+            RuleGroup.Enforced => new Rule(
+                group,
+                Describe(DiagnosticSeverity.Warning, currentRulesMessageFormat),
+                error: Describe(DiagnosticSeverity.Error, messageFormat, WellKnownDiagnosticTags.NotConfigurable, WellKnownDiagnosticTags.Compiler),
+                unsafeWarning: Describe(DiagnosticSeverity.Warning, messageFormat, WellKnownDiagnosticTags.Compiler)),
+            RuleGroup.UncheckedAssembly => new Rule(group, Describe(DiagnosticSeverity.Warning, messageFormat), message: Describe(DiagnosticSeverity.Info, messageFormat)),
+            _ => new Rule(group, Describe(DiagnosticSeverity.Warning, messageFormat)),
+        };
+
+        DiagnosticDescriptor Describe(DiagnosticSeverity severity, string message, params string[] tags) => new(
+            id,
+            title,
+            message,
+            Category,
+            severity,
+            isEnabledByDefault: true,
+            description,
+            HelpLinkBaseUri + id.ToLowerInvariant() + ".html",
+            [.. customTags, .. tags]);
+    }
 }

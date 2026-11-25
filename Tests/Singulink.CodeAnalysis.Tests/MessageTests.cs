@@ -394,7 +394,7 @@ public class MessageTests
                 foreach (var guard in {|#0:_guards|})
                     guard.Dispose();
 
-                foreach (var {|#1:guard|} in _array)
+                foreach (var guard in {|#1:_array|})
                     guard.Dispose();
 
                 foreach (ref var guard in CollectionsMarshal.AsSpan(_guards))
@@ -410,7 +410,7 @@ public class MessageTests
         Verify.ForEachOverStoredList(0, "Guard", "guard", "_guards"),
         Verify.CopyByAssignmentIntoForEachVariable(1, "Guard", "guard"));
 
-    // Docs: README "Common fixes", and articles/guides/common-fixes.md. Each form that the section gives as the fix is clean, and each form that it gives as the finding is
+    // Docs: README "Common fixes", and articles/start/fixing-common-warnings.md. Each form that the section gives as the fix is clean, and each form that it gives as the finding is
     // reported.
     [TestMethod]
     public Task Readme_CommonFixes() => Verify.AnalyzerAsync(
@@ -558,7 +558,7 @@ public class MessageTests
             void UsedAfter(Guard guard)
             {
                 _guard = {|#6:guard|};
-                Console.WriteLine(guard.Value);
+                Console.WriteLine({|#8:guard|}.Value);
             }
 
             UnitOfWork TakenByValue(TransactionScope scope)
@@ -569,7 +569,7 @@ public class MessageTests
                 }
                 catch
                 {
-                    scope.Dispose();
+                    {|#9:scope|}.Dispose();
                     throw;
                 }
             }
@@ -583,8 +583,8 @@ public class MessageTests
         Verify.ReadFromStoredContainer(3, "'Dictionary<TKey, TValue>.this[TKey]'", "Guard"),
         Verify.CopyOfStoredValue(4, "'C.Take(Guard)' receives", "Guard"),
         Verify.CopyByReturn(5, "Guard"),
-        Verify.CopyByAssignment(6, "Guard"),
-        Verify.CopyOfStoredValue(7, "'UnitOfWork.UnitOfWork(TransactionScope)' receives", "TransactionScope", usedByHandler: "scope"));
+        Verify.UsedAfterHandOff(8, "guard", "Guard", "its value was assigned", 6),
+        Verify.UsedAfterHandOffInHandler(9, "scope", "TransactionScope", "'UnitOfWork.UnitOfWork(TransactionScope)' received its value", 7));
 
     // The loop over references is named only where it can be written: not for an 'await foreach', and not where the loop has an
     // 'await' or a 'yield' in it, which a reference cannot be held across. Where the loop has an expression for its list, the text
@@ -647,8 +647,9 @@ public class MessageTests
         Verify.ForEachOverStoredList(3, "Guard", "guard", "list"),
         Verify.ReadFromStoredContainer(4, "'foreach'", "Guard"));
 
-    // Docs: articles/guides/common-fixes.md, "Correct Code That Stays Reported". Each of the three shapes is reported as the section says, and the form that it
-    // gives for the first is clean.
+    // Docs: articles/guides/correct-code-with-warnings.md. Each of the three shapes is reported as the article says, and the form that it
+    // gives for the first is clean. TrySetResult and ChannelWriter<T>.TryWrite are not such shapes: their entries say
+    // 'borrowswhen=false', so the use where they returned false is clean, and the section shows them as clean code.
     [TestMethod]
     public Task Docs_CorrectCodeThatStaysReported() => Verify.AnalyzerAsync(
         $$"""
@@ -687,7 +688,7 @@ public class MessageTests
             {
                 Guard lease = myLock.Enter();
 
-                if (!writer.TryWrite({|#1:lease|}))
+                if (!writer.TryWrite(lease))
                     lease.Dispose();
             }
 
@@ -701,7 +702,7 @@ public class MessageTests
                 }
                 catch
                 {
-                    lease.Dispose();
+                    {|#7:lease|}.Dispose();
                     throw;
                 }
             }
@@ -710,7 +711,7 @@ public class MessageTests
             {
                 Guard guard = myLock.Enter();
 
-                if (!source.TrySetResult({|#3:guard|}))
+                if (!source.TrySetResult(guard))
                     guard.Dispose();
             }
 
@@ -730,9 +731,7 @@ public class MessageTests
         {{Sources.Guard}}
         """,
         Verify.KeepsParameterAfterReturning(0, "C.FillAsync(RwLock, List<Guard>)", "guards", "System.Collections.Generic.List<Guard>"),
-        Verify.CopyOfStoredValue(1, "'ChannelWriter<Guard>.TryWrite(Guard)' receives", "Guard"),
-        Verify.CopyOfStoredValue(2, "'ChannelWriter<Guard>.WriteAsync(Guard, CancellationToken)' receives", "Guard", usedByHandler: "lease"),
-        Verify.CopyOfStoredValue(3, "'TaskCompletionSource<Guard>.TrySetResult(Guard)' receives", "Guard"),
+        Verify.UsedAfterHandOffInHandler(7, "lease", "Guard", "'ChannelWriter<Guard>.WriteAsync(Guard, CancellationToken)' received its value", 2),
         Verify.ReadFromStoredContainer(4, "'await'", "Guard"),
         Verify.ReadFromStoredContainer(
             5,
@@ -740,7 +739,7 @@ public class MessageTests
             "Guard",
             because: "'winner' is not the method's own anywhere in the method, because on line 69 it is passed to 'object.ReferenceEquals(object?, object?)'"));
 
-    // Docs: articles/concepts/last-use.md. A list that is the method's own hands out a new value at its last use, through its
+    // Docs: articles/rules/last-use.md. A list that is the method's own hands out a new value at its last use, through its
     // indexer. An array has no member for that: its element is read in place, and is a stored value there too. And a list that was
     // passed to a method, also to one that only uses it, is no new container for a read, though it is still the method's to return.
     [TestMethod]
@@ -765,7 +764,7 @@ public class MessageTests
             {
                 var array = new Guard[1];
                 array[0] = myLock.Enter();
-                Guard first {|#0:= array[0]|};
+                Guard first = {|#0:array[0]|};
                 first.Dispose();
             }
 

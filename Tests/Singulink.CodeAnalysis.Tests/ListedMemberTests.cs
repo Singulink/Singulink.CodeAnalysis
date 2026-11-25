@@ -6,7 +6,7 @@ namespace Singulink.CodeAnalysis.Tests;
 /// Tests of what a listed member hands out: a value that is as new as what the member was called on and with, or a new value if the entry says so.
 /// </summary>
 /// <remarks>
-/// Docs: articles/concepts/listed-members.md.
+/// Docs: articles/rules/listed-members.md.
 /// </remarks>
 [PrefixTestClass]
 public class ListedMemberTests
@@ -74,11 +74,11 @@ public class ListedMemberTests
 
                 // A stored value task holds the value inline, so the awaitable made from it is already a copy.
                 ValueTask<Guard> storedValueTask = rwLock.EnterAsync();
-                var valueAwaitable = {|#4:storedValueTask.ConfigureAwait(false)|};
-                Guard e = {|#5:await storedValueTask|};
+                var valueAwaitable = {|#4:{|#10:storedValueTask|}.ConfigureAwait(false)|};
+                Guard e = {|#5:await {|#11:storedValueTask|}|};
 
                 // The variable is not used again, so nothing else can read what this read takes.
-                Guard f = storedValueTask.Result;
+                Guard f = {|#12:storedValueTask|}.Result;
             }
 
             void Spans(RwLock rwLock, List<Guard> list)
@@ -104,9 +104,8 @@ public class ListedMemberTests
         Verify.ReadFromStoredContainer(1, "'await'", "Guard"),
         Verify.ReadFromStoredContainer(2, "'ConfiguredTaskAwaitable<TResult>.ConfiguredTaskAwaiter.GetResult()'", "Guard"),
         Verify.ReadFromStoredContainer(3, "'Task<TResult>.Result'", "Guard", because: "'stored' is not the method's own anywhere in the method, because on line 14 'Task<Guard>.ConfigureAwait(bool)' can keep it, hand out a view of it or take in what something else holds"),
-        Verify.ReadFromStoredContainer(
-            4, "'ValueTask<TResult>.ConfigureAwait(bool)'", "System.Runtime.CompilerServices.ConfiguredValueTaskAwaitable<Guard>"),
-        Verify.ReadFromStoredContainer(5, "'await'", "Guard"),
+        Verify.UsedAfterHandOff(11, "storedValueTask", "System.Threading.Tasks.ValueTask<Guard>", "'ValueTask<Guard>.ConfigureAwait(bool)' ran on its value", 10),
+        Verify.UsedAfterHandOff(12, "storedValueTask", "System.Threading.Tasks.ValueTask<Guard>", "its value was awaited", 11),
         Verify.ReadFromStoredContainer(7, "'ArraySegment<T>.this[int]'", "Guard"),
         Verify.ReadFromStoredContainer(8, "'ArraySegment<T>.this[int]'", "Guard"),
         Verify.ReadFromStoredContainer(9, "'foreach'", "Guard"));
@@ -123,11 +122,11 @@ public class ListedMemberTests
                 ref Guard r = ref span[1];
                 span[0] = rwLock.Enter();
                 span[1].Dispose();
-                Guard copy {|#0:= span[0]|};
+                Guard copy = {|#0:span[0]|};
 
                 ref readonly Guard readOnly = ref readOnlySpan[0];
-                Guard readOnlyCopy {|#1:= readOnlySpan[0]|};
-                Guard last {|#2:= span[^1]|};
+                Guard readOnlyCopy = {|#1:readOnlySpan[0]|};
+                Guard last = {|#2:span[^1]|};
                 ref Guard lastReference = ref span[^1];
                 Span<Guard> rest = span[1..];
                 int length = span.Length;
@@ -236,8 +235,8 @@ public class ListedMemberTests
 
                 // A value task that is used again afterwards still holds what the read took.
                 var second = rwLock.EnterAsync();
-                using var copy = {|#0:await second|};
-                bool isCompleted = second.IsCompleted;
+                using var copy = {|#0:await {|#1:second|}|};
+                bool isCompleted = {|#2:second|}.IsCompleted;
 
                 var task = rwLock.EnterTaskAsync();
                 using var fromTask = await NonCopyable.Move(ref task);
@@ -246,7 +245,7 @@ public class ListedMemberTests
 
         {{Sources.Guard}}
         """,
-        Verify.ReadFromStoredContainer(0, "'await'", "Guard"));
+        Verify.UsedAfterHandOff(2, "second", "System.Threading.Tasks.ValueTask<Guard>", "its value was awaited", 1));
 
     [TestMethod]
     public Task EntryMarkedNew_HandsOutAContainerAsNewAsWhatItWasCalledOn() => Verify.AnalyzerAsync(

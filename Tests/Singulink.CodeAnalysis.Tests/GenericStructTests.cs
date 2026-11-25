@@ -6,7 +6,7 @@ namespace Singulink.CodeAnalysis.Tests;
 /// Tests of generic structs over a non-copyable type, which are non-copyable types themselves, and of views, which are not.
 /// </summary>
 /// <remarks>
-/// Docs: articles/concepts/non-copyable-types.md.
+/// Docs: articles/rules/non-copyable-types.md.
 /// </remarks>
 [PrefixTestClass]
 public class GenericStructTests
@@ -30,25 +30,25 @@ public class GenericStructTests
             void M(RwLock rwLock)
             {
                 ValueTask<Guard> pending = rwLock.EnterAsync();
-                ValueTask<Guard> copy {|#0:= pending|};
+                ValueTask<Guard> copy = {|#0:pending|};
 
                 KeyValuePair<int, Guard> pair = MakePair();
-                var other {|#1:= pair|};
+                var other = {|#1:pair|};
 
                 Guard? maybe = rwLock.TryEnter();
-                Guard? maybeCopy {|#2:= maybe|};
+                Guard? maybeCopy = {|#2:maybe|};
 
                 var tuple = rwLock.TryEnterTuple();
-                var tupleCopy {|#3:= tuple|};
+                var tupleCopy = {|#3:tuple|};
 
                 // At any depth.
                 ((Guard guard, int number) inner, string name) nested = default;
-                var nestedCopy {|#4:= nested|};
+                var nestedCopy = {|#4:nested|};
                 KeyValuePair<int, Guard?> pairOfNullable = default;
-                var pairOfNullableCopy {|#5:= pairOfNullable|};
+                var pairOfNullableCopy = {|#5:pairOfNullable|};
 
                 // Each is read again here, so none of the reads above is the last use of its variable.
-                _ = (pair, maybe, tuple, nested, pairOfNullable);
+                _ = ({|#12:pair|}, {|#13:maybe|}, {|#14:tuple|}, {|#15:nested|}, {|#16:pairOfNullable|});
 
                 // The existing rules for values apply.
                 Take({|#6:pending|});
@@ -81,11 +81,11 @@ public class GenericStructTests
         {{Sources.Guard}}
         """,
         Verify.CopyByAssignment(0, "System.Threading.Tasks.ValueTask<Guard>"),
-        Verify.CopyByAssignment(1, "System.Collections.Generic.KeyValuePair<int, Guard>"),
-        Verify.CopyByAssignment(2, "Guard?"),
-        Verify.CopyByAssignment(3, "(Guard guard, bool ok)"),
-        Verify.CopyByAssignment(4, "((Guard guard, int number) inner, string name)"),
-        Verify.CopyByAssignment(5, "System.Collections.Generic.KeyValuePair<int, Guard?>"),
+        Verify.UsedAfterHandOff(12, "pair", "System.Collections.Generic.KeyValuePair<int, Guard>", "its value was assigned to \'other\'", 1),
+        Verify.UsedAfterHandOff(13, "maybe", "Guard?", "its value was assigned to \'maybeCopy\'", 2),
+        Verify.UsedAfterHandOff(14, "tuple", "(Guard guard, bool ok)", "its value was assigned to \'tupleCopy\'", 3),
+        Verify.UsedAfterHandOff(15, "nested", "((Guard guard, int number) inner, string name)", "its value was assigned to \'nestedCopy\'", 4),
+        Verify.UsedAfterHandOff(16, "pairOfNullable", "System.Collections.Generic.KeyValuePair<int, Guard?>", "its value was assigned to \'pairOfNullableCopy\'", 5),
         Verify.CopyOfStoredValue(6, "'C.Take(ValueTask<Guard>)' receives", "System.Threading.Tasks.ValueTask<Guard>"),
         Verify.CopyByAssignment(7, "System.Threading.Tasks.ValueTask<Guard>"),
         Verify.CopyByReturn(8, "System.Threading.Tasks.ValueTask<Guard>"),
@@ -175,13 +175,13 @@ public class GenericStructTests
                 bool isSomething = maybe is { };
 
                 // Wrapping a stored value copies it. The last use of the parameter moves it in.
-                Guard? copy {|#0:= parameter|};
-                maybe = parameter;
+                Guard? copy = {|#0:parameter|};
+                maybe = {|#5:parameter|};
 
                 // Reading the value of a stored nullable copies it. Read from a new one it is a new value.
-                Guard value = {|#2:maybe.Value|};
-                Guard valueOrDefault = {|#3:maybe.GetValueOrDefault()|};
-                Guard coalesced {|#4:= maybe ?? rwLock.Enter()|};
+                Guard value = {|#2:{|#6:maybe|}.Value|};
+                Guard valueOrDefault = {|#3:{|#7:maybe|}.GetValueOrDefault()|};
+                Guard coalesced = {|#4:{|#8:maybe|} ?? rwLock.Enter()|};
                 Guard fromNew = rwLock.TryEnter().Value;
                 Guard coalescedFromNew = rwLock.TryEnter() ?? rwLock.Enter();
             }
@@ -189,8 +189,8 @@ public class GenericStructTests
 
         {{Sources.Guard}}
         """,
-        Verify.CopyByAssignment(0, "Guard?"),
-        Verify.ReadFromStoredContainer(2, "'Nullable<T>.Value'", "Guard"),
-        Verify.ReadFromStoredContainer(3, "'Nullable<T>.GetValueOrDefault()'", "Guard"),
+        Verify.UsedAfterHandOff(5, "parameter", "Guard", "its value was assigned to \'copy\'", 0),
+        Verify.UsedAfterHandOff(7, "maybe", "Guard?", "'Guard?.Value' read its value", 6),
+        Verify.UsedAfterHandOff(8, "maybe", "Guard?", "'Guard?.GetValueOrDefault()' ran on its value", 7),
         Verify.CopyByAssignment(4, "Guard"));
 }

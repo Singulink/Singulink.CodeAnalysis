@@ -100,7 +100,21 @@ public sealed partial class DoNotCopyValueAnalyzer
     /// </summary>
     private readonly record struct FlowPosition(int Block, int Index);
 
-    private readonly record struct VariableUse(IOperation Reference, UseKind Kind, FlowPosition At, CaptureId? CapturedBy = null);
+    /// <summary>
+    /// A use of a variable. For a read that hands the value to a member which has taken it only where its result says so, and whose
+    /// result decides a branch, <c>SuccessorsWhereTaken</c> is where the code goes on where the member has taken the value: only those
+    /// paths follow the hand-off. On the others the caller still holds the value. <c>IsEarlier</c> is true for a place where a
+    /// reference uses the variable before the use that it stands for, as the getter of a compound assignment runs before its value and
+    /// the setter after it: it counts on the paths from every other use, and not for whether the reference itself is a last use, which
+    /// its latest use decides.
+    /// </summary>
+    private readonly record struct VariableUse(
+        IOperation Reference,
+        UseKind Kind,
+        FlowPosition At,
+        CaptureId? CapturedBy = null,
+        int[]? SuccessorsWhereTaken = null,
+        bool IsEarlier = false);
 
     /// <summary>
     /// A use of a [MovedFrom] parameter. For a read, <c>Holder</c> is the local that the value goes straight into, if it goes into one.
@@ -131,7 +145,7 @@ public sealed partial class DoNotCopyValueAnalyzer
             {
                 if (GetGraph(reference, variable.ContainingSymbol) is { } graph)
                 {
-                    lastUses = FindLastUses(graph, variable, out var usesOfBlock);
+                    lastUses = FindLastUses(graph, variable, types, out var usesOfBlock);
 
                     if (usesOfBlock is not null)
                         _uses[variable] = (graph, usesOfBlock);
@@ -162,7 +176,7 @@ public sealed partial class DoNotCopyValueAnalyzer
             {
                 foreach (var use in inBlock ?? [])
                 {
-                    if (GetKey(use.Reference) != key)
+                    if (use.IsEarlier || GetKey(use.Reference) != key)
                         continue;
 
                     if (read is not null || use.Kind is not UseKind.Read)
@@ -189,7 +203,7 @@ public sealed partial class DoNotCopyValueAnalyzer
             }
 
             var visited = new HashSet<int>();
-            var pending = new Stack<int>(graph.GetSuccessors(found.At.Block));
+            var pending = new Stack<int>(found.SuccessorsWhereTaken ?? graph.GetSuccessors(found.At.Block));
 
             while (pending.Count > 0)
             {
@@ -214,6 +228,132 @@ public sealed partial class DoNotCopyValueAnalyzer
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// Gets the first uses of a variable after a read that is no last use only because the variable is used again: every use that a
+        /// path from the read reaches without passing another use of the variable, where an assignment of the whole variable ends a path.
+        /// An exception can leave a block at any operation, so the handlers of each block on a path are on it as well, but for those of a
+        /// read that is committed at the end of a 'try' block. Null where the read is no such read: the variable is never moved from,
+        /// the read is in an exception filter or shares its operation with another use, it is used again only after a 'finally' that
+        /// the code reaches by an exception, or a first later use has no place of its own in the source.
+        /// </summary>
+        /// <returns>The first later uses, as the graph has them, and whether the read is one of them itself, as in a loop.</returns>
+        public (List<IOperation> Uses, bool IncludesRead)? FindFirstLaterUses(IOperation reference, ISymbol variable)
+        {
+            if (IsLastUse(reference, variable) || !_uses.TryGetValue(variable, out var flow))
+                return null;
+
+            var (graph, usesOfBlock) = flow;
+            var key = GetKey(reference);
+            VariableUse? found = null;
+
+            foreach (var inBlock in usesOfBlock)
+            {
+                foreach (var use in inBlock ?? [])
+                {
+                    if (use.IsEarlier || GetKey(use.Reference) != key)
+                        continue;
+
+                    if (found is not null || use.Kind is not UseKind.Read)
+                        return null;
+
+                    found = use;
+                }
+            }
+
+            if (found is not { } read || graph.IsInFilter(read.At.Block))
+                return null;
+
+            // What follows a 'finally' counts as following an exception as well, which the message at the read says. A later use that
+            // only such a path reaches is no place that the code shows to follow the read.
+            if (IsUsedAgainOnlyByHandlers(reference, variable) && !IsUsedInHandler(reference, variable))
+                return null;
+
+            var laterUses = new List<IOperation>();
+            bool includesRead = false;
+            var visited = new HashSet<int>();
+            var pending = new Stack<int>();
+
+            // The rest of the block of the read. A use at the operation of the read makes the read no last use by itself.
+            var inReadBlock = usesOfBlock[read.At.Block]!;
+            int next = int.MaxValue;
+
+            foreach (var use in inReadBlock)
+            {
+                if (!ReferenceEquals(use.Reference, read.Reference) && use.At.Index == read.At.Index)
+                    return null;
+
+                if (use.At.Index > read.At.Index && use.At.Index < next)
+                    next = use.At.Index;
+            }
+
+            if (next == int.MaxValue)
+            {
+                foreach (int successor in read.SuccessorsWhereTaken ?? graph.GetSuccessors(read.At.Block))
+                    pending.Push(successor);
+            }
+            else
+            {
+                AddFirstUses(inReadBlock, next);
+            }
+
+            if (!IsCommittedAtEndOfTry(graph, read))
+            {
+                foreach (int handler in graph.GetHandlers(read.At.Block))
+                    pending.Push(handler);
+            }
+
+            while (pending.Count > 0)
+            {
+                int block = pending.Pop();
+
+                if (!visited.Add(block))
+                    continue;
+
+                if (usesOfBlock[block] is { Count: > 0 } inBlock)
+                {
+                    AddFirstUses(inBlock, inBlock[0].At.Index);
+                }
+                else
+                {
+                    foreach (int successor in graph.GetSuccessors(block))
+                        pending.Push(successor);
+                }
+
+                foreach (int handler in graph.GetHandlers(block))
+                    pending.Push(handler);
+            }
+
+            // A later use that the source does not show, such as one that the compiler adds, has no place for a report.
+            foreach (var use in laterUses)
+            {
+                if (use.Syntax is not IdentifierNameSyntax name || name.Identifier.ValueText != variable.Name)
+                    return null;
+            }
+
+            return laterUses.Count > 0 || includesRead ? (laterUses, includesRead) : null;
+
+            // The uses at the first operation of a block that uses the variable: they are first later uses, unless all of them
+            // assign the variable, which ends the path.
+            void AddFirstUses(List<VariableUse> inBlock, int index)
+            {
+                var atIndex = inBlock.Where(use => use.At.Index == index).ToList();
+
+                if (atIndex.All(static use => use.Kind is UseKind.Assign))
+                    return;
+
+                foreach (var use in atIndex)
+                {
+                    if (use.Kind is UseKind.Assign)
+                        continue;
+
+                    if (GetKey(use.Reference) == key)
+                        includesRead = true;
+                    else if (!laterUses.Any(known => GetKey(known) == GetKey(use.Reference)))
+                        laterUses.Add(use.Reference);
+                }
+            }
         }
 
         /// <summary>
@@ -356,16 +496,16 @@ public sealed partial class DoNotCopyValueAnalyzer
         /// Gets what a reference in the graph and the same reference in the tree that the walker visits have in common. The two trees
         /// do not share their syntax nodes as objects: a long list lets go of its nodes and makes them anew.
         /// </summary>
-        private static (TextSpan Span, int Kind) GetKey(IOperation reference) => (reference.Syntax.Span, reference.Syntax.RawKind);
+        public static (TextSpan Span, int Kind) GetKey(IOperation reference) => (reference.Syntax.Span, reference.Syntax.RawKind);
 
         /// <summary>
         /// Gets the references to a variable that are last uses. Null if the variable is never moved from.
         /// </summary>
-        private static HashSet<(TextSpan Span, int Kind)>? FindLastUses(FunctionGraph graph, ISymbol variable, out List<VariableUse>?[]? usesByBlock)
+        private static HashSet<(TextSpan Span, int Kind)>? FindLastUses(FunctionGraph graph, ISymbol variable, NonCopyableTypes types, out List<VariableUse>?[]? usesByBlock)
         {
             usesByBlock = null;
 
-            if (FindUses(graph, variable) is not { } uses)
+            if (FindUses(graph, variable, types) is not { } uses)
                 return null;
 
             int blockCount = graph.BlockCount;
@@ -419,7 +559,10 @@ public sealed partial class DoNotCopyValueAnalyzer
             var otherUses = new HashSet<(TextSpan Span, int Kind)>();
 
             foreach (var use in uses)
-                (use.Kind is UseKind.Read && IsLast(use) ? lastUses : otherUses).Add(GetKey(use.Reference));
+            {
+                if (!use.IsEarlier)
+                    (use.Kind is UseKind.Read && IsLast(use) ? lastUses : otherUses).Add(GetKey(use.Reference));
+            }
 
             // Two references with one syntax, as the compiler makes for some constructs, are last uses only if both are.
             lastUses.ExceptWith(otherUses);
@@ -445,7 +588,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                 if (graph.IsInFilter(block))
                     return false;
 
-                if (IsLiveIn(graph.GetHandlers(block)) && !IsCommittedAtEndOfTry(use))
+                if (IsLiveIn(graph.GetHandlers(block)) && !IsCommittedAtEndOfTry(graph, use))
                     return false;
 
                 UseKind? next = null;
@@ -471,36 +614,37 @@ public sealed partial class DoNotCopyValueAnalyzer
                     }
                 }
 
-                return next is null ? !IsLiveIn(graph.GetSuccessors(block)) : next is UseKind.Assign;
+                // A hand-off to a member that has taken the value only where its result says so is followed on those paths only.
+                return next is null ? !IsLiveIn(use.SuccessorsWhereTaken ?? graph.GetSuccessors(block)) : next is UseKind.Assign;
             }
+        }
 
-            // The shape "acquire, set up, commit, or dispose on failure": the value goes into a plain store, nothing that can throw
-            // runs from there to the end of the block, and the code leaves the block in the normal way. A block that ends in a
-            // 'throw' has committed nothing: the exception goes to the very handlers that this is about. Nor has the last block of a
-            // 'finally' or of a filter, which can pass an exception on. If the store itself fails, the value is still only in the
-            // variable. What follows the block is judged as what follows any block: a block that is still inside the 'try' has the
-            // handlers after it, and a 'finally' always runs.
-            bool IsCommittedAtEndOfTry(VariableUse use)
+        // The shape "acquire, set up, commit, or dispose on failure": the value goes into a plain store, nothing that can throw
+        // runs from there to the end of the block, and the code leaves the block in the normal way. A block that ends in a
+        // 'throw' has committed nothing: the exception goes to the very handlers that this is about. Nor has the last block of a
+        // 'finally' or of a filter, which can pass an exception on. If the store itself fails, the value is still only in the
+        // variable. What follows the block is judged as what follows any block: a block that is still inside the 'try' has the
+        // handlers after it, and a 'finally' always runs.
+        private static bool IsCommittedAtEndOfTry(FunctionGraph graph, VariableUse use)
+        {
+            int block = use.At.Block;
+
+            if (!graph.EndsNormally(block))
+                return false;
+
+            if (FindPlainStore(graph, use.Reference) is not { } store || !graph.TryGetPosition(store, out var storedAt) || storedAt.Block != block)
+                return false;
+
+            var operations = graph.GetOperations(block);
+
+            // A state flag may follow the commit: a field of 'this' in a class cannot be reached through a null reference.
+            for (int i = storedAt.Index + 1; i < operations.Length; i++)
             {
-                int block = use.At.Block;
-
-                if (!graph.EndsNormally(block))
+                if (DescribeWhatRunsAfterCommit(graph, operations[i]) is not null)
                     return false;
-
-                if (FindPlainStore(graph, use.Reference) is not { } store || !graph.TryGetPosition(store, out var storedAt) || storedAt.Block != block)
-                    return false;
-
-                var operations = graph.GetOperations(block);
-
-                // A state flag may follow the commit: a field of 'this' in a class cannot be reached through a null reference.
-                for (int i = storedAt.Index + 1; i < operations.Length; i++)
-                {
-                    if (DescribeWhatRunsAfterCommit(graph, operations[i]) is not null)
-                        return false;
-                }
-
-                return true;
             }
+
+            return true;
         }
 
         /// <summary>
@@ -573,9 +717,13 @@ public sealed partial class DoNotCopyValueAnalyzer
         /// <summary>
         /// Gets what every reference to a variable does with it. Null if one of them makes the variable one that is never moved from.
         /// </summary>
-        private static List<VariableUse>? FindUses(FunctionGraph graph, ISymbol variable)
+        private static List<VariableUse>? FindUses(FunctionGraph graph, ISymbol variable, NonCopyableTypes types)
         {
             var uses = new Dictionary<IOperation, VariableUse>();
+
+            // The uses of a reference that run before the use that it stands for, as the getter of a compound assignment does.
+            var earlierUses = new Dictionary<IOperation, VariableUse[]>();
+            var earlier = new List<VariableUse>();
 
             // The captures that hold a reference to the variable, or to a part of it if false.
             var captures = new Dictionary<CaptureId, bool>();
@@ -593,13 +741,19 @@ public sealed partial class DoNotCopyValueAnalyzer
             while (pending.Count > 0)
             {
                 var (reference, isWhole) = pending.Dequeue();
-                var use = Classify(graph, reference, isWhole);
+                earlier.Clear();
+                var use = Classify(graph, reference, isWhole, types, earlier);
 
                 if (use.Kind is UseKind.Escape)
                     return null;
 
                 // A reference to a capture that turns out to hold only a part is looked at a second time, and its second answer stands.
                 uses[reference] = use;
+
+                if (earlier.Count > 0)
+                    earlierUses[reference] = [.. earlier];
+                else
+                    earlierUses.Remove(reference);
 
                 if (use.CapturedBy is not { } id)
                     continue;
@@ -616,14 +770,21 @@ public sealed partial class DoNotCopyValueAnalyzer
                 }
             }
 
-            return [.. uses.Values];
+            var found = new List<VariableUse>(uses.Values);
+
+            foreach (var inOrder in earlierUses.Values)
+                found.AddRange(inOrder);
+
+            return found;
         }
 
         /// <summary>
         /// Says what a reference to a variable, or to a capture of a reference to it, does with the variable, and where in the order of
         /// evaluation: a read happens where it stands, and what needs the variable itself, such as a call on it, where that runs.
+        /// Where the reference is used at more than one place, the use that is returned is the latest, and the others are added to
+        /// <paramref name="earlier"/>: a compound assignment reads its target before its value runs and writes it after.
         /// </summary>
-        private static VariableUse Classify(FunctionGraph graph, IOperation reference, bool isWhole)
+        private static VariableUse Classify(FunctionGraph graph, IOperation reference, bool isWhole, NonCopyableTypes types, List<VariableUse> earlier)
         {
             var current = reference;
 
@@ -673,6 +834,34 @@ public sealed partial class DoNotCopyValueAnalyzer
                         : Escape();
 
                 case IAssignmentOperation assignment when ReferenceEquals(assignment.Target, current):
+                    // A compound assignment reads its target before its value runs, where the target is captured if the graph
+                    // captures it before a branch in the value, and writes it after. An operator of the target's own type that is
+                    // an instance member is called on the target in place, after the value.
+                    if (assignment is ICompoundAssignmentOperation { OperatorMethod: not { IsStatic: false } } or ICoalesceAssignmentOperation)
+                    {
+                        if (current is IFlowCaptureReferenceOperation captured)
+                        {
+                            // A capture that is made at one place is made of this variable, and the read is reported at the reference
+                            // to it there, which the source shows.
+                            foreach (var capturedAt in graph.GetCaptures(captured.Id))
+                            {
+                                var variableAt = capturedAt.Value;
+
+                                while (variableAt is IFieldReferenceOperation { Instance: { } instance })
+                                    variableAt = instance;
+
+                                bool isShown = graph.IsCapturedOnce(captured.Id) && variableAt is ILocalReferenceOperation or IParameterReferenceOperation;
+                                AddEarlier(UseKind.InPlace, capturedAt.Value, isShown ? variableAt : null);
+                            }
+                        }
+                        else
+                        {
+                            AddEarlier(UseKind.InPlace, current);
+                        }
+                    }
+
+                    return new(reference, UseKind.InPlace, At(parent));
+
                 case IIncrementOrDecrementOperation:
                     return new(reference, UseKind.InPlace, At(parent));
 
@@ -703,7 +892,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                     // A field of an object, an event, or a method that a delegate is made of, which takes a struct by value.
                     return memberReference is IFieldReferenceOperation { Field.RefKind: not RefKind.None }
                         ? Escape()
-                        : new(reference, UseKind.Read, At(GetWhereAccessorRuns(memberReference)));
+                        : UseWhereAccessorsRun(memberReference);
 
                 case IArrayElementReferenceOperation element when ReferenceEquals(element.ArrayReference, current):
                     return new(reference, UseKind.Read, At(element));
@@ -733,7 +922,14 @@ public sealed partial class DoNotCopyValueAnalyzer
                     return Escape();
 
                 if (parameter.RefKind is RefKind.None)
-                    return Read(current);
+                {
+                    var read = Read(current);
+
+                    // The variable itself, passed as a whole to a member that has taken it only where its result says so.
+                    return reference is ILocalReferenceOperation or IParameterReferenceOperation && ReferenceEquals(current, reference) && isWhole
+                        ? read with { SuccessorsWhereTaken = FindSuccessorsWhereTaken(graph, argument, read.At.Block, types) }
+                        : read;
+                }
 
                 if (CanKeepReference(call))
                     return Escape();
@@ -747,21 +943,47 @@ public sealed partial class DoNotCopyValueAnalyzer
                 if (current.Type is not { IsReferenceType: true } && canKeepReference)
                     return Escape();
 
-                return new(reference, UseKind.Read, At(GetWhereAccessorRuns(member)));
+                return UseWhereAccessorsRun(member);
             }
 
-            // The setter of a property or of an indexer, and the accessor of an event, run where the assignment is made, after the
-            // value that is assigned: in 'lease.Uses = Close(lease)' the read in the value is followed by the use by the setter.
-            // With a branch in the value the graph captures the target before the branch and assigns the capture after it, so the
-            // setter runs where a reference to the capture is assigned: the latest of them is taken.
-            IOperation GetWhereAccessorRuns(IOperation member)
+            // An accessor of a member that is read where it stands runs there. The setter of a property or of an indexer, and the
+            // accessor of an event, run where the assignment is made, after the value that is assigned: in 'lease.Uses = Close(lease)'
+            // the read in the value is followed by the use by the setter. A compound assignment runs the getter before its value and
+            // the setter after it. With a branch in the value the graph captures the target before the branch and assigns the capture
+            // after it: the setter runs where a reference to the capture is assigned, the getter of a compound assignment where the
+            // target is captured, and a getter whose value is read through the capture where it is read. A capture that holds only
+            // a value holds what the getter gave where it was captured. The latest of the places is the use that the reference stands
+            // for, and each of the others is a use of its own, before it.
+            VariableUse UseWhereAccessorsRun(IOperation member)
             {
                 if (member is not (IPropertyReferenceOperation or IEventReferenceOperation))
-                    return member;
+                    return Read(member);
 
-                return FindWhereAssigned(member) ?? member;
+                var places = new List<IOperation>();
 
-                IOperation? FindWhereAssigned(IOperation target)
+                if (!AddWhereAccessorsRun(member))
+                    places.Add(member);
+
+                FlowPosition? latest = null;
+
+                foreach (var place in places)
+                {
+                    if (graph.TryGetPosition(place, out var position) && (latest is not { } known || position.Block > known.Block ||
+                        (position.Block == known.Block && position.Index > known.Index)))
+                    {
+                        latest = position;
+                    }
+                }
+
+                foreach (var place in places)
+                {
+                    if (graph.TryGetPosition(place, out var position) && position != latest)
+                        AddEarlier(UseKind.Read, place);
+                }
+
+                return new(reference, UseKind.Read, latest ?? At(member));
+
+                bool AddWhereAccessorsRun(IOperation target)
                 {
                     RuntimeHelpers.EnsureSufficientExecutionStack();
 
@@ -771,35 +993,39 @@ public sealed partial class DoNotCopyValueAnalyzer
                     switch (target.Parent)
                     {
                         case IAssignmentOperation assignment when ReferenceEquals(assignment.Target, target):
-                            return assignment;
+                            if (assignment is ICompoundAssignmentOperation or ICoalesceAssignmentOperation)
+                                places.Add(member);
+
+                            places.Add(assignment);
+                            return true;
 
                         case IIncrementOrDecrementOperation increment:
-                            return increment;
+                            places.Add(increment);
+                            return true;
 
                         case IEventAssignmentOperation subscription when ReferenceEquals(subscription.EventReference, target):
-                            return subscription;
+                            places.Add(subscription);
+                            return true;
 
-                        case IFlowCaptureOperation capture:
-                            IOperation? latest = null;
-                            var latestAt = default(FlowPosition);
-
+                        case IFlowCaptureOperation capture when !graph.IsValueCapture(capture.Id):
                             foreach (var captured in graph.GetCaptureReferences(capture.Id))
                             {
-                                var at = FindWhereAssigned(captured) ?? captured;
-
-                                if (graph.TryGetPosition(at, out var position) && (latest is null || position.Block > latestAt.Block ||
-                                    (position.Block == latestAt.Block && position.Index > latestAt.Index)))
-                                {
-                                    (latest, latestAt) = (at, position);
-                                }
+                                if (!AddWhereAccessorsRun(captured))
+                                    places.Add(captured);
                             }
 
-                            return latest;
+                            return true;
 
                         default:
-                            return null;
+                            return false;
                     }
                 }
+            }
+
+            void AddEarlier(UseKind kind, IOperation at, IOperation? usedBy = null)
+            {
+                if (graph.TryGetPosition(at, out var position))
+                    earlier.Add(new(usedBy ?? reference, kind, position, IsEarlier: true));
             }
 
             VariableUse ClassifyOperand(IMethodSymbol operatorMethod, int ordinal, IOperation operation)
@@ -812,6 +1038,108 @@ public sealed partial class DoNotCopyValueAnalyzer
 
                 return CanKeepReference(operatorMethod) ? Escape() : new(reference, UseKind.InPlace, At(operation));
             }
+        }
+
+        /// <summary>
+        /// Gets where the code goes on from a call that is given a variable by value, where the member that is called has taken the
+        /// value: the branch of the condition that the call's result decides, on which the list says that the member takes it. The
+        /// result decides a branch where it is the condition of an 'if', a loop or a conditional, an operand of '&amp;&amp;' or '||',
+        /// or a left operand of them in a 'return', also behind '!', a comparison with the constant true or false, and an 'is' pattern
+        /// of either constant or of 'not' and either. The compiler's graph splits those into blocks that branch on the call. A task of a
+        /// bool goes by what awaiting it gives, also behind ConfigureAwait. Null where the member takes the value whatever it returns,
+        /// and where its result goes anywhere else, as into a local: the hand-off is then judged as any other.
+        /// </summary>
+        /// <param name="graph">The graph.</param>
+        /// <param name="argument">The argument, which is the variable itself.</param>
+        /// <param name="readBlock">The block of the read, in which the condition must be.</param>
+        /// <param name="types">What the list says of the member.</param>
+        private static int[]? FindSuccessorsWhereTaken(FunctionGraph graph, IArgumentOperation argument, int readBlock, NonCopyableTypes types)
+        {
+            if (argument.Parent is not IInvocationOperation invocation || argument.Parameter is not { } parameter)
+                return null;
+
+            // The result where the member has taken the value is the one that the entry does not list.
+            bool taken;
+
+            switch (types.GetBorrowedOutcomes(invocation.TargetMethod, parameter) & (SafeListOutcomes.True | SafeListOutcomes.False))
+            {
+                case SafeListOutcomes.True:
+                    taken = false;
+                    break;
+
+                case SafeListOutcomes.False:
+                    taken = true;
+                    break;
+
+                default:
+                    return null;
+            }
+
+            IOperation current = invocation;
+
+            if (SafeMemberList.IsTaskOfBoolean(invocation.Type))
+            {
+                if (current.Parent is IInvocationOperation { TargetMethod: { Name: "ConfigureAwait", IsStatic: false } configure } configured &&
+                    ReferenceEquals(configured.Instance, current) &&
+                    SymbolEqualityComparer.Default.Equals(configure.ContainingType, invocation.Type))
+                {
+                    current = configured;
+                }
+
+                if (current.Parent is not IAwaitOperation awaited)
+                    return null;
+
+                current = awaited;
+            }
+            else if (invocation.Type?.SpecialType is not SpecialType.System_Boolean)
+            {
+                return null;
+            }
+
+            // What the condition is when the member has taken the value.
+            while (true)
+            {
+                switch (current.Parent)
+                {
+                    case IParenthesizedOperation parenthesized:
+                        current = parenthesized;
+                        continue;
+
+                    case IUnaryOperation { OperatorKind: UnaryOperatorKind.Not, OperatorMethod: null } not:
+                        taken = !taken;
+                        current = not;
+                        continue;
+
+                    case IBinaryOperation { OperatorKind: BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals, OperatorMethod: null, IsLifted: false } comparison
+                        when (ReferenceEquals(comparison.LeftOperand, current) ? comparison.RightOperand : comparison.LeftOperand) is
+                            { Type.SpecialType: SpecialType.System_Boolean, ConstantValue: { HasValue: true, Value: bool constant } }:
+                        taken = (taken == constant) == (comparison.OperatorKind is BinaryOperatorKind.Equals);
+                        current = comparison;
+                        continue;
+
+                    case IIsPatternOperation isPattern when ReferenceEquals(isPattern.Value, current) && GetConstantOfPattern(isPattern.Pattern) is var (constant, isNegated):
+                        taken = (taken == constant) != isNegated;
+                        current = isPattern;
+                        continue;
+                }
+
+                break;
+            }
+
+            if (!graph.TryGetPosition(current, out var position) ||
+                position.Block != readBlock ||
+                !ReferenceEquals(graph.Graph.Blocks[position.Block].BranchValue, current))
+            {
+                return null;
+            }
+
+            return graph.GetSuccessorsWhen(position.Block, taken);
+
+            static (bool Constant, bool IsNegated)? GetConstantOfPattern(IPatternOperation pattern) => pattern switch {
+                IConstantPatternOperation { Value.ConstantValue: { HasValue: true, Value: bool constant } } => (constant, false),
+                INegatedPatternOperation { Pattern: IConstantPatternOperation { Value.ConstantValue: { HasValue: true, Value: bool constant } } } => (constant, true),
+                _ => null,
+            };
         }
 
         /// <summary>
@@ -893,7 +1221,7 @@ public sealed partial class DoNotCopyValueAnalyzer
             IParameterSymbol parameter,
             IMethodSymbol function,
             Func<IInvocationOperation, bool> isMoveOfLocal,
-            Action<DiagnosticDescriptor, SyntaxNode, object?[]> report)
+            Action<Rule, SyntaxNode, object?[]> report)
         {
             var aliases = FindAliases(graph, parameter);
             var uses = FindMoveUses(graph, parameter, aliases);
@@ -907,7 +1235,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                 atPosition.Add(use);
             }
 
-            var reported = new HashSet<(DiagnosticDescriptor Rule, TextSpan Span)>();
+            var reported = new HashSet<(Rule Rule, TextSpan Span)>();
             var visited = new HashSet<(int Block, MoveState State)>();
             var pending = new Stack<(int Block, int Index, MoveState State)>();
 
@@ -1025,7 +1353,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                 reference.IsDeclaration ||
                 (reference.Parent is ISimpleAssignmentOperation { IsRef: false } assignment && ReferenceEquals(assignment.Target, reference));
 
-            void Report(DiagnosticDescriptor rule, SyntaxNode syntax, params object?[] arguments)
+            void Report(Rule rule, SyntaxNode syntax, params object?[] arguments)
             {
                 if (reported.Add((rule, syntax.Span)))
                     report(rule, syntax, arguments);

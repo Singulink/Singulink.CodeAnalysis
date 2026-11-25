@@ -7,7 +7,7 @@ namespace Singulink.CodeAnalysis.Tests;
 /// value where the method reads it, once.
 /// </summary>
 /// <remarks>
-/// Docs: articles/concepts/listed-members.md.
+/// Docs: articles/rules/listed-members.md.
 /// </remarks>
 [PrefixTestClass]
 public class OwnedTaskTests

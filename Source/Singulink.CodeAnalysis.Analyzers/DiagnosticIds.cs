@@ -84,6 +84,12 @@ public static class DiagnosticIds
     public const string NonCopyableAwaiter = "SCA1015";
 
     /// <summary>
+    /// A local or a by-value parameter of a non-copyable type is used after its value was handed over by value, which made the hand-off
+    /// a copy.
+    /// </summary>
+    public const string UsedAfterHandOff = "SCA1016";
+
+    /// <summary>
     /// A member of a generic whose type parameter is not marked is used with a non-copyable type, and the member is not on the safe list.
     /// </summary>
     public const string UnlistedMember = "SCA1020";

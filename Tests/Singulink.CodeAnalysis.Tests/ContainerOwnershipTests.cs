@@ -8,7 +8,7 @@ namespace Singulink.CodeAnalysis.Tests;
 /// of what it is given, with <c>[Kept]</c>.
 /// </summary>
 /// <remarks>
-/// Docs: articles/concepts/keeping-containers.md and articles/guides/moving-a-value.md.
+/// Docs: articles/rules/keeping-containers.md and articles/rules/moves-of-containers.md.
 /// </remarks>
 [PrefixTestClass]
 public class ContainerOwnershipTests
@@ -1947,7 +1947,7 @@ public class ContainerOwnershipTests
                 where TList : IReadOnlyList<Guard> => {|#1:guards[0]|};
 
             static Guard[] All<[NonCopyable] TList>(TList guards)
-                where TList : IReadOnlyList<Guard> => [{|#2:.. guards|}];
+                where TList : IReadOnlyList<Guard> => [.. {|#2:guards|}];
 
             static Guard ResultOf<[NonCopyable] TTask>(TTask task)
                 where TTask : Task<Guard> => task is { {|#3:Result|}: var result } ? result : default;
@@ -1957,7 +1957,7 @@ public class ContainerOwnershipTests
 
             static Guard FirstOfANewObject() => Make() is [var {|#5:first|}, ..] ? first : default;
 
-            static Guard[] AllOfANewObject() => [{|#6:.. Make()|}];
+            static Guard[] AllOfANewObject() => [.. {|#6:Make()|}];
 
             // A new list of the framework is new for its members.
             static Guard FirstOfANewList() => new List<Guard>() is [var first, ..] ? first : default;

@@ -1,1 +1,1 @@
-Program.cs(13,27): SCA1001
+Program.cs(14,9): SCA1016

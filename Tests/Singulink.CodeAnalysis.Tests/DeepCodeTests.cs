@@ -46,7 +46,7 @@ public class DeepCodeTests
         source.AppendLine("    {");
 
         for (int i = 0; i < Branches; i++)
-            source.AppendLine($"        {(i == 0 ? string.Empty : "else ")}if (x == {i}) {{ Guard copy {{|#{i}:= _guard|}}; }}");
+            source.AppendLine($"        {(i == 0 ? string.Empty : "else ")}if (x == {i}) {{ Guard copy = {{|#{i}:_guard|}}; }}");
 
         source.AppendLine("    }");
         source.AppendLine("}");
@@ -138,14 +138,14 @@ public class DeepCodeTests
 
                 void Before()
                 {
-                    Guard copy {|#0:= _guard|};
+                    Guard copy = {|#0:_guard|};
                 }
 
                 string {|#1:Sum|}(string a) => {{sum}};
 
                 void After()
                 {
-                    Guard copy {|#2:= _guard|};
+                    Guard copy = {|#2:_guard|};
                 }
             }
 
@@ -172,7 +172,7 @@ public class DeepCodeTests
         source.AppendLine();
         source.AppendLine("    void M(int x, RwLock rwLock)");
         source.AppendLine("    {");
-        source.Append("        Guard guard {|#0:= ");
+        source.Append("        Guard guard = {|#0:");
 
         for (int i = 0; i < Branches; i++)
             source.Append($"x == {i} ? rwLock.Enter() : ");

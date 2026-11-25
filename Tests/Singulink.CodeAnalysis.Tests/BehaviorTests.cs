@@ -8,7 +8,7 @@ namespace Singulink.CodeAnalysis.Tests;
 /// checks that behavior.
 /// </summary>
 /// <remarks>
-/// Docs: articles/concepts/new-and-stored-values.md and articles/concepts/roslyn-differences.md.
+/// Docs: articles/rules/new-and-stored-values.md and articles/rules/roslyn-differences.md.
 /// </remarks>
 [PrefixTestClass]
 public class BehaviorTests
@@ -89,8 +89,8 @@ public class BehaviorTests
         {
             void M(Marked marked, Unmarked unmarked)
             {
-                var markedCopy {|#0:= marked|};
-                var last = marked;
+                var markedCopy = {|#0:marked|};
+                var last = {|#2:marked|};
 
                 // The struct that is not marked is reported for its field, not for its copies.
                 var unmarkedCopy = unmarked;
@@ -110,7 +110,7 @@ public class BehaviorTests
 
         {{Guard}}
         """,
-        Verify.CopyByAssignment(0, "Marked"),
+        Verify.UsedAfterHandOff(2, "marked", "Marked", "its value was assigned to \'markedCopy\'", 0),
         Verify.FieldOfCopyableType(1, "Guard", "Unmarked._guard"));
 
     [TestMethod]
@@ -144,8 +144,8 @@ public class BehaviorTests
                 // A parameter passed by value is a copy that the method owns. Here it is used for the last time, so it is moved on.
                 TakeValue(v);
 
-                Guard copy {|#4:= r|};
-                Guard copy2 {|#5:= refReadOnlyLocal|};
+                Guard copy = {|#4:r|};
+                Guard copy2 = {|#5:refReadOnlyLocal|};
                 copy = {|#6:scopedLocal|};
             }
 
@@ -212,13 +212,13 @@ public class BehaviorTests
                 // The using statement stores the value of an expression in a hidden local: a copy, unless the variable is not used again.
                 using ({|#0:local|}) { }
                 using (parameter) { }
-                using var last = local;
+                using var last = {|#1:local|};
             }
         }
 
         {{Guard}}
         """,
-        Verify.CopyOfStoredValue(0, "'using' disposes", "Guard"));
+        Verify.UsedAfterHandOff(1, "local", "Guard", "\'using\' disposed its value", 0));
 
     [TestMethod]
     public Task AsyncMethodsAndLambdas() => Verify.AnalyzerAsync(
@@ -301,7 +301,7 @@ public class BehaviorTests
                 object box2 = {|#0:local|};
                 IDisposable disposable = {|#1:local|};
                 string text = $"{{|#2:local|}}";
-                local.Use();
+                {|#5:local|}.Use();
 
                 Guard unboxed = {|#3:(Guard)boxed|};
 
@@ -312,9 +312,9 @@ public class BehaviorTests
         }
 
         """ + Guard,
-        Verify.Boxing(0, "Guard", "object"),
-        Verify.Boxing(1, "Guard", "System.IDisposable"),
-        Verify.CopyOfStoredValue(2, "The interpolated string takes", "Guard"),
+        Verify.UsedAfterHandOff(1, "local", "Guard", "its value was converted to \'object\'", 0),
+        Verify.UsedAfterHandOff(2, "local", "Guard", "its value was converted to \'IDisposable\'", 1),
+        Verify.UsedAfterHandOff(5, "local", "Guard", "the interpolated string took its value", 2),
         Verify.CopyByAssignmentOutOfBox(3, "Guard", "object"),
         Verify.CopyByAssignmentOutOfBox(4, "Guard", "object"));
 
@@ -358,25 +358,25 @@ public class BehaviorTests
 
                 // A tuple of a non-copyable type is a non-copyable type, so a copy of it is reported. Roslyn's rule misses it.
                 var tuple = (new Guard(), 1);
-                var tupleCopy {|#3:= tuple|};
+                var tupleCopy = {|#3:tuple|};
 
                 var tuple2 = ({|#0:local|}, 1);
-                var item {|#1:= tuple.Item1|};
+                var item = {|#1:{|#4:tuple|}.Item1|};
 
                 // The variable is a copy of the element of a stored tuple. Roslyn's rule reports the declared local as an unsupported use.
-                var ({|#2:deconstructed|}, number) = tuple;
+                var ({|#2:deconstructed|}, number) = {|#5:tuple|};
 
                 // Both are used again here, so none of the reads above is the last use of its variable.
-                _ = (local, tuple);
+                _ = ({|#6:local|}, {|#7:tuple|});
             }
         }
 
         {{Guard}}
         """,
-        Verify.CopyOfStoredValue(0, "The tuple takes", "Guard"),
-        Verify.CopyByAssignment(1, "Guard"),
-        Verify.CopyByAssignmentIntoVariable(2, "Guard", "deconstructed"),
-        Verify.CopyByAssignment(3, "(Guard, int)"));
+        Verify.UsedAfterHandOff(6, "local", "Guard", "the tuple took its value", 0),
+        Verify.UsedAfterHandOff(4, "tuple", "(Guard, int)", "its value was assigned to \'tupleCopy\'", 3),
+        Verify.UsedAfterHandOff(5, "tuple", "(Guard, int)", "its field \'Item1\' was read", 4),
+        Verify.UsedAfterHandOff(7, "tuple", "(Guard, int)", "its value was deconstructed", 5));
 
     [TestMethod]
     public Task WithExpression() => Verify.AnalyzerAsync(
@@ -388,7 +388,7 @@ public class BehaviorTests
                 var local = new Guard();
                 // 'with' copies its operand, which is reported once for a stored value. Roslyn's rule reports it three times.
                 var changed = {|#0:local|} with { Value = 1 };
-                local.Dispose();
+                {|#1:local|}.Dispose();
 
                 // A new value is moved into the copy.
                 var fromNew = new Guard() with { Value = 1 };
@@ -400,7 +400,7 @@ public class BehaviorTests
 
         {{Guard}}
         """,
-        Verify.CopyOfStoredValue(0, "'with' changes", "Guard"));
+        Verify.UsedAfterHandOff(1, "local", "Guard", "\'with\' copied its value", 0));
 
     [TestMethod]
     public Task RefStruct() => Verify.AnalyzerAsync(
@@ -412,9 +412,9 @@ public class BehaviorTests
             void M(ref RefGuard r)
             {
                 var local = new RefGuard();
-                var copy {|#0:= local|};
-                var last = local;
-                var copy2 {|#1:= r|};
+                var copy = {|#0:local|};
+                var last = {|#2:local|};
+                var copy2 = {|#1:r|};
                 ref RefGuard reference = ref r;
                 using var guard = new RefGuard();
             }
@@ -426,7 +426,7 @@ public class BehaviorTests
             public void Dispose() { }
         }
         """,
-        Verify.CopyByAssignment(0, "RefGuard"),
+        Verify.UsedAfterHandOff(2, "local", "RefGuard", "its value was assigned to \'copy\'", 0),
         Verify.CopyByAssignment(1, "RefGuard"));
 
     [TestMethod]
@@ -455,7 +455,7 @@ public class BehaviorTests
             void M()
             {
                 var fromProperty = Property;
-                var fromRefProperty {|#2:= RefProperty|};
+                var fromRefProperty = {|#2:RefProperty|};
                 ref var refFromRefProperty = ref RefProperty;
             }
         }
@@ -487,8 +487,8 @@ public class BehaviorTests
 
             void M()
             {
-                var spinLock {|#0:= _lock|};
-                var handle {|#1:= _handle|};
+                var spinLock = {|#0:_lock|};
+                var handle = {|#1:_handle|};
             }
         }
         """,
@@ -521,11 +521,11 @@ public class BehaviorTests
 
                 // An arm that gives a value that exists already makes it a copy, which is reported once for the whole expression.
                 assigned = {|#0:form switch { 0 => Create(), _ => _field }|};
-                assigned = {|#2:form == 0 ? Create() : parameter|};
+                assigned = {|#2:form == 0 ? Create() : {|#5:parameter|}|};
 
                 // A variable that an arm uses for the last time is a new value as well.
                 var fromLocal = form switch { 0 => declared, _ => Create() };
-                Take(form switch { 0 => Create(), _ => parameter });
+                Take(form switch { 0 => Create(), _ => {|#6:parameter|} });
 
                 // A new value is moved into a hole of an interpolated string, as into a parameter.
                 string text = $"{ form switch { 0 => Create(), _ => Create() } }";
@@ -542,7 +542,7 @@ public class BehaviorTests
         {{Guard}}
         """,
         Verify.CopyByAssignment(0, "Guard"),
-        Verify.CopyByAssignment(2, "Guard"),
+        Verify.UsedAfterHandOff(6, "parameter", "Guard", "its value was assigned", 5),
         Verify.CopyByReturn(4, "Guard"));
 
     [TestMethod]

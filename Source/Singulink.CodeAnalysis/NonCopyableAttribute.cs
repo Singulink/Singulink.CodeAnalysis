@@ -3,7 +3,7 @@ namespace Singulink.CodeAnalysis;
 /// <summary>
 /// Marks a struct that must not be copied, such as one that holds a lock or another resource that only one instance may own, or a type parameter
 /// whose values a generic type or method does not copy. The rules of the Singulink.CodeAnalysis.Analyzers package, which this package depends on,
-/// warn about code that copies a value of a marked type.
+/// report an error for code that copies a value of a marked type.
 /// </summary>
 /// <remarks>
 /// <para>

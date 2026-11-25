@@ -1,6 +1,6 @@
 Probe.cs(46,18): SCA1020
 Probe.cs(47,18): SCA1020
-Probe.cs(52,16): SCA1001
+Probe.cs(52,18): SCA1001
 Probe.cs(53,24): SCA1004
 Probe.cs(54,18): SCA1004
 Probe.cs(55,25): SCA1004

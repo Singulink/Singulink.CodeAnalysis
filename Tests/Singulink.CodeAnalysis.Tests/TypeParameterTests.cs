@@ -29,7 +29,7 @@ public class TypeParameterTests
 
             public void Swap(int index)
             {
-                T copy {|#1:= _items[index]|};
+                T copy = {|#1:_items[index]|};
                 Take({|#2:_spare|});
                 TakeRef(ref _spare);
                 ref T element = ref _items[index];
@@ -64,7 +64,7 @@ public class TypeParameterTests
                 Guard created = pool.Create();
                 Guard taken = pool.Get(0);
 
-                Guard copy {|#4:= pool[0]|};
+                Guard copy = {|#4:pool[0]|};
 
                 var a = rwLock.Enter();
                 ref readonly Guard same = ref Methods.Same(in a);
@@ -97,7 +97,7 @@ public class TypeParameterTests
             public void PushTwice(T value)
             {
                 _items[_count++] = {|#0:value|};
-                _items[_count++] = value;
+                _items[_count++] = {|#1:value|};
             }
 
             public T Pop() => NonCopyable.Move(ref _items[--_count]);
@@ -117,7 +117,7 @@ public class TypeParameterTests
 
         {{Sources.Guard}}
         """,
-        Verify.CopyByAssignment(0, "T"));
+        Verify.UsedAfterHandOff(1, "value", "T", "its value was assigned", 0));
 
     [TestMethod]
     public Task MarkedTypeParameter_StructAndFields() => Verify.AnalyzerAsync(
@@ -144,15 +144,15 @@ public class TypeParameterTests
             void M(Holder<int> numbers, Holder<Guard> guards)
             {
                 var numbersCopy = numbers;
-                var guardsCopy {|#1:= guards|};
-                var last = guards;
+                var guardsCopy = {|#1:guards|};
+                var last = {|#2:guards|};
             }
         }
 
         {{Sources.Guard}}
         """,
         Verify.AutoProperty(0, "T", "Box<T>.Property"),
-        Verify.CopyByAssignment(1, "Holder<Guard>"));
+        Verify.UsedAfterHandOff(2, "guards", "Holder<Guard>", "its value was assigned to \'guardsCopy\'", 1));
 
     [TestMethod]
     public Task RequiresCopyable_MemberIsNotCheckedAndCannotBeUsedWithANonCopyableType() => Verify.AnalyzerAsync(
@@ -860,7 +860,7 @@ public class TypeParameterTests
 
             public void Copy()
             {
-                T copy {|#1:= _value|};
+                T copy = {|#1:_value|};
             }
         }
         """,

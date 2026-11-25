@@ -12,7 +12,7 @@ namespace Singulink.CodeAnalysis.Tests;
 /// group assignment, which reads everything on its right before it stores anything.
 /// </summary>
 /// <remarks>
-/// Docs: articles/guides/moving-a-value.md and articles/concepts/last-use.md.
+/// Docs: articles/rules/moved-from.md and articles/rules/last-use.md.
 /// </remarks>
 [PrefixTestClass]
 public class KnownReferenceTests
@@ -397,7 +397,7 @@ public class KnownReferenceTests
             {
                 NonCopyable.ThrowIfNullRef(in b);
                 Guard first = a;
-                Guard second {|#4:= {|#5:b|}|};
+                Guard second = {|#4:{|#5:b|}|};
                 a = default;
                 return (first, second);
             }
@@ -438,7 +438,7 @@ public class KnownReferenceTests
                 Guard g = rwLock.Enter();
 
                 try { Prepare(); _held = {|#0:g|}; count++; }
-                catch { g.Dispose(); throw; }
+                catch { {|#3:g|}.Dispose(); throw; }
             }
 
             // A proof in the 'try' block counts where the block goes on.
@@ -466,7 +466,7 @@ public class KnownReferenceTests
                 int local;
 
                 try { Prepare(); count = 0; _held = {|#1:g|}; (local, count, other) = (1, 2, 3); }
-                catch { g.Dispose(); throw; }
+                catch { {|#4:g|}.Dispose(); throw; }
             }
 
             void GroupOfKnownReferencesAfterTheCommit(RwLock rwLock, ref int count, ref int other)
@@ -484,15 +484,15 @@ public class KnownReferenceTests
                 Guard g = rwLock.Enter();
 
                 try { Prepare(); _held = {|#2:g|}; (count, other) = (other, count); }
-                catch { g.Dispose(); throw; }
+                catch { {|#5:g|}.Dispose(); throw; }
             }
         }
 
         {{Sources.Guard}}
         """,
-        Verify.CopyByAssignment(0, "Guard", usedByHandler: Verify.ThenThrough("g", "count")),
-        Verify.CopyByAssignment(1, "Guard", usedByHandler: Verify.ThenThrough("g", "other")),
-        Verify.CopyByAssignment(2, "Guard", usedByHandler: Verify.ThenThrough("g", "count")));
+        Verify.UsedAfterHandOffBeforeNullReference(3, "g", "Guard", "its value was assigned", "count", 0),
+        Verify.UsedAfterHandOffBeforeNullReference(4, "g", "Guard", "its value was assigned", "other", 1),
+        Verify.UsedAfterHandOffBeforeNullReference(5, "g", "Guard", "its value was assigned", "count", 2));
 
     private const string GroupMoves = """
         using Singulink.CodeAnalysis;
@@ -802,7 +802,7 @@ public class KnownReferenceTests
                 Guard guard = rwLock.Enter();
 
                 try { registry.Held = {|#7:guard|}; _acquired++; }
-                catch { guard.Dispose(); throw; }
+                catch { {|#18:guard|}.Dispose(); throw; }
 
                 Use(before);
             }
@@ -849,7 +849,7 @@ public class KnownReferenceTests
         Verify.MovedFromParameterNotAssignedAtOnceThroughReference(9, "from", "this"),
         Verify.MovedFromParameterNotAssignedAtOnceThroughReference(10, "from", "this"),
         Verify.MovedFromParameterNotAssignedAtOnceThroughReference(11, "from", "this"),
-        Verify.CopyByAssignment(7, "Guard", usedByHandler: Verify.ThenThrough("guard", "this")),
+        Verify.UsedAfterHandOffBeforeNullReference(18, "guard", "Guard", "its value was assigned", "this", 7),
         Verify.MovedFromParameterNotAssignedAtOnceThroughReference(8, "from", "this"),
         Verify.MovedFromParameterNotAssignedAtOnceThroughReference(12, "from", "this"),
         Verify.MovedFromParameterNotAssignedAtOnceThroughReference(13, "from", "this"),
@@ -1024,7 +1024,7 @@ public class KnownReferenceTests
                 Guard guard = rwLock.Enter();
 
                 try { registry.Held = {|#1:guard|}; counter = ref _handovers; }
-                catch { guard.Dispose(); throw; }
+                catch { {|#2:guard|}.Dispose(); throw; }
 
                 counter++;
             }
@@ -1052,7 +1052,7 @@ public class KnownReferenceTests
         {{Sources.Guard}}
         """,
         Verify.MovedFromParameterNotAssignedAtOnceThroughReference(0, "from", "this"),
-        Verify.CopyByAssignment(1, "Guard", usedByHandler: Verify.ThenThrough("guard", "this")));
+        Verify.UsedAfterHandOffBeforeNullReference(2, "guard", "Guard", "its value was assigned", "this", 1));
 
     // 'x = ref y', the declaration of a 'ref' local included, is a read through 'y'. Used by value it reads what 'x' then refers to,
     // which no operation stands for, and where nothing reads through 'x' a compiler leaves a read of 'y' in its place. So it can fail
@@ -1133,7 +1133,7 @@ public class KnownReferenceTests
                 Guard guard = rwLock.Enter();
 
                 try { registry.Held = {|#4:guard|}; counter = ref secondary; }
-                catch { guard.Dispose(); throw; }
+                catch { {|#6:guard|}.Dispose(); throw; }
 
                 Debug.Assert(counter >= 0);
             }
@@ -1173,7 +1173,7 @@ public class KnownReferenceTests
         Verify.MovedFromParameterNotAssignedAtOnceThroughReference(1, "from", "secondary"),
         Verify.MovedFromParameterNotAssignedAtOnceThroughReference(2, "from", "limit"),
         Verify.MovedFromParameterNotAssignedAtOnceThroughReference(3, "from", "other"),
-        Verify.CopyByAssignment(4, "Guard", usedByHandler: Verify.ThenThrough("guard", "secondary")),
+        Verify.UsedAfterHandOffBeforeNullReference(6, "guard", "Guard", "its value was assigned", "secondary", 4),
         Verify.MovedFromParameterNotAssignedAtOnceThroughReference(5, "from", "this"));
 
     // A test for an interface or for a type parameter runs code of an object that answers such a test itself, as one of a class
@@ -1260,7 +1260,7 @@ public class KnownReferenceTests
                 Guard guard = rwLock.Enter();
 
                 try { _held = {|#4:guard|}; _isPooled = owner is IPooled; }
-                catch { guard.Dispose(); throw; }
+                catch { {|#5:guard|}.Dispose(); throw; }
             }
 
             void AfterACommitWithATestForAClass(RwLock rwLock, object owner)
@@ -1278,7 +1278,7 @@ public class KnownReferenceTests
         Verify.MovedFromParameterNotAssignedAtOnce(1, "from", "an operation that can throw or run other code"),
         Verify.MovedFromParameterNotAssignedAtOnce(2, "from", "an operation that can throw or run other code"),
         Verify.MovedFromParameterNotAssignedAtOnce(3, "from", "an operation that can throw or run other code"),
-        Verify.CopyByAssignment(4, "Guard", usedByHandler: "guard"));
+        Verify.UsedAfterHandOffInHandler(5, "guard", "Guard", "its value was assigned", 4));
 
     // [NotNullRef] on a 'ref', 'in', 'ref readonly' or 'out' parameter says that the method returns only if the reference that it is
     // given refers to something. It counts where a call names the code that runs: on a method that is not virtual, static or not, of
@@ -1666,7 +1666,7 @@ public class KnownReferenceTests
                 Guard guard = rwLock.Enter();
 
                 try { registry.Held = {|#2:guard|}; count++; }
-                catch { guard.Dispose(); throw; }
+                catch { {|#5:guard|}.Dispose(); throw; }
             }
 
             void AcquireAndCount(RwLock rwLock, Registry registry)
@@ -1674,7 +1674,7 @@ public class KnownReferenceTests
                 Guard guard = rwLock.Enter();
 
                 try { registry.Held = {|#3:guard|}; _count++; }
-                catch { guard.Dispose(); throw; }
+                catch { {|#6:guard|}.Dispose(); throw; }
             }
 
             // Checked first, both are fine.
@@ -1699,7 +1699,7 @@ public class KnownReferenceTests
                 Guard guard = rwLock.Enter();
 
                 try { registry.Held = {|#4:guard|}; Log(); }
-                catch { guard.Dispose(); throw; }
+                catch { {|#7:guard|}.Dispose(); throw; }
             }
 
             static void Log() { }
@@ -1714,9 +1714,9 @@ public class KnownReferenceTests
         """,
         Verify.MovedFromParameterNotAssignedAtOnceThroughReference(0, "from", "count"),
         Verify.MovedFromParameterNotAssignedAtOnceThroughReference(1, "from", "this"),
-        Verify.CopyByAssignment(2, "Guard", usedByHandler: Verify.ThenThrough("guard", "count")),
-        Verify.CopyByAssignment(3, "Guard", usedByHandler: Verify.ThenThrough("guard", "this")),
-        Verify.CopyByAssignment(4, "Guard", usedByHandler: "guard"));
+        Verify.UsedAfterHandOffBeforeNullReference(5, "guard", "Guard", "its value was assigned", "count", 2),
+        Verify.UsedAfterHandOffBeforeNullReference(6, "guard", "Guard", "its value was assigned", "this", 3),
+        Verify.UsedAfterHandOffInHandler(7, "guard", "Guard", "its value was assigned", 4));
 
     // The two checks of the attributes package: nothing for a reference that refers to something, and for a null reference the one
     // throws a NullReferenceException whose message names the expression, the other an ArgumentNullException that names the argument.
@@ -1808,7 +1808,7 @@ public class KnownReferenceTests
                 Guard guard = rwLock.Enter();
 
                 try { _held = {|#3:guard|}; _isMarked = closed is TMarker; }
-                catch { guard.Dispose(); throw; }
+                catch { {|#4:guard|}.Dispose(); throw; }
             }
 
             void AfterACommitWithATestForAKnownType(RwLock rwLock, Sealed closed)
@@ -1825,7 +1825,7 @@ public class KnownReferenceTests
         Verify.MovedFromParameterNotAssignedAtOnce(0, "from", "an operation that can throw or run other code"),
         Verify.MovedFromParameterNotAssignedAtOnce(1, "from", "an operation that can throw or run other code"),
         Verify.MovedFromParameterNotAssignedAtOnce(2, "from", "an operation that can throw or run other code"),
-        Verify.CopyByAssignment(3, "Guard", usedByHandler: "guard"));
+        Verify.UsedAfterHandOffInHandler(4, "guard", "Guard", "its value was assigned", 3));
 
     // What stands in the arguments of a call that the compiler can leave out is found by the syntax, whatever the flow graph makes
     // of a branch in the argument: '&&', '||', '?:', a 'switch' expression, a store, a [Conditional] method or local function of the

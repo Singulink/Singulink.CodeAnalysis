@@ -1,13 +1,13 @@
-F1_SpanSpread.cs(24,29): SCA1030
-F1_SpanSpread.cs(36,29): SCA1030
+F1_SpanSpread.cs(24,32): SCA1030
+F1_SpanSpread.cs(36,32): SCA1030
 F2_HandlerArgument.cs(49,26): SCA1003
 F2_HandlerArgument.cs(57,26): SCA1003
 F2_HandlerArgument.cs(64,33): SCA1003
 F2_HandlerArgument.cs(72,9): SCA1003
 F3_CompilerCalledExtensions.cs(107,22): SCA1003
-F3_CompilerCalledExtensions.cs(52,27): SCA1003
-F3_CompilerCalledExtensions.cs(66,19): SCA1003
-F3_CompilerCalledExtensions.cs(80,37): SCA1003
+F3_CompilerCalledExtensions.cs(53,9): SCA1016
+F3_CompilerCalledExtensions.cs(67,13): SCA1016
+F3_CompilerCalledExtensions.cs(81,13): SCA1016
 F3_CompilerCalledExtensions.cs(89,26): SCA1003
 F3_CompilerCalledExtensions.cs(98,18): SCA1003
 F4_IndexerCompound.cs(17,16): SCA1003
@@ -16,7 +16,7 @@ F5_InTemporaries.cs(21,32): SCA1003
 F5_InTemporaries.cs(21,39): SCA1003
 F5_InTemporaries.cs(21,43): SCA1003
 F5_InTemporaries.cs(31,32): SCA1003
-F5_InTemporaries.cs(40,32): SCA1003
+F5_InTemporaries.cs(41,9): SCA1016
 F5_InTemporaries.cs(51,60): SCA1003
 F5_InTemporaries.cs(51,67): SCA1003
 F5_InTemporaries.cs(51,71): SCA1003

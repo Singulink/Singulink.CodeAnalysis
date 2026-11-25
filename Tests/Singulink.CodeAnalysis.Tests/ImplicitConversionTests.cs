@@ -103,11 +103,11 @@ public class ImplicitConversionTests
             void Routes(Pair pair)
             {
                 var tuple = (new List<Guard>(), 1);
-                ({|#0:object a|}, int _) = tuple;
-                ({|#1:object b|}, int _) = MakePair();
-                foreach (({|#2:CultureInfo c|}, int _) in new List<(Tagged<Guard>, int)> { MakeTaggedPair() }) { }
-                ({|#3:object d|}, int _) = pair;
-                ({|#4:object e|}, int _) = _stored;
+                (object a, int _) = {|#0:tuple|};
+                (object b, int _) = {|#1:MakePair()|};
+                foreach ((CultureInfo c, int _) in {|#2:new List<(Tagged<Guard>, int)> { MakeTaggedPair() }|}) { }
+                (object d, int _) = {|#3:pair|};
+                (object e, int _) = {|#4:_stored|};
                 (CultureInfo f, int _) = ({|#5:Factory.Make<Guard>()|} as CultureInfo, 1);
             }
         }

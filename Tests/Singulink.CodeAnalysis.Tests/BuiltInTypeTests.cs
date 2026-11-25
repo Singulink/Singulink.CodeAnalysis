@@ -7,7 +7,7 @@ namespace Singulink.CodeAnalysis.Tests;
 /// Tests of the framework structs that the built-in list names as non-copyable, and of the property that leaves them out.
 /// </summary>
 /// <remarks>
-/// Docs: articles/concepts/non-copyable-types.md.
+/// Docs: articles/rules/non-copyable-types.md.
 /// </remarks>
 [PrefixTestClass]
 public class BuiltInTypeTests
@@ -33,18 +33,18 @@ public class BuiltInTypeTests
 
             void M(Lock lockObject, ref DefaultInterpolatedStringHandler handler)
             {
-                var spinLock {|#0:= _spinLock|};
-                var handle {|#1:= _handle|};
-                var typedHandle {|#2:= _typedHandle|};
-                var pinnedHandle {|#3:= _pinnedHandle|};
-                var weakHandle {|#4:= _weakHandle|};
-                var memoryHandle {|#5:= _memoryHandle|};
-                var flowControl {|#6:= _flowControl|};
-                var core {|#7:= _core|};
-                var handlerCopy {|#8:= handler|};
+                var spinLock = {|#0:_spinLock|};
+                var handle = {|#1:_handle|};
+                var typedHandle = {|#2:_typedHandle|};
+                var pinnedHandle = {|#3:_pinnedHandle|};
+                var weakHandle = {|#4:_weakHandle|};
+                var memoryHandle = {|#5:_memoryHandle|};
+                var flowControl = {|#6:_flowControl|};
+                var core = {|#7:_core|};
+                var handlerCopy = {|#8:handler|};
 
                 var scope = lockObject.EnterScope();
-                var scopeCopy {|#9:= scope|};
+                var scopeCopy = {|#9:scope|};
                 scope.Dispose();
             }
         }
@@ -57,8 +57,8 @@ public class BuiltInTypeTests
 
             void M()
             {
-                var own {|#10:= _own|};
-                var listed {|#11:= _listed|};
+                var own = {|#10:_own|};
+                var listed = {|#11:_listed|};
             }
         }
 
@@ -120,7 +120,7 @@ public class BuiltInTypeTests
 
                 void M()
                 {
-                    var spinLock {|#0:= _spinLock|};
+                    var spinLock = {|#0:_spinLock|};
                 }
             }
             """,
@@ -146,7 +146,7 @@ public class BuiltInTypeTests
 
                 void M(RwLock rwLock, List<Guard> list, Stack<Guard> stack)
                 {
-                    var spinLock {|#0:= _spinLock|};
+                    var spinLock = {|#0:_spinLock|};
                     var handle = _handle;
 
                     list.Add(rwLock.Enter());
@@ -285,6 +285,51 @@ public class BuiltInTypeTests
                 _core.OnCompleted(continuation, state, token, flags);
         }
         """);
+
+    // DispatcherProcessingDisabled of WindowsBase: Dispatcher.DisableProcessing adds 1 to a count and returns it, and its Dispose checks
+    // only the struct's own field before it subtracts 1, so the Dispose of a copy subtracts a second time. A copy of a stored value is
+    // reported, its operators may be given stored values, and the value that DisableProcessing returns is new. With the built-in types
+    // off, nothing is reported.
+    private const string DispatcherProcessing = """
+        using System.Windows.Threading;
+
+        class C
+        {
+            DispatcherProcessingDisabled _disabled;
+            DispatcherProcessingDisabled _other;
+
+            void Copy() => _other = {|#0:_disabled|};
+
+            bool Compare() => _disabled == _other || _disabled != _other;
+
+            void Disable(Dispatcher dispatcher)
+            {
+                using (dispatcher.DisableProcessing())
+                {
+                }
+
+                DispatcherProcessingDisabled disabled = dispatcher.DisableProcessing();
+                _disabled = disabled;
+            }
+        }
+        """;
+
+    private static readonly ReferenceAssemblies DesktopReferenceAssemblies =
+        Verify.Test.NetReferenceAssemblies.AddPackages([new PackageIdentity("Microsoft.WindowsDesktop.App.Ref", "10.0.0")]);
+
+    [TestMethod]
+    public async Task DispatcherProcessingDisabled_IsNonCopyable()
+    {
+        var test = new Verify.Test { TestCode = DispatcherProcessing, ReferenceAssemblies = DesktopReferenceAssemblies };
+        test.ExpectedDiagnostics.Add(Verify.CopyByAssignment(0, "System.Windows.Threading.DispatcherProcessingDisabled"));
+        await test.RunAsync();
+    }
+
+    [TestMethod]
+    public Task DispatcherProcessingDisabled_IsCopyableWithTheBuiltInTypesOff() =>
+        new Verify.Test { TestCode = DispatcherProcessing.Replace("{|#0:_disabled|}", "_disabled", StringComparison.Ordinal), ReferenceAssemblies = DesktopReferenceAssemblies }
+            .WithBuildProperty("NonCopyableIncludeBuiltInTypes", "false")
+            .RunAsync();
 
     private static Verify.Test CreateTest(string source, string? includeBuiltInTypes) =>
         new Verify.Test { TestCode = source }.WithBuildProperty("NonCopyableIncludeBuiltInTypes", includeBuiltInTypes);

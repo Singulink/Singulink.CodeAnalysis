@@ -106,7 +106,7 @@ public partial class FrameworkScanTests
     // class. The scan of the members fails for a public or protected member of a class whose base chain reaches a class with such a line,
     // which clones its object or an object that it is given, directly or through the members of the framework that it calls (a virtual
     // call reaching the overrides of the framework, to a depth of 48 calls), and has no 'clones' line. Both read the shared frameworks
-    // that the tests run on. So together with this test they show that no ToString, Equals or GetHashCode of a framework class that a
+    // that the tests run on, and the .NET Framework 4.8.1 where it is installed. So together with this test they show that no ToString, Equals or GetHashCode of a framework class that a
     // class of another assembly can derive from clones its object or one that it is given, and the members that the compiler writes for a
     // record or an anonymous type, which do nothing else with the values of their members (the test above), need no check for them.
     [TestMethod]

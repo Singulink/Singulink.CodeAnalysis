@@ -2,13 +2,18 @@
   <!--
     Makes the properties of the package visible to the compiler, which passes them to the analyzer as build_property.<name>:
     NonCopyableIncludeBuiltInTypes turns the built-in non-copyable types on or off, where the targets file of the package sets it if the
-    project has not, and NonCopyableAllowImplicitMoves turns off the move of a variable at its last use. The package has this file under build and under buildTransitive, so that the properties also work in a
-    project that gets the analyzer through another package. NuGetPackageRoot tells a symbol list file that came in a package from the
-    project's own.
+    project has not, and NonCopyableAllowImplicitMoves turns off the move of a variable at its last use. NonCopyableErrorsAsWarnings
+    makes the analyzer report as under the current memory safety rules: an ordinary warning, which every kind of suppression and of
+    severity configuration applies to. _NonCopyableReferencesPackage, which the targets file sets, says whether the project references
+    a package of the analyzer itself: SCA1025 is a message in a project that does not. The package has this file under build and under
+    buildTransitive, so that the properties also work in a project that gets the analyzer through another package. NuGetPackageRoot
+    tells a symbol list file that came in a package from the project's own.
   -->
   <ItemGroup>
     <CompilerVisibleProperty Include="NonCopyableIncludeBuiltInTypes" />
     <CompilerVisibleProperty Include="NonCopyableAllowImplicitMoves" />
+    <CompilerVisibleProperty Include="NonCopyableErrorsAsWarnings" />
+    <CompilerVisibleProperty Include="_NonCopyableReferencesPackage" />
     <CompilerVisibleProperty Include="NuGetPackageRoot" />
   </ItemGroup>
 </Project>

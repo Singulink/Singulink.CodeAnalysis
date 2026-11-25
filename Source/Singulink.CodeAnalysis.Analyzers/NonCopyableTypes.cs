@@ -1844,6 +1844,25 @@ internal sealed class NonCopyableTypes(SafeMemberList list, IAssemblySymbol comp
     public bool IsOwnedTaskProperty(IPropertySymbol property) => list.GetMember(GetListDefinition(property))?.Marker is SafeListMarker.Owned;
 
     /// <summary>
+    /// Gets the outcomes of a call in which a method keeps nothing of a value of a non-copyable type that it is given by value through a
+    /// parameter: those that a 'borrowswhen' entry of the method lists, where the entry covers the parameter. None where the method takes
+    /// the value whatever happens, as every method does that the list does not mark so. For a method that returns a task, the outcomes
+    /// are those of awaiting the task. 'borrows' gives none here: a member that it marks is given a value without a hand-off.
+    /// </summary>
+    public SafeListOutcomes GetBorrowedOutcomes(IMethodSymbol method, IParameterSymbol parameter)
+    {
+        if (parameter.RefKind is not RefKind.None ||
+            !IsNonCopyableType(parameter.Type) ||
+            list.GetMember(GetListDefinition(method)) is not { Marker: SafeListMarker.BorrowsWhen } entry ||
+            !SafeMemberList.CanBeTaken(parameter.OriginalDefinition.Type, entry))
+        {
+            return SafeListOutcomes.None;
+        }
+
+        return entry.BorrowedOutcomes;
+    }
+
+    /// <summary>
     /// Gets what stands in the way of a type being erasable, among the things that a type which derives from an erasable type can add to it: a
     /// base class or an interface with bodies that are not checked for a non-copyable type which it receives, or an interface that variance
     /// converts to one over object, or to one that takes a delegate over object. Null if there is nothing of the kind.

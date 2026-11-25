@@ -9,7 +9,7 @@ namespace Singulink.CodeAnalysis.Tests;
 /// before the block ends, and nothing may run between the read of a [MovedFrom] parameter and its assignment.
 /// </summary>
 /// <remarks>
-/// <para>Docs: articles/concepts/last-use.md and articles/guides/moving-a-value.md.</para>
+/// <para>Docs: articles/rules/last-use.md and articles/rules/moved-from.md.</para>
 /// Each row is a statement that uses only the parameters and locals of the method. What is not in the first table has to be reported:
 /// an operation or an operator that the analyzer has not been taught goes to that side.
 /// </remarks>
@@ -325,13 +325,13 @@ public partial class WhatRunsTests
     public Task Commit_WhatCanThrowAfterTheStoreLeavesTheHandlers(string statement, string what)
     {
         _ = what;
-        return Verify.AnalyzerAsync(GetCommit(statement, isReported: true), Verify.CopyByAssignment(0, "Guard", usedByHandler: "guard"));
+        return Verify.AnalyzerAsync(GetCommit(statement, isReported: true), Verify.UsedAfterHandOffInHandler(1, "guard", "Guard", "its value was assigned", 0));
     }
 
     [TestMethod]
     [DynamicData(nameof(Branches))]
     public Task Commit_ABranchAfterTheStoreLeavesTheHandlers(string statement) =>
-        Verify.AnalyzerAsync(GetCommit(statement, isReported: true), Verify.CopyByAssignment(0, "Guard", usedByHandler: "guard"));
+        Verify.AnalyzerAsync(GetCommit(statement, isReported: true), Verify.UsedAfterHandOffInHandler(1, "guard", "Guard", "its value was assigned", 0));
 
     [TestMethod]
     [DynamicData(nameof(RunsNothing))]
@@ -357,7 +357,7 @@ public partial class WhatRunsTests
                 Guard guard = rwLock.Enter();
 
                 try { Work(); _held = {{(isReported ? "{|#0:guard|}" : "guard")}}; {{MarkedPlace().Replace(statement, "$1")}} }
-                catch { guard.Dispose(); throw; }
+                catch { {{(isReported ? "{|#1:guard|}" : "guard")}}.Dispose(); throw; }
             }
         }
 
@@ -442,7 +442,7 @@ public partial class WhatRunsTests
                         Guard guard = rwLock.Enter();
 
                         try { _held = {|#2:guard|}; _slot <<= 1; }
-                        catch { guard.Dispose(); throw; }
+                        catch { {|#3:guard|}.Dispose(); throw; }
                     }
 
                     void CommitUnchecked(RwLock rwLock)
@@ -460,7 +460,7 @@ public partial class WhatRunsTests
 
         test.ExpectedDiagnostics.Add(Verify.MovedFromParameterNotAssignedAtOnce(0, "value", Throws));
         test.ExpectedDiagnostics.Add(Verify.MovedFromParameterNotAssignedAtOnce(1, "value", Throws));
-        test.ExpectedDiagnostics.Add(Verify.CopyByAssignment(2, "Guard", usedByHandler: "guard"));
+        test.ExpectedDiagnostics.Add(Verify.UsedAfterHandOffInHandler(3, "guard", "Guard", "its value was assigned", 2));
         return test.RunAsync();
     }
 
@@ -488,7 +488,7 @@ public partial class WhatRunsTests
                 checked
                 {
                     try { _held = {|#0:guard|}; _slot <<= 1; }
-                    catch { guard.Dispose(); throw; }
+                    catch { {|#2:guard|}.Dispose(); throw; }
                 }
             }
 
@@ -502,7 +502,7 @@ public partial class WhatRunsTests
                         Guard guard = rwLock.Enter();
 
                         try { _held = {|#1:guard|}; _slot <<= 1; }
-                        catch { guard.Dispose(); throw; }
+                        catch { {|#3:guard|}.Dispose(); throw; }
                     };
                 }
             }
@@ -510,8 +510,8 @@ public partial class WhatRunsTests
 
         {{Sources.Guard}}
         """,
-        Verify.CopyByAssignment(0, "Guard", usedByHandler: "guard"),
-        Verify.CopyByAssignment(1, "Guard", usedByHandler: "guard"));
+        Verify.UsedAfterHandOffInHandler(2, "guard", "Guard", "its value was assigned", 0),
+        Verify.UsedAfterHandOffInHandler(3, "guard", "Guard", "its value was assigned", 1));
 
     // The concatenation of two strings after a commit can throw: its result can be longer than a string can be, which the runtime
     // reports with an OutOfMemoryException that can be caught. Running out of memory is not counted; a length is. One that the
@@ -533,14 +533,14 @@ public partial class WhatRunsTests
             {
                 Guard g = rwLock.Enter();
                 try { _held = {|#0:g|}; _label = _prefix + _suffix; }
-                catch { g.Dispose(); throw; }
+                catch { {|#2:g|}.Dispose(); throw; }
             }
 
             void Appended(RwLock rwLock)
             {
                 Guard g = rwLock.Enter();
                 try { _held = {|#1:g|}; _label += _suffix; }
-                catch { g.Dispose(); throw; }
+                catch { {|#3:g|}.Dispose(); throw; }
             }
 
             void Folded(RwLock rwLock)
@@ -561,6 +561,6 @@ public partial class WhatRunsTests
 
         {{Sources.Guard}}
         """,
-        Verify.CopyByAssignment(0, "Guard", usedByHandler: "g"),
-        Verify.CopyByAssignment(1, "Guard", usedByHandler: "g"));
+        Verify.UsedAfterHandOffInHandler(2, "g", "Guard", "its value was assigned", 0),
+        Verify.UsedAfterHandOffInHandler(3, "g", "Guard", "its value was assigned", 1));
 }

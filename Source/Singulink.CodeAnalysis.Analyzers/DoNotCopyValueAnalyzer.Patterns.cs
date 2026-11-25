@@ -731,13 +731,18 @@ public sealed partial class DoNotCopyValueAnalyzer
         /// Checks the variables of a deconstruction, which are as new as the value that is deconstructed. The elements of a tuple literal are
         /// assigned one by one.
         /// </summary>
+        /// <remarks>
+        /// What is reported for a variable that is given an element of the value is reported at the value, or at <paramref name="site"/>
+        /// where the value has no operation, as the collection of a 'foreach': that is the expression that makes the copy, which an
+        /// <c>unsafe(...)</c> expression can hold, and a declaration cannot.
+        /// </remarks>
         private void CheckDeconstruction(
             IOperation target, IOperation? value, DeconstructionInfo? info, bool valueIsNew, HandledScope handled, ITypeSymbol? sourceType = null, SyntaxNode? site = null)
         {
             RuntimeHelpers.EnsureSufficientExecutionStack();
 
             // A user-defined conversion of what a Deconstruct method hands out to the type of its target, with nothing written for it.
-            CheckMemberUse((value ?? target).Syntax, info?.Conversion?.MethodSymbol);
+            CheckMemberUse(value?.Syntax ?? site ?? target.Syntax, info?.Conversion?.MethodSymbol);
 
             target = SkipParentheses(target);
 
@@ -746,13 +751,13 @@ public sealed partial class DoNotCopyValueAnalyzer
 
             if (target is not ITupleOperation targets)
             {
-                CheckDeconstructionTarget(target, value, valueIsNew);
+                CheckDeconstructionTarget(target, value, valueIsNew, site);
 
                 // An element that a tuple or a Deconstruct method hands out is converted to the type of its target with no node in the
                 // tree. An element of a tuple literal has its own conversion, which is visited, and a user-defined conversion is a member
                 // that is used, which is checked above.
                 if (value is null && target is not IDiscardOperation && info?.Conversion is not { IsUserDefined: true } and not { IsIdentity: true })
-                    CheckConversionWithoutNode(target.Syntax, sourceType, (target as IDeclarationExpressionOperation)?.Expression.Type ?? target.Type, valueIsNew);
+                    CheckConversionWithoutNode(site ?? target.Syntax, sourceType, (target as IDeclarationExpressionOperation)?.Expression.Type ?? target.Type, valueIsNew);
 
                 return;
             }
@@ -806,11 +811,11 @@ public sealed partial class DoNotCopyValueAnalyzer
             {
                 var element = targets.Elements[i];
                 bool elementIsNew = types.IsNonCopyableType(element.Type) ? valuesAreNew : elementsAreNew;
-                CheckDeconstruction(element, null, i < nested.Length ? nested[i] : null, elementIsNew, handled, i < outputs.Length ? outputs[i] : null);
+                CheckDeconstruction(element, null, i < nested.Length ? nested[i] : null, elementIsNew, handled, i < outputs.Length ? outputs[i] : null, value?.Syntax ?? site);
             }
         }
 
-        private void CheckDeconstructionTarget(IOperation target, IOperation? value, bool valueIsNew)
+        private void CheckDeconstructionTarget(IOperation target, IOperation? value, bool valueIsNew, SyntaxNode? site)
         {
             if (target is IDeclarationExpressionOperation declaration)
                 target = declaration.Expression;
@@ -820,11 +825,12 @@ public sealed partial class DoNotCopyValueAnalyzer
             if (valueIsNew || target is IDiscardOperation || !types.IsNonCopyableType(target.Type))
                 return;
 
-            // An element of a tuple literal is assigned like any other value. Without one, the variable is what there is to point at.
+            // An element of a tuple literal is assigned like any other value. Without one, the value that is deconstructed is what
+            // there is to point at, and the variable is named.
             if (value is null && target is ILocalReferenceOperation { IsDeclaration: true } declared)
-                Report(Rules.CopyByAssignmentIntoVariable, target.Syntax, target.Type, declared.Local.Name);
+                Report(Rules.CopyByAssignmentIntoVariable, site ?? target.Syntax, target.Type, declared.Local.Name);
             else
-                Report(Rules.CopyByAssignment, (value ?? target).Syntax, target.Type, GetHandlerHint(value));
+                Report(Rules.CopyByAssignment, value?.Syntax ?? site ?? target.Syntax, target.Type, GetHandlerHint(value));
         }
     }
 

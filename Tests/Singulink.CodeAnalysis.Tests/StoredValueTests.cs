@@ -7,7 +7,7 @@ namespace Singulink.CodeAnalysis.Tests;
 /// field gives, a variable that lives on after the method that returns it, and what a created value is made of.
 /// </summary>
 /// <remarks>
-/// Docs: articles/concepts/new-and-stored-values.md.
+/// Docs: articles/rules/new-and-stored-values.md.
 /// </remarks>
 [PrefixTestClass]
 public class StoredValueTests
@@ -79,9 +79,9 @@ public class StoredValueTests
                 Guard x23 = {|#23:d.Create()|};
 
                 // By the variable of a 'foreach' over boxed elements.
-                foreach (Guard {|#24:item|} in al) { }
-                foreach (Guard {|#25:item|} in arr) { }
-                foreach (Guard {|#26:item|} in disps) { }
+                foreach (Guard item in {|#24:al|}) { }
+                foreach (Guard item in {|#25:arr|}) { }
+                foreach (Guard item in {|#26:disps|}) { }
 
                 // Nothing is taken out here.
                 bool isGuard = GetBox() is Guard;
@@ -248,7 +248,7 @@ public class StoredValueTests
                 Guard a = {|#0:holder.Items[0]|};
                 Guard b = {|#1:await holder.Pending|};
                 Guard c = {|#2:await holder.Pending|};
-                Guard d {|#3:= holder.Array[0]|};
+                Guard d = {|#3:holder.Array[0]|};
                 foreach (Guard item in {|#4:holder.Items|}) { }
                 Guard e = {|#5:holder.Pending.Result|};
 
@@ -276,8 +276,8 @@ public class StoredValueTests
             void Anonymous(RwLock rwLock, [Singulink.CodeAnalysis.Kept] List<Guard> list)
             {
                 var anonymous = new { {|#16:Guard = rwLock.Enter()|}, List = list };
-                Guard a {|#13:= anonymous.Guard|};
-                Guard b {|#14:= anonymous.Guard|};
+                Guard a = {|#13:anonymous.Guard|};
+                Guard b = {|#14:anonymous.Guard|};
                 Guard c = {|#15:anonymous.List[0]|};
             }
         }
@@ -770,7 +770,7 @@ public class StoredValueTests
 
             void Declared(RwLock rwLock)
             {
-                var copy {|#18:= _held = rwLock.Enter()|};
+                var copy = {|#18:_held = rwLock.Enter()|};
             }
 
             // Nothing uses the result, or what uses it takes a reference.
@@ -866,7 +866,7 @@ public class StoredValueTests
             void RefValue(TypedReference reference)
             {
                 Take({|#0:__refvalue(reference, Guard)|});
-                Guard copy {|#1:= __refvalue(reference, Guard)|};
+                Guard copy = {|#1:__refvalue(reference, Guard)|};
 
                 // In place it is what it is.
                 __refvalue(reference, Guard).Dispose();
@@ -878,7 +878,7 @@ public class StoredValueTests
             {
                 Take({|#2:*pointer|});
                 Take({|#3:pointer[1]|});
-                Guard copy {|#4:= *pointer|};
+                Guard copy = {|#4:*pointer|};
 
                 (*pointer).Dispose();
                 pointer[1].Dispose();

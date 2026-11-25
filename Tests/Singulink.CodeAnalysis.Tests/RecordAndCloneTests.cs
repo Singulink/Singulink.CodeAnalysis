@@ -6,7 +6,7 @@ namespace Singulink.CodeAnalysis.Tests;
 /// Tests of what copies a value without an assignment being written: a record, <c>with</c> and <c>MemberwiseClone</c>.
 /// </summary>
 /// <remarks>
-/// Docs: articles/concepts/non-copyable-types.md.
+/// Docs: articles/rules/non-copyable-types.md.
 /// </remarks>
 [PrefixTestClass]
 public class RecordAndCloneTests
@@ -123,14 +123,14 @@ public class RecordAndCloneTests
                 var g = default(Options) with { Size = 1 } with { Count = 2 };
                 _field = Create() with { Size = 1 };
                 Take(Create() with { Size = 1 });
-                var h = NonCopyable.Move(ref local) with { Size = 1 };
+                var h = NonCopyable.Move(ref {|#4:local|}) with { Size = 1 };
             }
         }
         """,
-        Verify.CopyOfStoredValue(0, "'with' changes", "Options"),
-        Verify.CopyOfStoredValue(1, "'with' changes", "Options"),
-        Verify.CopyOfStoredValue(2, "'with' changes", "Options"),
-        Verify.CopyOfStoredValue(3, "'with' changes", "Options"));
+        Verify.UsedAfterHandOff(2, "local", "Options", "\'with\' copied its value", 0),
+        Verify.UsedAfterHandOff(3, "local", "Options", "\'with\' copied its value", 2),
+        Verify.UsedAfterHandOff(4, "local", "Options", "\'with\' copied its value", 3),
+        Verify.CopyOfStoredValue(1, "'with' changes", "Options"));
 
     [TestMethod]
     public Task MemberwiseClone_CopiesEveryFieldOfANonCopyableType() => Verify.AnalyzerAsync(

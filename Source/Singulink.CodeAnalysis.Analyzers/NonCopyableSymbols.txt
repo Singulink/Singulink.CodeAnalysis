@@ -1,8 +1,9 @@
 # The built-in framework symbol list of the non-copyable analyzer.
-# Format: one documentation-comment ID per line, with an optional marker (";new", ";borrows", ";drains", ";owned", ";view", ";noncopyable", ";copyable", ";erasable", ";clones" or ";clones=complete") and optional ";for=" type parameter names.
+# Format: one documentation-comment ID per line, with an optional marker (";new", ";borrows", ";drains", ";owned", ";borrowswhen=" with outcomes, ";view", ";noncopyable", ";copyable", ";erasable", ";clones" or ";clones=complete") and optional ";for=" type parameter names. The outcomes of "borrowswhen" are "true" and "false".
 # A symbol list file of a project can also vouch for an assembly, with a line of the form "A:Assembly.Name;trusted".
 # Runtime source read: dotnet/runtime d757c03be2c3. What in that source backs each entry is in NonCopyableSymbols.evidence.md beside this file.
 # A line ending in "# net11+" names a member that exists from .NET 11 on. It does not resolve in a project that targets .NET 10.
+# A line ending in "# netfx" names a symbol that only the .NET Framework has. It does not resolve in a project that targets .NET.
 #
 #
 # "borrows" also answers who keeps a container. A parameter whose type mentions a type parameter that is not marked is taken to
@@ -11,6 +12,10 @@
 # given during the call is marked "borrows". One that hands it back, as a reference, a ref struct, another type or an "out"
 # argument, needs no marker: what it hands back is followed. One that is left without a marker keeps: constructors,
 # ArrayPool`1.Return and Task.Run.
+#
+# "borrowswhen=false" says that a member keeps nothing of a value that it is given by value where it returned false, and has taken
+# it where it returned true or threw. Each member that has it returns false before it keeps anything of the item, which the comment
+# above it shows.
 #
 # Members of Unsafe, MemoryMarshal, CollectionsMarshal, ImmutableCollectionsMarshal and Marshal are listed for one fact only:
 # they make no copy. What they let code do that the language otherwise rules out (write through a read-only reference, hold a
@@ -53,6 +58,9 @@ T:System.Buffers.MemoryHandle;noncopyable
 T:System.Runtime.CompilerServices.DefaultInterpolatedStringHandler;noncopyable
 T:System.Threading.AsyncFlowControl;noncopyable
 T:System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore`1;noncopyable
+# Dispatcher.DisableProcessing adds 1 to a count and returns this struct, whose Dispose checks only the struct's own field before it
+# subtracts 1: the Dispose of a copy subtracts a second time. WindowsBase of .NET and of the .NET Framework.
+T:System.Windows.Threading.DispatcherProcessingDisabled;noncopyable
 
 # Members of those structs that take one by value and only read it: a stored value may be passed.
 # The MemoryHandle constructor keeps the GCHandle that it is given, so it is not here.
@@ -72,6 +80,8 @@ M:System.Runtime.InteropServices.GCHandleExtensions.GetAddressOfStringData(Syste
 M:System.Threading.AsyncFlowControl.Equals(System.Threading.AsyncFlowControl);borrows
 M:System.Threading.AsyncFlowControl.op_Equality(System.Threading.AsyncFlowControl,System.Threading.AsyncFlowControl);borrows
 M:System.Threading.AsyncFlowControl.op_Inequality(System.Threading.AsyncFlowControl,System.Threading.AsyncFlowControl);borrows
+M:System.Windows.Threading.DispatcherProcessingDisabled.op_Equality(System.Windows.Threading.DispatcherProcessingDisabled,System.Windows.Threading.DispatcherProcessingDisabled);borrows
+M:System.Windows.Threading.DispatcherProcessingDisabled.op_Inequality(System.Windows.Threading.DispatcherProcessingDisabled,System.Windows.Threading.DispatcherProcessingDisabled);borrows
 
 # ============================================================================
 # Members of the framework that get at a built-in non-copyable type other than by value
@@ -253,7 +263,10 @@ M:System.Threading.Tasks.TaskCompletionSource`1.#ctor(System.Object)
 M:System.Threading.Tasks.TaskCompletionSource`1.#ctor(System.Object,System.Threading.Tasks.TaskCreationOptions)
 P:System.Threading.Tasks.TaskCompletionSource`1.Task;owned  # the task belongs to the source alone, and nothing else hands it out
 M:System.Threading.Tasks.TaskCompletionSource`1.SetResult(`0)
-M:System.Threading.Tasks.TaskCompletionSource`1.TrySetResult(`0)
+# TrySetResult stores the value only where it returns true: Task<TResult>.TrySetResult reserves the completion, stores the result
+# and runs the continuations, and returns false without storing anything where the task was completed already. Read at v10.0.0
+# and v11.0.0 (TaskCompletionSource_T.cs, Future.cs and Task_T.cs).
+M:System.Threading.Tasks.TaskCompletionSource`1.TrySetResult(`0);borrowswhen=false
 M:System.Threading.Tasks.TaskCompletionSource`1.SetException(System.Exception)
 M:System.Threading.Tasks.TaskCompletionSource`1.SetException(System.Collections.Generic.IEnumerable{System.Exception})
 M:System.Threading.Tasks.TaskCompletionSource`1.TrySetException(System.Exception)
@@ -623,7 +636,9 @@ P:System.Collections.Generic.Queue`1.Capacity
 M:System.Collections.Generic.Dictionary`2.#ctor;for=TValue
 M:System.Collections.Generic.Dictionary`2.#ctor(System.Int32);for=TValue
 M:System.Collections.Generic.Dictionary`2.Add(`0,`1);for=TValue
-M:System.Collections.Generic.Dictionary`2.TryAdd(`0,`1);for=TValue
+# TryAdd stores the value only where it returns true: TryInsert returns false for a key that is there before it gets to
+# 'entry.value = value'. Read at v10.0.0 and v11.0.0 (Dictionary.cs).
+M:System.Collections.Generic.Dictionary`2.TryAdd(`0,`1);borrowswhen=false;for=TValue
 M:System.Collections.Generic.Dictionary`2.Remove(`0);for=TValue
 M:System.Collections.Generic.Dictionary`2.Remove(`0,`1@);new;for=TValue
 M:System.Collections.Generic.Dictionary`2.TryGetValue(`0,`1@);for=TValue
@@ -658,7 +673,9 @@ M:System.Collections.Generic.Dictionary`2.TryGetAlternateLookup``1(System.Collec
 P:System.Collections.Generic.Dictionary`2.AlternateLookup`1.Dictionary;for=TValue
 P:System.Collections.Generic.Dictionary`2.AlternateLookup`1.Item(`2);for=TValue
 M:System.Collections.Generic.Dictionary`2.AlternateLookup`1.ContainsKey(`2);for=TValue
-M:System.Collections.Generic.Dictionary`2.AlternateLookup`1.TryAdd(`2,`1);for=TValue
+# TryAdd of the lookup: GetValueRefOrAddDefault finds or adds the slot, the alternate comparer's Create included, and only then,
+# for a slot that it added, 'slot = value' and true. Read at v10.0.0 and v11.0.0 (Dictionary.cs).
+M:System.Collections.Generic.Dictionary`2.AlternateLookup`1.TryAdd(`2,`1);borrowswhen=false;for=TValue
 M:System.Collections.Generic.Dictionary`2.AlternateLookup`1.TryGetValue(`2,`1@);for=TValue
 M:System.Collections.Generic.Dictionary`2.AlternateLookup`1.TryGetValue(`2,`0@,`1@);for=TValue
 M:System.Collections.Generic.Dictionary`2.AlternateLookup`1.Remove(`2);for=TValue
@@ -777,7 +794,18 @@ M:System.Runtime.CompilerServices.StrongBox`1.#ctor(`0)
 # nothing is left behind that another read could hand out, so those are marked "new". A peek and an enumerator hand out a copy
 # of what the collection still holds, so they are listed with no marker and get a warning on a stored collection.
 #
-# A write that fails has not taken the value: TryWrite and TryAdd return false, and WriteAsync and Add throw.
+# A write that returns false has not taken the value: TryWrite returns false only before it does anything with the item, and the
+# TryAdd of a blocking collection only where no room came up in time. A write that throws may have taken it, as any member may.
+#
+# Every TryWrite of the framework's channels returns false only where the channel is done writing, or full in the mode Wait,
+# before it does anything with the item. The writers of the five channels are the only ones of the framework; a writer of another
+# library is taken to do what the documentation of TryWrite says, "true if the item was written; otherwise, false if it wasn't
+# written". Read at v10.0.0 (BoundedChannel.cs, RendezvousChannel.cs, AsyncOperation.cs), and the five TryWrite at v10.0.0 and
+# v11.0.0 (with UnboundedChannel.cs, SingleConsumerUnboundedChannel.cs and UnboundedPriorityChannel.cs).
+#
+# A note for a maintainer: TryWrite and WriteAsync can throw after the channel took the item. The callback for dropped items of a
+# bounded or rendezvous channel runs outside the lock and lets its exception through, and a reader that is completed with the item
+# runs its continuation at once where the channel allows synchronous continuations.
 #
 # A sequence that takes each element out as it is enumerated is marked "drains": ChannelReader`1.ReadAllAsync is an iterator
 # around WaitToReadAsync and TryRead, and BlockingCollection`1.GetConsumingEnumerable one around the TryTake of the collection
@@ -813,7 +841,7 @@ P:System.Threading.Channels.ChannelReader`1.CanCount
 P:System.Threading.Channels.ChannelReader`1.CanPeek
 
 # System.Threading.Channels.ChannelWriter`1
-M:System.Threading.Channels.ChannelWriter`1.TryWrite(`0)
+M:System.Threading.Channels.ChannelWriter`1.TryWrite(`0);borrowswhen=false
 M:System.Threading.Channels.ChannelWriter`1.WriteAsync(`0,System.Threading.CancellationToken)
 M:System.Threading.Channels.ChannelWriter`1.WaitToWriteAsync(System.Threading.CancellationToken)
 M:System.Threading.Channels.ChannelWriter`1.TryComplete(System.Exception)
@@ -859,7 +887,9 @@ M:System.Collections.Concurrent.ConcurrentDictionary`2.#ctor;for=TValue
 M:System.Collections.Concurrent.ConcurrentDictionary`2.#ctor(System.Int32,System.Int32);for=TValue
 M:System.Collections.Concurrent.ConcurrentDictionary`2.#ctor(System.Collections.Generic.IEqualityComparer{`0});for=TValue
 M:System.Collections.Concurrent.ConcurrentDictionary`2.#ctor(System.Int32,System.Int32,System.Collections.Generic.IEqualityComparer{`0});for=TValue
-M:System.Collections.Concurrent.ConcurrentDictionary`2.TryAdd(`0,`1);for=TValue
+# TryAdd and the lookup's TryAdd go through TryAddInternal, or its twin for an alternate key, where a key that is there returns
+# false with nothing stored. Read at v10.0.0 and v11.0.0 (ConcurrentDictionary.cs).
+M:System.Collections.Concurrent.ConcurrentDictionary`2.TryAdd(`0,`1);borrowswhen=false;for=TValue
 M:System.Collections.Concurrent.ConcurrentDictionary`2.TryRemove(`0,`1@);new;for=TValue
 M:System.Collections.Concurrent.ConcurrentDictionary`2.TryGetValue(`0,`1@);for=TValue
 M:System.Collections.Concurrent.ConcurrentDictionary`2.GetOrAdd(`0,`1);for=TValue
@@ -876,7 +906,7 @@ M:System.Collections.Concurrent.ConcurrentDictionary`2.TryGetAlternateLookup``1(
 P:System.Collections.Concurrent.ConcurrentDictionary`2.AlternateLookup`1.Dictionary;for=TValue
 P:System.Collections.Concurrent.ConcurrentDictionary`2.AlternateLookup`1.Item(`2);for=TValue
 M:System.Collections.Concurrent.ConcurrentDictionary`2.AlternateLookup`1.ContainsKey(`2);for=TValue
-M:System.Collections.Concurrent.ConcurrentDictionary`2.AlternateLookup`1.TryAdd(`2,`1);for=TValue
+M:System.Collections.Concurrent.ConcurrentDictionary`2.AlternateLookup`1.TryAdd(`2,`1);borrowswhen=false;for=TValue
 M:System.Collections.Concurrent.ConcurrentDictionary`2.AlternateLookup`1.TryGetValue(`2,`1@);for=TValue
 M:System.Collections.Concurrent.ConcurrentDictionary`2.AlternateLookup`1.TryGetValue(`2,`0@,`1@);for=TValue
 M:System.Collections.Concurrent.ConcurrentDictionary`2.AlternateLookup`1.TryRemove(`2,`1@);new;for=TValue
@@ -888,10 +918,12 @@ M:System.Collections.Concurrent.BlockingCollection`1.#ctor
 M:System.Collections.Concurrent.BlockingCollection`1.#ctor(System.Int32)
 M:System.Collections.Concurrent.BlockingCollection`1.Add(`0)
 M:System.Collections.Concurrent.BlockingCollection`1.Add(`0,System.Threading.CancellationToken)
-M:System.Collections.Concurrent.BlockingCollection`1.TryAdd(`0)
-M:System.Collections.Concurrent.BlockingCollection`1.TryAdd(`0,System.TimeSpan)
-M:System.Collections.Concurrent.BlockingCollection`1.TryAdd(`0,System.Int32)
-M:System.Collections.Concurrent.BlockingCollection`1.TryAdd(`0,System.Int32,System.Threading.CancellationToken)
+# The four TryAdd go through TryAddWithNoTimeValidation, which returns false where no room came up in time, before the item goes
+# into the queue. Read at v10.0.0 and v11.0.0 (BlockingCollection.cs).
+M:System.Collections.Concurrent.BlockingCollection`1.TryAdd(`0);borrowswhen=false
+M:System.Collections.Concurrent.BlockingCollection`1.TryAdd(`0,System.TimeSpan);borrowswhen=false
+M:System.Collections.Concurrent.BlockingCollection`1.TryAdd(`0,System.Int32);borrowswhen=false
+M:System.Collections.Concurrent.BlockingCollection`1.TryAdd(`0,System.Int32,System.Threading.CancellationToken);borrowswhen=false
 M:System.Collections.Concurrent.BlockingCollection`1.Take;new
 M:System.Collections.Concurrent.BlockingCollection`1.Take(System.Threading.CancellationToken);new
 M:System.Collections.Concurrent.BlockingCollection`1.GetConsumingEnumerable;drains
@@ -1099,9 +1131,9 @@ M:System.Threading.Tasks.Task.WaitAny(System.Threading.Tasks.Task[],System.Int32
 # vouches for their members.
 #
 # FrameworkScanTests reads the IL of every assembly of Microsoft.NETCore.App, Microsoft.AspNetCore.App and
-# Microsoft.WindowsDesktop.App, of .NET 10 and .NET 11. It finds every call of MemberwiseClone on "this" or on the argument of a
-# static member of the class, and fails for a class that another assembly can derive from and that has no line here, neither of its
-# own nor of a base class. It follows the calls from the members of every class whose chain reaches one of these to the members that
+# Microsoft.WindowsDesktop.App, of .NET 10 and .NET 11, and of the .NET Framework 4.8.1 where it is installed. It finds every call
+# of MemberwiseClone on "this" or on the argument of a static member of the class, and fails for a class that another assembly can
+# derive from and that has no line here, neither of its own nor of a base class. It follows the calls from the members of every class whose chain reaches one of these to the members that
 # clone, and fails for a public or protected member that clones its object or one that it is given and has no line. And it follows
 # where the object of each member can reach other code, and fails for a member that has neither a line nor an entry in the evidence
 # that says why it hands nothing on. What clones in each class is in NonCopyableSymbols.evidence.md, under Classes That Clone Themselves;
@@ -1158,6 +1190,25 @@ M:System.Windows.Ink.Stroke.GetEraseResult(System.Collections.Generic.IEnumerabl
 M:System.Windows.Ink.Stroke.GetEraseResult(System.Collections.Generic.IEnumerable{System.Windows.Point},System.Windows.Ink.StylusShape);clones
 M:System.Windows.Ink.Stroke.GetEraseResult(System.Windows.Rect);clones
 P:System.Drawing.Printing.PrinterSettings.DefaultPageSettings;clones
+#
+# The classes of the .NET Framework 4.8.1 that clone themselves and that .NET does not have, with their public Clone methods, which
+# call MemberwiseClone on "this": the MessagePropertyFilter of System.Messaging, Rule, RuleSet and three rule actions of
+# System.Workflow.Activities, and VisualBasicImportReference of System.Activities, whose Clone is internal. The scan of the .NET
+# Framework finds them as it finds the classes above. Their members were not analyzed further, so their lines say "clones" and not
+# "clones=complete": every member of them that no line names counts as one that can clone.
+T:System.Messaging.MessagePropertyFilter;clones  # netfx
+T:System.Workflow.Activities.Rules.Rule;clones  # netfx
+T:System.Workflow.Activities.Rules.RuleSet;clones  # netfx
+T:System.Workflow.Activities.Rules.RuleHaltAction;clones  # netfx
+T:System.Workflow.Activities.Rules.RuleStatementAction;clones  # netfx
+T:System.Workflow.Activities.Rules.RuleUpdateAction;clones  # netfx
+T:Microsoft.VisualBasic.Activities.VisualBasicImportReference;clones  # netfx
+M:System.Messaging.MessagePropertyFilter.Clone;clones  # netfx
+M:System.Workflow.Activities.Rules.Rule.Clone;clones  # netfx
+M:System.Workflow.Activities.Rules.RuleSet.Clone;clones  # netfx
+M:System.Workflow.Activities.Rules.RuleHaltAction.Clone;clones  # netfx
+M:System.Workflow.Activities.Rules.RuleStatementAction.Clone;clones  # netfx
+M:System.Workflow.Activities.Rules.RuleUpdateAction.Clone;clones  # netfx
 #
 # A member of such a class, with a line and no marker, whose result the object converts to: it never hands back the object itself, so a
 # call of it on an object with a binding gets no warning. FrameworkScanTests checks that no path of its IL returns the object. The line

@@ -7,7 +7,7 @@ namespace Singulink.CodeAnalysis.Tests;
 /// a filter, a <c>using</c>, a <c>lock</c> or a <c>foreach</c> of the member around it.
 /// </summary>
 /// <remarks>
-/// <para>Docs: articles/concepts/last-use.md and articles/guides/moving-a-value.md.</para>
+/// <para>Docs: articles/rules/last-use.md and articles/rules/moved-from.md.</para>
 /// <para>
 /// The paths of a lambda or a local function end at the function. Its handlers are those inside it: what is around its declaration
 /// is not around its body, which runs when the function is called. An earlier version walked out of the function's graph into the
@@ -48,7 +48,7 @@ public class NestedFunctionTests
 
                 await Verify.AnalyzerAsync(
                     GetSource(host, kind, open, close, isInFilter),
-                    Verify.CopyOfStoredValue(1, "'Host.Take(Guard)' receives", "Guard"),
+                    Verify.UsedAfterHandOff(2, "again", "Guard", "'Host.Take(Guard)' received its value", 1),
                     Verify.CopyByAssignment(0, "Guard"));
             }
         }
@@ -82,7 +82,7 @@ public class NestedFunctionTests
 
                 Guard again = rwLock.Enter();
                 Take({|#1:again|});
-                again.Dispose();
+                {|#2:again|}.Dispose();
 
                 Mover mover = ([MovedFrom] ref Guard from, ref Guard to) =>
                 {
@@ -145,7 +145,7 @@ public class NestedFunctionTests
                     {{function}}
                     {{close}}
 
-                    Guard copy {|#0:= _held|};
+                    Guard copy = {|#0:_held|};
                     copy.Dispose();
                     {{(isIterator ? "yield return 1;" : string.Empty)}}
                 }
@@ -195,7 +195,7 @@ public class NestedFunctionTests
                         });
                     }
 
-                    Guard copy {|#0:= _held|};
+                    Guard copy = {|#0:_held|};
                     copy.Dispose();
                 }
             }
@@ -245,7 +245,7 @@ public class NestedFunctionTests
                         Sink.Use(3);
                     }
 
-                    Guard copy {|#2:= _held|};
+                    Guard copy = {|#2:_held|};
                     copy.Dispose();
                 }
             }
@@ -265,7 +265,7 @@ public class NestedFunctionTests
                         _take = guard => { Guard mine = guard; mine.Dispose(); return 1; };
                     }
 
-                    Guard copy {|#3:= _held|};
+                    Guard copy = {|#3:_held|};
                     copy.Dispose();
                 }
             }
@@ -295,7 +295,7 @@ public class NestedFunctionTests
                         };
                     }
 
-                    Guard copy {|#4:= _held|};
+                    Guard copy = {|#4:_held|};
                     copy.Dispose();
                 }
             }

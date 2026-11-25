@@ -16,7 +16,7 @@ namespace Singulink.CodeAnalysis.Tests;
 /// table here names as taking no container.
 /// </summary>
 /// <remarks>
-/// <para>Docs: articles/concepts/keeping-containers.md.</para>
+/// <para>Docs: articles/rules/keeping-containers.md.</para>
 /// <para>
 /// A use of a container parameter is allowed by its kind of operation, and a kind can run code of the project with the container
 /// where nothing but what the compiler bound shows it. The passes before this test each found members that nobody had thought

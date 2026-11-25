@@ -345,7 +345,7 @@ public class CloningUseTests
                         object boxed = {|#4:list|};
                         string text = $"{{|#5:tagged|}}";
                         lock (tagged) { }
-                        foreach ({|#6:CultureInfo|} culture in list) { }
+                        foreach (CultureInfo culture in {|#6:list|}) { }
                         if (tagged is {|#7:ICloneable cloneable|}) { }
                         {|#8:Constrained(MakeTagged())|};
                         Func<CultureInfo> make = {|#9:MakeTagged|};

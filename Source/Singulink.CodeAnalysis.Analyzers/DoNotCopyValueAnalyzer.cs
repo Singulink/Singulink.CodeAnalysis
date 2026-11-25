@@ -42,7 +42,7 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
     private const string MonitorEnterId = "M:System.Threading.Monitor.Enter(System.Object,System.Boolean@)";
 
     /// <inheritdoc/>
-    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => Rules.All;
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => Rules.Descriptors;
 
     /// <inheritdoc/>
     public override void Initialize(AnalysisContext context)
@@ -63,53 +63,41 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
             var moves = new MoveTrust();
             bool allowsImplicitMoves = AllowsImplicitMoves(context.Options);
 
-            context.RegisterCompilationEndAction(moves.Report);
+            // Every diagnostic of the compilation is made here, which chooses its severity.
+            var severities = new Severities(context.Compilation, context.Options);
+
+            context.RegisterAdditionalFileAction(context => AnalyzeListFile(context, severities));
+            context.RegisterCompilationEndAction(context => moves.Report(context, severities));
 
             // The assemblies whose 'trusted' line answers the warning for a base class: filled by the check of the classes, and read at
             // the end of the compilation by the check of the 'trusted' lines.
             var trustedForBase = new ConcurrentDictionary<IAssemblySymbol, bool>(SymbolEqualityComparer.Default);
 
-            context.RegisterCompilationEndAction(context => AnalyzeUncheckedReferences(context, list, types, listFiles, trustedForBase));
-            context.RegisterSymbolAction(context => AnalyzeCloningBases(context, types, trustedForBase), SymbolKind.NamedType);
-            context.RegisterSyntaxNodeAction(context => AnalyzeCloningBinding(context, types), SyntaxKind.ClassDeclaration);
+            context.RegisterCompilationEndAction(context => AnalyzeUncheckedReferences(context, severities, list, types, listFiles, trustedForBase));
+            context.RegisterSymbolAction(context => AnalyzeCloningBases(context, severities, types, trustedForBase), SymbolKind.NamedType);
+            context.RegisterSyntaxNodeAction(context => AnalyzeCloningBinding(context, severities, types), SyntaxKind.ClassDeclaration);
 
             context.RegisterOperationBlockAction(context => {
                 // In the body of a member marked [RequiresCopyable] the marked type parameters count as copyable.
-                var walker = new NonCopyableWalker(
-                    context, NonCopyableTypes.IsMarkedRequiresCopyable(context.OwningSymbol) ? typesInCopyingMember : types, moves, allowsImplicitMoves);
-
-                // Every recursion of the analyzer stops with this exception before the stack runs out. The rest of the member is then not
-                // checked, which is reported at the member, and the next member is checked as usual. No other exception is caught.
-                try
-                {
-                    walker.CheckBaseConstructorCalledWithNothingWritten();
-
-                    foreach (var operation in context.OperationBlocks)
-                        walker.Visit(operation);
-
-                    walker.Complete();
-                }
-                catch (InsufficientExecutionStackException)
-                {
-                    context.ReportDiagnostic(Diagnostic.Create(Rules.NestedTooDeeply, GetMemberLocation(context), Display(context.OwningSymbol)));
-                }
+                var typesOfMember = NonCopyableTypes.IsMarkedRequiresCopyable(context.OwningSymbol) ? typesInCopyingMember : types;
+                AnalyzeOperationBlock(context, severities, typesOfMember, moves, allowsImplicitMoves);
             });
 
-            context.RegisterSymbolAction(context => AnalyzeField(context, types), SymbolKind.Field);
-            context.RegisterSymbolAction(context => AnalyzeProperty(context, types, typesInCopyingMember), SymbolKind.Property);
-            context.RegisterSymbolAction(context => AnalyzeNamedType(context, types, typesInCopyingMember, marks), SymbolKind.NamedType);
-            context.RegisterSymbolAction(AnalyzeForeignNonCopyableMark, SymbolKind.Method);
-            context.RegisterSymbolAction(AnalyzeRequiresCopyableTarget, SymbolKind.Method);
+            context.RegisterSymbolAction(context => AnalyzeField(context, severities, types), SymbolKind.Field);
+            context.RegisterSymbolAction(context => AnalyzeProperty(context, severities, types, typesInCopyingMember), SymbolKind.Property);
+            context.RegisterSymbolAction(context => AnalyzeNamedType(context, severities, types, typesInCopyingMember, marks), SymbolKind.NamedType);
+            context.RegisterSymbolAction(context => AnalyzeForeignNonCopyableMark(context, severities), SymbolKind.Method);
+            context.RegisterSymbolAction(context => AnalyzeRequiresCopyableTarget(context, severities), SymbolKind.Method);
 
             // An attribute of a referenced assembly that is conditional is rare: only then is every use of an attribute looked at.
             if (FindConditionalMarkers(context.Compilation) is { Count: > 0 } conditionalMarkers)
-                context.RegisterSyntaxNodeAction(context => AnalyzeConditionalMarkerUse(context, conditionalMarkers), SyntaxKind.Attribute);
+                context.RegisterSyntaxNodeAction(context => AnalyzeConditionalMarkerUse(context, severities, conditionalMarkers), SyntaxKind.Attribute);
 
-            context.RegisterSymbolAction(context => AnalyzeMovedFromTarget(context, moves), SymbolKind.Method, SymbolKind.Property, SymbolKind.Field, SymbolKind.Event);
-            context.RegisterSymbolAction(AnalyzeNotNullRefTarget, SymbolKind.Method, SymbolKind.Property, SymbolKind.NamedType);
+            context.RegisterSymbolAction(
+                context => AnalyzeMovedFromTarget(context, severities, moves), SymbolKind.Method, SymbolKind.Property, SymbolKind.Field, SymbolKind.Event);
+
+            context.RegisterSymbolAction(context => AnalyzeNotNullRefTarget(context, severities), SymbolKind.Method, SymbolKind.Property, SymbolKind.NamedType);
         });
-
-        context.RegisterAdditionalFileAction(AnalyzeListFile);
     }
 
     /// <summary>
@@ -186,7 +174,7 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
         options.AnalyzerConfigOptionsProvider.GlobalOptions.TryGetValue(property, out string? value) &&
         string.Equals(value.Trim(), expected, StringComparison.OrdinalIgnoreCase);
 
-    private static void AnalyzeListFile(AdditionalFileAnalysisContext context)
+    private static void AnalyzeListFile(AdditionalFileAnalysisContext context, Severities severities)
     {
         if (!IsListFile(context.AdditionalFile) || context.AdditionalFile.GetText(context.CancellationToken) is not { } text)
             return;
@@ -215,6 +203,16 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
 
         foreach (var entry in entries)
         {
+            // An outcome of 'borrowswhen' that the analyzer does not know is left out of a line that is otherwise taken. Its author
+            // learns of it; a project that gets the file from a library has nothing to fix.
+            if (entry.UnknownOutcomes is { } unknown &&
+                !IsFileOfAPackage(context.AdditionalFile, context.Options) &&
+                SafeMemberList.GetErrorInCompilation(entry, context.Compilation) is null)
+            {
+                foreach (string outcome in unknown)
+                    Report(Rules.SafeListUnknownOutcome, entry.Line, outcome);
+            }
+
             if (SafeMemberList.GetErrorInCompilation(entry, context.Compilation) is { } reason)
                 errors.Add(new SafeListError(entry.Line, reason));
             else if (entry.Marker is SafeListMarker.NonCopyable && DocumentationCommentId.GetSymbolsForDeclarationId(entry.Id, context.Compilation).IsEmpty)
@@ -231,15 +229,19 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
                 Report(Rules.SafeListContradictsClones, entry.Line, entry.Id);
             else if (SafeMemberList.FindWideningOfBuiltIn(entry) is { } widening && !IsFileOfAPackage(context.AdditionalFile, context.Options))
                 Report(Rules.SafeListWidensBuiltIn, entry.Line, entry.Id, widening.Added, widening.BuiltIn);
+            else if (SafeMemberList.FindOutcomesBeyondBuiltIn(entry) is { } outcomes && !IsFileOfAPackage(context.AdditionalFile, context.Options))
+                Report(Rules.SafeListClaimsMoreOutcomesThanBuiltIn, entry.Line, entry.Id, outcomes);
+            else if (SafeMemberList.FindBorrowsBeyondBuiltIn(entry, context.Compilation) is { } builtInClaim && !IsFileOfAPackage(context.AdditionalFile, context.Options))
+                Report(Rules.SafeListBorrowsBeyondBuiltIn, entry.Line, entry.Id, builtInClaim);
         }
 
         foreach (var error in errors)
             Report(Rules.SafeListLine, error.Line, error.Reason);
 
-        void Report(DiagnosticDescriptor rule, TextLine line, params object[] arguments)
+        void Report(Rule rule, TextLine line, params object[] arguments)
         {
             var location = Location.Create(context.AdditionalFile.Path, line.Span, text.Lines.GetLinePositionSpan(line.Span));
-            context.ReportDiagnostic(Diagnostic.Create(rule, location, arguments));
+            context.ReportDiagnostic(severities.Create(rule, location, arguments));
         }
     }
 
@@ -347,14 +349,14 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
             return (definition, parameter.Ordinal < definition.Parameters.Length ? definition.Parameters[parameter.Ordinal] : parameter);
         }
 
-        public void Report(CompilationAnalysisContext context)
+        public void Report(CompilationAnalysisContext context, Severities severities)
         {
             // A guard against a kind of member that the check of the paths does not run for: its [MovedFrom] parameter would be
             // clean by omission, as that of a primary constructor was.
             foreach (var (member, declared) in _declared.Keys)
             {
                 if (!_checked.ContainsKey((member, declared)) && declared.Locations.FirstOrDefault(static location => location.IsInSource) is { } location)
-                    context.ReportDiagnostic(Diagnostic.Create(Rules.MovedFromPathsNotChecked, location, declared.Name, member.ToDisplayString(SymbolDisplayFormat.CSharpShortErrorMessageFormat)));
+                    context.ReportDiagnostic(severities.Create(Rules.MovedFromPathsNotChecked, location, declared.Name, member.ToDisplayString(SymbolDisplayFormat.CSharpShortErrorMessageFormat)));
             }
 
             foreach (var passed in _passedSlots)
@@ -364,7 +366,7 @@ public sealed partial class DoNotCopyValueAnalyzer : DiagnosticAnalyzer
 
                 foreach (var place in places)
                 {
-                    context.ReportDiagnostic(Diagnostic.Create(
+                    context.ReportDiagnostic(severities.Create(
                         Rules.ContainerMovedFromSlotParameterOfMethodGroup, place.Key, place.Value.Type, place.Value.Parameter, passed.Value));
                 }
             }

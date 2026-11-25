@@ -21,8 +21,9 @@
     The marker of an assembly that was built with the analyzer, with the version of the analyzers as its value. Marks that promise a
     checked body, such as [NonCopyable] on a type parameter, are trusted only from an assembly that has it, and a member of an assembly
     without it needs a list entry where it gets at a non-copyable value other than by value. A build that does not run analyzers does
-    not get it. A project with GenerateAssemblyInfo false gets nothing from this item, and writes the attribute itself with the version
-    of the analyzers that it is built with, such as:
+    not get it. NonCopyableErrorsAsWarnings plays no part: it only changes how reports appear and how they are suppressed, and the
+    project gets every report all the same. A project with GenerateAssemblyInfo false gets nothing from this item, and writes the
+    attribute itself with the version of the analyzers that it is built with, such as:
     [assembly: System.Reflection.AssemblyMetadata("Singulink.CodeAnalysis.Analyzed", "0.7.5")]
     The version is the package's own: pack writes this file with it in place of the value below (see the project file).
   -->
@@ -48,22 +49,24 @@
   </Target>
 
   <!--
-    The built-in non-copyable types are on in a project that references one of the two packages itself, and off in one that only gets the
-    analyzer through a library: a library that marks its guards brings the analyzer to everyone who uses it, and must not bring findings
-    about their own GCHandle code with it. A project that sets NonCopyableIncludeBuiltInTypes keeps its value. The items of the project
-    are not known when properties are evaluated, so this runs as a target, before the compiler-visible properties are written for the
-    compiler; it runs in a design-time build as well.
+    Whether the project references one of the two packages itself, or only gets the analyzer through a library, is worked out here into
+    _NonCopyableReferencesPackage, always and whatever else the project sets. Two things depend on it. The built-in non-copyable types
+    are on in a project that references a package, and off in one that does not: a library that marks its guards brings the analyzer to
+    everyone who uses it, and must not bring findings about their own GCHandle code with it. A project that sets
+    NonCopyableIncludeBuiltInTypes keeps its value. And SCA1025, an assembly that was not built with the analyzer, is a warning in a
+    project that references a package and a message in one that does not, which did not choose to check what it references. The items
+    of the project are not known when properties are evaluated, so this runs as a target, before the compiler-visible properties are
+    written for the compiler; it runs in a design-time build as well.
   -->
-  <Target Name="_NonCopyableSetIncludeBuiltInTypes"
-          BeforeTargets="GenerateMSBuildEditorConfigFileCore"
-          Condition="'$(NonCopyableIncludeBuiltInTypes)' == ''">
+  <Target Name="_NonCopyableFindPackageReference" BeforeTargets="GenerateMSBuildEditorConfigFileCore">
     <ItemGroup>
       <_NonCopyablePackageReference Include="@(PackageReference)" Condition="'%(Identity)' == 'Singulink.CodeAnalysis' or '%(Identity)' == 'Singulink.CodeAnalysis.Analyzers'" />
     </ItemGroup>
 
     <PropertyGroup>
-      <NonCopyableIncludeBuiltInTypes Condition="'@(_NonCopyablePackageReference)' != ''">true</NonCopyableIncludeBuiltInTypes>
-      <NonCopyableIncludeBuiltInTypes Condition="'@(_NonCopyablePackageReference)' == ''">false</NonCopyableIncludeBuiltInTypes>
+      <_NonCopyableReferencesPackage Condition="'@(_NonCopyablePackageReference)' != ''">true</_NonCopyableReferencesPackage>
+      <_NonCopyableReferencesPackage Condition="'@(_NonCopyablePackageReference)' == ''">false</_NonCopyableReferencesPackage>
+      <NonCopyableIncludeBuiltInTypes Condition="'$(NonCopyableIncludeBuiltInTypes)' == ''">$(_NonCopyableReferencesPackage)</NonCopyableIncludeBuiltInTypes>
     </PropertyGroup>
 
     <ItemGroup>

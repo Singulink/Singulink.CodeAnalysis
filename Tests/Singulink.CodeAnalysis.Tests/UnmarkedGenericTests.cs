@@ -145,9 +145,9 @@ public class UnmarkedGenericTests
 
                 if (CreateBag() is {|#5:(var matched, 0)|}) { }
 
-                using (var {|#6:used = CreateBag()|}) { }
+                using (var used = {|#6:CreateBag()|}) { }
 
-                using var {|#7:declared = CreateBag()|};
+                using var declared = {|#7:CreateBag()|};
             }
         }
 
@@ -300,7 +300,7 @@ public class UnmarkedGenericTests
                 Action<Guard> consume = guard => guard.Dispose();
                 consume(rwLock.Enter());
                 consume({|#1:g|});
-                consume(g);
+                consume({|#2:g|});
                 var created = new Func<Guard>(rwLock.Enter);
             }
         }
@@ -310,7 +310,7 @@ public class UnmarkedGenericTests
         {{Sources.Guard}}
         """,
         Verify.UnlistedMember(0, "Bag<T>.Peek()", "Guard", "T", "M:Bag`1.Peek"),
-        Verify.CopyOfStoredValue(1, "'Action<Guard>.Invoke(Guard)' receives", "Guard"));
+        Verify.UsedAfterHandOff(2, "g", "Guard", "'Action<Guard>.Invoke(Guard)' received its value", 1));
 
     [TestMethod]
     public Task ContainerBoundToUnmarkedTypeParameter_IsTheOpaqueCase() => Verify.AnalyzerAsync(

@@ -32,11 +32,13 @@ public sealed partial class DoNotCopyValueAnalyzer
     /// </para>
     /// </remarks>
     /// <param name="context">The context of the class.</param>
+    /// <param name="severities">Creates the diagnostics of the compilation.</param>
     /// <param name="types">The classifier of the compilation.</param>
     /// <param name="trustedForBase">Takes each assembly whose 'trusted' line answers the warning for a base class of which nothing else
     /// says whether it clones itself: the line has an effect there, which the check of the 'trusted' lines reads at the end of the
     /// compilation.</param>
-    private static void AnalyzeCloningBases(SymbolAnalysisContext context, NonCopyableTypes types, ConcurrentDictionary<IAssemblySymbol, bool> trustedForBase)
+    private static void AnalyzeCloningBases(
+        SymbolAnalysisContext context, Severities severities, NonCopyableTypes types, ConcurrentDictionary<IAssemblySymbol, bool> trustedForBase)
     {
         var type = (INamedTypeSymbol)context.Symbol;
 
@@ -67,14 +69,14 @@ public sealed partial class DoNotCopyValueAnalyzer
                 var rule = NonCopyableTypes.MentionsTypeParameter(field.Type) ? Rules.MemberwiseCloneOfTypeParameterThroughListedBase : Rules.MemberwiseCloneThroughListedBase;
                 object?[] arguments = [type, cloning, DisplayField(field), field.Type];
                 WithoutNullableAnnotations(arguments);
-                context.ReportDiagnostic(Diagnostic.Create(rule, GetFieldLocation(field), arguments));
+                context.ReportDiagnostic(severities.Create(rule, GetFieldLocation(field), arguments));
             }
             else if (unknown is not null)
             {
                 var definition = unknown.OriginalDefinition;
                 object?[] arguments = [type, unknown, definition.ContainingAssembly.Name, DisplayField(field), field.Type, definition.GetDocumentationCommentId()];
                 WithoutNullableAnnotations(arguments);
-                context.ReportDiagnostic(Diagnostic.Create(Rules.FieldBehindUnknownBase, GetFieldLocation(field), arguments));
+                context.ReportDiagnostic(severities.Create(Rules.FieldBehindUnknownBase, GetFieldLocation(field), arguments));
             }
         }
 
@@ -91,7 +93,7 @@ public sealed partial class DoNotCopyValueAnalyzer
     /// a class that the symbol list marks 'clones' clones, on the entry of the base list that names it: in a partial class, the part
     /// whose first entry is the base class.
     /// </summary>
-    private static void AnalyzeCloningBinding(SyntaxNodeAnalysisContext context, NonCopyableTypes types)
+    private static void AnalyzeCloningBinding(SyntaxNodeAnalysisContext context, Severities severities, NonCopyableTypes types)
     {
         var declaration = (ClassDeclarationSyntax)context.Node;
 
@@ -106,7 +108,7 @@ public sealed partial class DoNotCopyValueAnalyzer
 
         object?[] arguments = [binding.Type, binding.Bound, binding.Cloning];
         WithoutNullableAnnotations(arguments);
-        context.ReportDiagnostic(Diagnostic.Create(Rules.CloningBinding, first.Type.GetLocation(), arguments));
+        context.ReportDiagnostic(severities.Create(Rules.CloningBinding, first.Type.GetLocation(), arguments));
     }
 
     // A field as a message names it: "field 'Guard'" by the property that it backs, and "parameter 'g'" for the field that holds a

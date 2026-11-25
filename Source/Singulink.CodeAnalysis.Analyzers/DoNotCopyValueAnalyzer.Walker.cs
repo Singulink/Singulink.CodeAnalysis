@@ -18,9 +18,29 @@ namespace Singulink.CodeAnalysis.Analyzers;
 /// </content>
 public sealed partial class DoNotCopyValueAnalyzer
 {
-    private sealed partial class NonCopyableWalker(OperationBlockAnalysisContext context, NonCopyableTypes types, MoveTrust moves, bool allowsImplicitMoves)
+    /// <summary>
+    /// Walks the operations of one member, which every rule for values goes through.
+    /// </summary>
+    /// <param name="context">The context of the member.</param>
+    /// <param name="severities">Creates the diagnostics of the compilation.</param>
+    /// <param name="types">The classifier of the compilation.</param>
+    /// <param name="moves">What is known of the methods that take a [MovedFrom] parameter of a container type.</param>
+    /// <param name="allowsImplicitMoves">Whether a variable is moved from at its last use.</param>
+    /// <param name="handOffs">The reads of variables that the walk takes for last uses, though the variable is used again after them,
+    /// by their keys in the flow. A second walk of a member is given them, to find the reports that they made (see
+    /// <see cref="AnalyzeOperationBlock"/>).</param>
+    private sealed partial class NonCopyableWalker(
+        OperationBlockAnalysisContext context,
+        Severities severities,
+        NonCopyableTypes types,
+        MoveTrust moves,
+        bool allowsImplicitMoves,
+        HashSet<(TextSpan Span, int Kind)>? handOffs = null)
         : OperationWalker
     {
+        // What the walk reports, which the analysis of the member hands on once the walk is done.
+        private readonly List<Diagnostic> _diagnostics = [];
+
         // What uses an operation has judged its value: the visit of the operation itself does not report it again. An operation is
         // handled from where a visit marks it to the end of that visit.
         private readonly HashSet<IOperation> _handledOperations = [];
@@ -32,9 +52,29 @@ public sealed partial class DoNotCopyValueAnalyzer
         private readonly List<IOperation> _handledInOrder = [];
 
         /// <summary>
+        /// Gets what the walk has reported.
+        /// </summary>
+        public IReadOnlyList<Diagnostic> Diagnostics => _diagnostics;
+
+        /// <summary>
+        /// Checks the member: walks its blocks, and reports what can only be known once every operation has been visited.
+        /// </summary>
+        public void Walk()
+        {
+            CheckBaseConstructorCalledWithNothingWritten();
+
+            foreach (var operation in context.OperationBlocks)
+                Visit(operation);
+
+            Complete();
+        }
+
+        private void ReportDiagnostic(Diagnostic diagnostic) => _diagnostics.Add(diagnostic);
+
+        /// <summary>
         /// Reports what can only be known once every operation of the member has been visited.
         /// </summary>
-        public void Complete()
+        private void Complete()
         {
             // A method without a body, such as an abstract one, still has blocks if its parameters have default values or attributes.
             if (context.OwningSymbol is IMethodSymbol { IsAbstract: false, IsExtern: false } method &&
@@ -277,7 +317,7 @@ public sealed partial class DoNotCopyValueAnalyzer
 
             // The parameters of a lambda and of a local function have no symbol action.
             foreach (var parameter in operation.Symbol.Parameters)
-                ReportNotNullRef(parameter, operation.Symbol, context.ReportDiagnostic, context.CancellationToken);
+                ReportNotNullRef(severities, parameter, operation.Symbol, ReportDiagnostic, context.CancellationToken);
         }
 
         public override void VisitAnonymousObjectCreation(IAnonymousObjectCreationOperation operation)
@@ -1156,11 +1196,11 @@ public sealed partial class DoNotCopyValueAnalyzer
 
             // The parameters of a lambda and of a local function have no symbol action.
             foreach (var parameter in operation.Symbol.Parameters)
-                ReportNotNullRef(parameter, operation.Symbol, context.ReportDiagnostic, context.CancellationToken);
+                ReportNotNullRef(severities, parameter, operation.Symbol, ReportDiagnostic, context.CancellationToken);
 
             // The type parameters of a local function have no symbol action.
             foreach (var typeParameter in operation.Symbol.TypeParameters)
-                ReportForeignNonCopyableMarks(typeParameter, context.Compilation.Assembly, context.ReportDiagnostic, context.CancellationToken);
+                ReportForeignNonCopyableMarks(severities, typeParameter, context.Compilation.Assembly, ReportDiagnostic, context.CancellationToken);
         }
 
         public override void VisitLocalReference(ILocalReferenceOperation operation)
@@ -1514,8 +1554,9 @@ public sealed partial class DoNotCopyValueAnalyzer
 
         public override void VisitSpread(ISpreadOperation operation)
         {
-            // A user-defined conversion of each element, with nothing written for it.
-            CheckMemberUse(operation.Syntax, operation.ElementConversion.MethodSymbol);
+            // What the spread does with each element is reported at what it enumerates, which an unsafe(...) expression can hold, and
+            // the '..' cannot. A user-defined conversion of each element, with nothing written for it.
+            CheckMemberUse(operation.Operand.Syntax, operation.ElementConversion.MethodSymbol);
 
             // Any other conversion of each element to the element type of the new collection, with no node for it either. A stored value
             // of a non-copyable type is reported below as a copy, which its box is.
@@ -1533,7 +1574,7 @@ public sealed partial class DoNotCopyValueAnalyzer
             {
                 Report(
                     Rules.ReadFromStoredContainer,
-                    operation.Syntax,
+                    operation.Operand.Syntax,
                     "'..'",
                     operation.ElementType,
                     GetNotOwnHint(operation.Operand),
@@ -1688,8 +1729,9 @@ public sealed partial class DoNotCopyValueAnalyzer
                 var localRefKind = symbol.RefKind;
                 var sourceRefKind = Acquire(initializer.Value);
 
+                // At the value, which an unsafe(...) expression can hold, and the declaration cannot.
                 if (types.IsNonCopyableType(symbol.Type) && !CanAssign(sourceRefKind, localRefKind))
-                    Report(Rules.CopyByAssignment, initializer.Syntax, symbol.Type, GetHandlerHint(initializer.Value));
+                    Report(Rules.CopyByAssignment, initializer.Value.Syntax, symbol.Type, GetHandlerHint(initializer.Value));
             }
 
             using var handled = Handle();
@@ -1705,8 +1747,9 @@ public sealed partial class DoNotCopyValueAnalyzer
             var localRefKind = operation.Symbol.RefKind;
             var sourceRefKind = Acquire(initializer?.Value);
 
+            // At the value, which an unsafe(...) expression can hold, and the declaration cannot.
             if (initializer is not null && types.IsNonCopyableType(operation.Symbol.Type) && !CanAssign(sourceRefKind, localRefKind))
-                Report(Rules.CopyByAssignment, initializer.Syntax, operation.Symbol.Type, GetHandlerHint(initializer.Value));
+                Report(Rules.CopyByAssignment, initializer.Value.Syntax, operation.Symbol.Type, GetHandlerHint(initializer.Value));
 
             using var handled = Handle();
             handled.Add(initializer);
@@ -1720,7 +1763,7 @@ public sealed partial class DoNotCopyValueAnalyzer
         /// base class with nothing written. Which constructor that is, is the compiler's choice: the body has the call as an
         /// operation that nothing in the source stands for.
         /// </summary>
-        public void CheckBaseConstructorCalledWithNothingWritten()
+        private void CheckBaseConstructorCalledWithNothingWritten()
         {
             if (context.OwningSymbol is not IMethodSymbol { MethodKind: MethodKind.Constructor, IsStatic: false } constructor ||
                 !NonCopyableTypes.IsWrittenWithBody(constructor) ||
@@ -1735,7 +1778,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                 if (operation is IInvocationOperation { IsImplicit: true, TargetMethod: { MethodKind: MethodKind.Constructor } called } &&
                     types.GetUse(called) is { Kind: MemberUseKind.RequiresCopyable } use)
                 {
-                    context.ReportDiagnostic(CreateDiagnostic(constructor, Rules.RequiresCopyableMember, Display(use.Definition!), use.TypeArgument, use.TypeParameter!.Name));
+                    ReportDiagnostic(CreateDiagnostic(severities, constructor, Rules.RequiresCopyableMember, Display(use.Definition!), use.TypeArgument, use.TypeParameter!.Name));
                 }
             }
         }
@@ -1925,12 +1968,12 @@ public sealed partial class DoNotCopyValueAnalyzer
             return context.OwningSymbol as IMethodSymbol;
         }
 
-        private void Report(DiagnosticDescriptor rule, SyntaxNode syntax, params object?[] arguments) => Report(rule, syntax.GetLocation(), arguments);
+        private void Report(Rule rule, SyntaxNode syntax, params object?[] arguments) => Report(rule, syntax.GetLocation(), arguments);
 
-        private void Report(DiagnosticDescriptor rule, Location? location, params object?[] arguments)
+        private void Report(Rule rule, Location? location, params object?[] arguments)
         {
             WithoutNullableAnnotations(arguments);
-            context.ReportDiagnostic(Diagnostic.Create(rule, location, arguments));
+            ReportDiagnostic(severities.Create(rule, location, arguments));
         }
 
         /// <summary>

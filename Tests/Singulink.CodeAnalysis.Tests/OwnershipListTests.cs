@@ -8,7 +8,7 @@ namespace Singulink.CodeAnalysis.Tests;
 /// method on the other side of a call is reported for.
 /// </summary>
 /// <remarks>
-/// Docs: articles/concepts/returning-containers.md.
+/// Docs: articles/rules/returning-containers.md.
 /// </remarks>
 [PrefixTestClass]
 public class OwnershipListTests

@@ -6,7 +6,8 @@ using System.Reflection.PortableExecutable;
 namespace Singulink.CodeAnalysis.Tests;
 
 /// <content>
-/// Scans the IL of the shared frameworks that the tests run on for the classes whose own code clones an object with MemberwiseClone:
+/// Scans the IL of the shared frameworks that the tests run on, and of the .NET Framework 4.8.1 where it is installed, for the classes
+/// whose own code clones an object with MemberwiseClone:
 /// every such class that a class of another assembly can derive from must have a 'clones' line in the built-in list, of its own or of
 /// a base class.
 /// </content>
@@ -28,13 +29,20 @@ public partial class FrameworkScanTests
     // Every call of MemberwiseClone on 'this' of a class, or on the argument of a static member of the class, as Calendar.ReadOnly and
     // CultureInfo.ReadOnly clone theirs, in a class that another assembly can derive from, is covered by a 'clones' line.
     [TestMethod]
-    public void SharedFrameworks_EveryClassThatClonesItselfAndCanBeDerivedFromHasAClonesLine()
+    public void SharedFrameworks_EveryClassThatClonesItselfAndCanBeDerivedFromHasAClonesLine() =>
+        CheckClassesThatCloneThemselves(GetSharedFrameworkAssemblies());
+
+    // The same for the .NET Framework 4.8.1. The line of a class of it that .NET does not have is marked "# netfx".
+    [TestMethod]
+    public async Task NetFramework_EveryClassThatClonesItselfAndCanBeDerivedFromHasAClonesLine() =>
+        CheckClassesThatCloneThemselves(await GetNetFrameworkAssembliesAsync());
+
+    private static void CheckClassesThatCloneThemselves(List<string> assemblies)
     {
-        var frameworks = FindSharedFrameworks();
         var types = new List<ScannedType>();
         var cloning = new Dictionary<ScannedType, List<(string Method, bool IsVisible)>>();
 
-        foreach (string path in frameworks.SelectMany(directory => Directory.GetFiles(directory, "*.dll")).Where(HasMetadata))
+        foreach (string path in assemblies)
             ScanForClones(path, types, cloning);
 
         var byName = types.GroupBy(t => t.FullName, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
@@ -78,7 +86,7 @@ public partial class FrameworkScanTests
             }
         }
 
-        Assert.IsGreaterThan(10000, types.Count, "The scan reads the types of the shared frameworks.");
+        Assert.IsGreaterThan(10000, types.Count, "The scan reads the types of the framework.");
         Assert.IsTrue(cloning.Keys.Any(t => t.FullName is "System.Text.Encoding"), "The scan finds the clone of Encoding.");
         Assert.IsEmpty(missing, "These classes clone themselves, can be derived from in another assembly, and have no 'clones' line of their own or of a base class. Add:\n" + string.Join("\n", missing));
 

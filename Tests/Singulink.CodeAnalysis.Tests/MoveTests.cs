@@ -8,7 +8,7 @@ namespace Singulink.CodeAnalysis.Tests;
 /// Tests of the explicit move: <c>[MovedFrom]</c> and the <c>NonCopyable.Move</c> helper of the attributes package.
 /// </summary>
 /// <remarks>
-/// Docs: articles/guides/moving-a-value.md.
+/// Docs: articles/rules/moved-from.md.
 /// </remarks>
 [PrefixTestClass]
 public class MoveTests
@@ -51,7 +51,7 @@ public class MoveTests
 
                 // Without the move a read is a copy, unless it is the last use of the variable.
                 _guard = {|#0:guard|};
-                Consume(guard);
+                Consume({|#1:guard|});
             }
         }
 
@@ -62,7 +62,7 @@ public class MoveTests
 
         {{Sources.Guard}}
         """,
-        Verify.CopyByAssignment(0, "Guard"));
+        Verify.UsedAfterHandOff(1, "guard", "Guard", "its value was assigned", 0));
 
     [TestMethod]
     public Task Move_CannotTakeFromAUsingVariableOrAReadOnlyField() => Verify.AnalyzerAsync(
@@ -121,7 +121,7 @@ public class MoveTests
             // Without the attribute the same body copies.
             public static T Copy<[NonCopyable] T>(ref T value)
             {
-                T moved {|#0:= value|};
+                T moved = {|#0:value|};
                 value = default!;
                 return moved;
             }
@@ -421,8 +421,8 @@ public class MoveTests
             void M()
             {
                 var guard = new Guard();
-                var copy {|#0:= guard|};
-                var moved = NonCopyable.Move(ref guard);
+                var copy = {|#0:guard|};
+                var moved = NonCopyable.Move(ref {|#1:guard|});
                 var movedByFullName = Singulink.CodeAnalysis.NonCopyable.Move(ref moved);
             }
         }
@@ -435,7 +435,7 @@ public class MoveTests
 
         class Generic<[NonCopyable] T> { }
         """,
-        Verify.CopyByAssignment(0, "Guard"));
+        Verify.UsedAfterHandOff(1, "guard", "Guard", "its value was assigned to \'copy\'", 0));
 
     [TestMethod]
     public Task MovedFrom_PassingOnByReferenceAssignsOnlyThroughOutOrMovedFrom() => Verify.AnalyzerAsync(
@@ -1300,7 +1300,7 @@ public class MoveTests
             static Guard CopiesThroughAnotherReference([MovedFrom] ref Guard a, ref Guard b)
             {
                 Guard moved = a;
-                Guard copy {|#15:= {|#16:b|}|};
+                Guard copy = {|#15:{|#16:b|}|};
                 a = default;
                 copy.Dispose();
                 return moved;
@@ -1689,7 +1689,7 @@ public class MoveTests
             Guard CopiesAField([MovedFrom] ref Guard value)
             {
                 Guard moved = value;
-                Guard copy {|#6:= _other|};
+                Guard copy = {|#6:_other|};
                 value = default;
                 copy.Dispose();
                 return moved;
@@ -1744,7 +1744,7 @@ public class MoveTests
             Guard CopiesAField([MovedFrom] ref Guard value)
             {
                 Guard moved = value;
-                Guard copy {|#9:= {|#13:_other|}|};
+                Guard copy = {|#9:{|#13:_other|}|};
                 value = default;
                 copy.Dispose();
                 return moved;

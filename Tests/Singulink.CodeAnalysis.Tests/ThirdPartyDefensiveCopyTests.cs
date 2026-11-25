@@ -9,7 +9,7 @@ namespace Singulink.CodeAnalysis.Tests;
 /// difference in behaviour (HAM0001) must be reported here as well.
 /// </summary>
 /// <remarks>
-/// <para>Docs: articles/concepts/read-only-references.md.</para>
+/// <para>Docs: articles/rules/read-only-references.md.</para>
 /// <para>
 /// The sources are taken from https://github.com/hamarb123/hamarb123.Analyzers (folder hamarb123.Analyzers.Test/DefensiveCopies, MIT
 /// license, see THIRD-PARTY-NOTICES.md). The markup <c>{|#n:...|}</c> is that analyzer's, at the places where it expects a diagnostic.

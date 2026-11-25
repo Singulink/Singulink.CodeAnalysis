@@ -14,7 +14,7 @@ namespace Singulink.CodeAnalysis;
 /// are such methods.</para>
 /// <para>
 /// The attribute counts where a call names the code that runs: on a method that is not virtual, abstract or an override, static or not, an
-/// extension method included, and on a local function. Anywhere else it gets a warning.</para>
+/// extension method included, and on a local function. Anywhere else it gets an error.</para>
 /// <para>
 /// The analyzer does not check the body of the method. The attribute is a statement of its author, and every use of it in a project gets
 /// one warning, to be suppressed there when the method has been verified and tested.</para>

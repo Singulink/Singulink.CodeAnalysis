@@ -18,7 +18,7 @@ classes that clone themselves come from a scan of the IL of the shared framework
 **How to read the tables.**
 
 - A **Listed** column says whether the member is on the list: "listed" is an entry with no marker, "listed, `new`" an entry with that marker, and "not listed" a member that is not on the list.
-- A member with no marker hands out what is as new as what it was called on, so on a stored collection it is a copy and gets a warning (`SCA1030`). The markers `new`, `borrows`, `drains`, `owned`, `view`, `noncopyable`, `erasable` and `for=` are the ones that the [Symbol List Format](../../Docs/articles/rules/symbol-list-format.md) article defines.
+- A member with no marker hands out what is as new as what it was called on, so on a stored collection it is a copy and gets a warning (`SCA1030`). The markers `new`, `borrows`, `drains`, `owned`, `view`, `noncopyable`, `erasable` and `for=` are the ones that the [Symbol List Format](../../Docs/articles/rules/symbol-list-format.md) article defines. `borrowswhen` is described in [Members That Keep Nothing of a Value in Some Outcomes](#members-that-keep-nothing-of-a-value-in-some-outcomes).
 - A **Source** column gives file names and line numbers in the runtime source, with the path abbreviations of [Runtime Source](#runtime-source). A bare `:123-456` is a range of lines in the file that the table or the row names. `×5` is the number of overloads.
 - The tables headed "every public member" have a **List entry** column: "listed" for an entry with no marker, the marker (`new`, `view`, `erasable`, `owned`, `for=TValue` and so on) for an entry with one, and "not listed" with the reason for a member that is not on the list.
 
@@ -227,7 +227,7 @@ The list has eight members of it: `RunContinuationsAsynchronously`, `Version`, `
 | Member | Listed | Reason | Source |
 |---|---|---|---|
 | 4 constructors, `Task` | listed; `Task` has `owned` | Create or return the task; the task belongs to the source alone (see below) | :37-76 |
-| `SetResult`, `TrySetResult` | listed | `_task.TrySetResult(result)` stores it (`Future.cs:371`) | :197, 216 |
+| `SetResult`, `TrySetResult` | listed, and `borrowswhen=false` on `TrySetResult` | `_task.TrySetResult(result)` stores it (`Future.cs:371`) | :197, 216 |
 | `SetException` ×2, `TrySetException` ×2, `SetCanceled` ×2, `TrySetCanceled` ×2 | listed | No `T` value | :87-280 |
 | `SetFromTask`, `TrySetFromTask` | not listed | `_task.TrySetResult(completedTask.Result)`: two tasks hold the value | :305-336 |
 
@@ -254,7 +254,7 @@ Every public member:
 | `TaskCompletionSource<TResult>.TrySetException(IEnumerable<Exception>)` | a basic member: see the summary table | listed |
 | `TaskCompletionSource<TResult>.TrySetException(Exception)` | a basic member: see the summary table | listed |
 | `TaskCompletionSource<TResult>.TrySetFromTask(Task<TResult>)` | copies the result of another task into this one | not listed: copies |
-| `TaskCompletionSource<TResult>.TrySetResult(TResult)` | a basic member: see the summary table | listed |
+| `TaskCompletionSource<TResult>.TrySetResult(TResult)` | a basic member: see the summary table; takes the value only where it returns true (see [Members That Keep Nothing of a Value in Some Outcomes](#members-that-keep-nothing-of-a-value-in-some-outcomes)) | borrowswhen=false |
 | `TaskCompletionSource<TResult>.Task` | a basic member: see the summary table | owned |
 
 ### Async Method Builders
@@ -931,7 +931,7 @@ Every public member:
 | `Dictionary<TKey, TValue>.Remove(TKey, out TValue)` | a basic member: see the summary table | new;for=TValue |
 | `Dictionary<TKey, TValue>.TrimExcess()` | moves the entries into a new array, the old one is dropped (Resize 1248-1290, CopyEntries 1600-1620) | for=TValue |
 | `Dictionary<TKey, TValue>.TrimExcess(int)` | moves the entries into a new array, the old one is dropped (Resize 1248-1290, CopyEntries 1600-1620) | for=TValue |
-| `Dictionary<TKey, TValue>.TryAdd(TKey, TValue)` | a basic member: see the summary table | for=TValue |
+| `Dictionary<TKey, TValue>.TryAdd(TKey, TValue)` | a basic member: see the summary table; takes the value only where it returns true (see [Members That Keep Nothing of a Value in Some Outcomes](#members-that-keep-nothing-of-a-value-in-some-outcomes)) | borrowswhen=false;for=TValue |
 | `Dictionary<TKey, TValue>.TryGetAlternateLookup<TAlternateKey>(out Dictionary<TKey, TValue>.AlternateLookup<TAlternateKey>)` | hands out a lookup that holds the dictionary (Dictionary.cs 650-685) | for=TValue |
 | `Dictionary<TKey, TValue>.TryGetValue(TKey, out TValue)` | a basic member: see the summary table | for=TValue |
 | `Dictionary<TKey, TValue>.Comparer` | the comparer of keys, or the length of the entries array (Dictionary.cs 160-185) | for=TValue |
@@ -942,7 +942,7 @@ Every public member:
 | `Dictionary<TKey, TValue>.Values` | a collection that hands out every value by value, CopyTo included (Dictionary.cs 2081-2244) | not listed: copies |
 | `T:System.Collections.Generic.Dictionary`2.AlternateLookup`1` | looks up by the alternate key; reads by value what the dictionary holds (Dictionary.cs 751-870) | view |
 | `Dictionary<TKey, TValue>.AlternateLookup<TAlternateKey>.ContainsKey(TAlternateKey)` | looks up by the alternate key; reads by value what the dictionary holds (Dictionary.cs 751-870) | for=TValue |
-| `Dictionary<TKey, TValue>.AlternateLookup<TAlternateKey>.TryAdd(TAlternateKey, TValue)` | stores into a slot found by the alternate key (Dictionary.cs 712-750, 947-960) | for=TValue |
+| `Dictionary<TKey, TValue>.AlternateLookup<TAlternateKey>.TryAdd(TAlternateKey, TValue)` | stores into a slot found by the alternate key (Dictionary.cs 712-750, 947-960), only where it returns true | borrowswhen=false;for=TValue |
 | `Dictionary<TKey, TValue>.AlternateLookup<TAlternateKey>.TryGetValue(TAlternateKey, out TValue)` | looks up by the alternate key; reads by value what the dictionary holds (Dictionary.cs 751-870) | for=TValue |
 | `Dictionary<TKey, TValue>.AlternateLookup<TAlternateKey>.TryGetValue(TAlternateKey, out TKey, out TValue)` | looks up by the alternate key; reads by value what the dictionary holds (Dictionary.cs 751-870) | for=TValue |
 | `Dictionary<TKey, TValue>.AlternateLookup<TAlternateKey>.Remove(TAlternateKey)` | looks up by the alternate key; reads by value what the dictionary holds (Dictionary.cs 751-870) | for=TValue |
@@ -1182,7 +1182,7 @@ These types are on the list because low-level libraries use them often: a trial 
 
 Every public member of each type is here: the tables list 91 members, apart from the three of `ConcurrentDictionary<,>` that the full table below shows to be listed, and the rest are not listed, with the reason.
 
-Markers: `new` = what the member hands out is a new value whatever it was called on; `borrows` = the member keeps nothing of a container that it is given; none = what it hands out is as new as what it was called on, so on a stored collection it is a copy and gets a warning (`SCA1030`). `for=TValue` is on every entry of the two dictionaries, as for `Dictionary<,>`.
+Markers: `new` = what the member hands out is a new value whatever it was called on; `borrows` = the member keeps nothing of a container that it is given; `borrowswhen` = the member keeps nothing of a value that it is given in the outcomes that it lists (see [Members That Keep Nothing of a Value in Some Outcomes](#members-that-keep-nothing-of-a-value-in-some-outcomes)); none = what it hands out is as new as what it was called on, so on a stored collection it is a copy and gets a warning (`SCA1030`). `for=TValue` is on every entry of the two dictionaries, as for `Dictionary<,>`.
 
 ### `System.Threading.Channels`
 
@@ -1200,7 +1200,7 @@ Markers: `new` = what the member hands out is a new value whatever it was called
 | `ChannelReader<T>.WaitToReadAsync(ct)` | no value | none |
 | `ChannelReader<T>.Completion`, `.Count`, `.CanCount`, `.CanPeek` | no value | none |
 | `ChannelReader<T>.ReadAllAsync(ct)` | an async iterator: `while (await WaitToReadAsync) while (TryRead(out item)) yield return item;`. Each element is taken out of the channel | `drains`: the sequence is a container, and `new` says nothing of a container (see [Sequences That Drain](#sequences-that-drain)) |
-| `ChannelWriter<T>.TryWrite(T)` | moves the item into one place: the buffer, a parked reader, or the drop callback. On `false` (closed, or full in wait mode) it has not taken it | none |
+| `ChannelWriter<T>.TryWrite(T)` | moves the item into one place: the buffer, a parked reader, or the drop callback. On `false` (closed, or full in wait mode) it has not taken it (see [Members That Keep Nothing of a Value in Some Outcomes](#members-that-keep-nothing-of-a-value-in-some-outcomes)) | `borrowswhen=false` |
 | `ChannelWriter<T>.WriteAsync(T, ct)` | `TryWrite`, or in a full bounded channel parks the item in one waiting writer, from which a following read moves it into the buffer (`BoundedChannel.cs` 268-273). Cancelled or closed: the item is dropped with the exception | none |
 | `ChannelWriter<T>.WaitToWriteAsync(ct)`, `.TryComplete(Exception)`, `.Complete(Exception)` | no value | none |
 
@@ -1222,7 +1222,8 @@ Markers: `new` = what the member hands out is a new value whatever it was called
 
 | Member | What it does with a value | Marker |
 |---|---|---|
-| `ConcurrentStack<T>()`, `.Push(T)` | stores the item in a node | none |
+| `ConcurrentStack<T>()` | empty stack | none |
+| `ConcurrentStack<T>.Push(T)` | stores the item in a node | none |
 | `ConcurrentStack<T>.TryPop(out T)` | unlinks the head node and hands out its value | `new` |
 | `ConcurrentStack<T>.TryPopRange(T[])`, `(T[], int, int)` | unlinks nodes and writes their values into the array (`CopyRemovedItems`); keeps nothing of the array | `borrows` |
 | `ConcurrentStack<T>.TryPeek(out T)` | a copy of the head | none |
@@ -1233,7 +1234,8 @@ Markers: `new` = what the member hands out is a new value whatever it was called
 
 | Member | What it does with a value | Marker |
 |---|---|---|
-| `ConcurrentBag<T>()`, `.Add(T)` | stores the item in the thread's queue | none |
+| `ConcurrentBag<T>()` | empty bag | none |
+| `ConcurrentBag<T>.Add(T)` | stores the item in the thread's queue | none |
 | `ConcurrentBag<T>.TryTake(out T)` | `TryLocalPop` or `TrySteal(take: true)`: removes | `new` |
 | `ConcurrentBag<T>.TryPeek(out T)` | `TryLocalPeek` or `TrySteal(take: false)`: a copy | none |
 | `ConcurrentBag<T>.Count`, `.IsEmpty`, `.Clear()` | no value handed out | none |
@@ -1245,7 +1247,7 @@ Markers: `new` = what the member hands out is a new value whatever it was called
 | Member | What it does with a value | Marker |
 |---|---|---|
 | `ConcurrentDictionary<,>()`, `(int, int)`, `(IEqualityComparer<TKey>)`, `(int, int, IEqualityComparer<TKey>)` | empty dictionary | none |
-| `ConcurrentDictionary<,>.TryAdd(TKey, TValue)` | `TryAddInternal(..., updateIfExists: false)`: stores the value, or returns false and has not taken it | none |
+| `ConcurrentDictionary<,>.TryAdd(TKey, TValue)` | `TryAddInternal(..., updateIfExists: false)`: stores the value, or returns false and has not taken it | `borrowswhen=false` |
 | `ConcurrentDictionary<,>.TryRemove(TKey, out TValue)` | removes the node and hands out its value | `new` |
 | `ConcurrentDictionary<,>.TryGetValue(TKey, out TValue)` | a copy of the stored value | none |
 | `ConcurrentDictionary<,>.GetOrAdd(TKey, TValue)` | returns the stored value, or stores the argument and returns it: either way a copy of what the dictionary holds afterwards | none |
@@ -1282,7 +1284,7 @@ Every public member:
 | `ConcurrentDictionary<TKey, TValue>.GetOrAdd(TKey, TValue)` | judged with the concurrent collections | for=TValue |
 | `ConcurrentDictionary<TKey, TValue>.GetOrAdd<TArg>(TKey, Func<TKey, TArg, TValue>, TArg)` | passes the stored value or a value made by a delegate to a delegate, and a racing call may run it and drop the result (ConcurrentDictionary.cs 1180-1420) | not listed: passes a value to a delegate |
 | `ConcurrentDictionary<TKey, TValue>.ToArray()` | copies every value | not listed: copies |
-| `ConcurrentDictionary<TKey, TValue>.TryAdd(TKey, TValue)` | judged with the concurrent collections | for=TValue |
+| `ConcurrentDictionary<TKey, TValue>.TryAdd(TKey, TValue)` | judged with the concurrent collections | borrowswhen=false;for=TValue |
 | `ConcurrentDictionary<TKey, TValue>.TryGetAlternateLookup<TAlternateKey>(out ConcurrentDictionary<TKey, TValue>.AlternateLookup<TAlternateKey>)` | hands out a lookup that holds the dictionary | for=TValue |
 | `ConcurrentDictionary<TKey, TValue>.TryGetValue(TKey, out TValue)` | judged with the concurrent collections | for=TValue |
 | `ConcurrentDictionary<TKey, TValue>.TryRemove(KeyValuePair<TKey, TValue>)` | compares the stored value with EqualityComparer<TValue>.Default (ConcurrentDictionary.cs 413-470, 620-700) | not listed: passes a value to Equals |
@@ -1296,7 +1298,7 @@ Every public member:
 | `ConcurrentDictionary<TKey, TValue>.Values` | copies every value | not listed: copies |
 | `T:System.Collections.Concurrent.ConcurrentDictionary`2.AlternateLookup`1` | what the dictionary's own members do, by the alternate key (ConcurrentDictionary.cs 2337-2600) | view |
 | `ConcurrentDictionary<TKey, TValue>.AlternateLookup<TAlternateKey>.ContainsKey(TAlternateKey)` | what the dictionary's own members do, by the alternate key (ConcurrentDictionary.cs 2337-2600) | for=TValue |
-| `ConcurrentDictionary<TKey, TValue>.AlternateLookup<TAlternateKey>.TryAdd(TAlternateKey, TValue)` | what the dictionary's own members do, by the alternate key (ConcurrentDictionary.cs 2337-2600) | for=TValue |
+| `ConcurrentDictionary<TKey, TValue>.AlternateLookup<TAlternateKey>.TryAdd(TAlternateKey, TValue)` | what the dictionary's own members do, by the alternate key (ConcurrentDictionary.cs 2337-2600) | borrowswhen=false;for=TValue |
 | `ConcurrentDictionary<TKey, TValue>.AlternateLookup<TAlternateKey>.TryGetValue(TAlternateKey, out TValue)` | what the dictionary's own members do, by the alternate key (ConcurrentDictionary.cs 2337-2600) | for=TValue |
 | `ConcurrentDictionary<TKey, TValue>.AlternateLookup<TAlternateKey>.TryGetValue(TAlternateKey, out TKey, out TValue)` | what the dictionary's own members do, by the alternate key (ConcurrentDictionary.cs 2337-2600) | for=TValue |
 | `ConcurrentDictionary<TKey, TValue>.AlternateLookup<TAlternateKey>.TryRemove(TAlternateKey, out TValue)` | unlinks the node and hands out its value (ConcurrentDictionary.cs 2585-2650) | new;for=TValue |
@@ -1309,7 +1311,7 @@ Every public member:
 | Member | What it does with a value | Marker |
 |---|---|---|
 | `BlockingCollection<T>()`, `(int)` | over a `ConcurrentQueue<T>` of its own | none |
-| `BlockingCollection<T>.Add(T)`, `(T, ct)`, `.TryAdd(T)`, `(T, TimeSpan)`, `(T, int)`, `(T, int, ct)` | `_collection.TryAdd(item)` (line 475): moves the item in, or has not taken it (false, or the exception) | none |
+| `BlockingCollection<T>.Add(T)`, `(T, ct)`, `.TryAdd(T)`, `(T, TimeSpan)`, `(T, int)`, `(T, int, ct)` | `_collection.TryAdd(item)` (line 475): moves the item in; a `TryAdd` that returns false has not taken it (see [Members That Keep Nothing of a Value in Some Outcomes](#members-that-keep-nothing-of-a-value-in-some-outcomes)) | none on the two `Add`; `borrowswhen=false` on the four `TryAdd` |
 | `BlockingCollection<T>.Take()`, `(ct)`, `.TryTake(out T)` and its 3 overloads | `_collection.TryTake(out item)` (line 696): removes | `new` |
 | `BlockingCollection<T>.CompleteAdding()`, `.IsAddingCompleted`, `.IsCompleted`, `.Count`, `.BoundedCapacity`, `.Dispose()` | no value; `Dispose` releases the semaphores and leaves what is held | none |
 | `BlockingCollection<T>(IProducerConsumerCollection<T>)`, `(..., int)` | wraps another collection | **not listed**: what `Add` and `Take` then do is what that collection does |
@@ -1435,7 +1437,7 @@ Members that do not reach into the elements.
 
 ### Non-copyable Types
 
-Besides `SpinLock` and `GCHandle`, the list marks these structs `noncopyable` (ten in all). Each owns something that a copy would release twice:
+Besides `SpinLock` and `GCHandle`, the list marks these structs `noncopyable` (eleven in all). Each owns something that a copy would release twice:
 
 - `GCHandle<T>`, `PinnedGCHandle<T>` and `WeakGCHandle<T>` are .NET 10 types; their `Dispose` frees the handle (`CL/Runtime/InteropServices/GCHandle.T.cs:89`).
 - `Lock.Scope`: `Dispose` exits the lock (`CL/Threading/Lock.cs:137-143`).
@@ -1443,6 +1445,7 @@ Besides `SpinLock` and `GCHandle`, the list marks these structs `noncopyable` (t
 - `DefaultInterpolatedStringHandler`: `ToStringAndClear` returns its rented buffer to the pool (`CL/Runtime/CompilerServices/DefaultInterpolatedStringHandler.cs:110-136`).
 - `AsyncFlowControl`: `Dispose`/`Undo` restores the flow (`CL/Threading/ExecutionContext.cs:550`).
 - `ManualResetValueTaskSourceCore<TResult>`: a mutable struct holding `_result` and the continuation, meant to live in one field (`CL/Threading/Tasks/Sources/ManualResetValueTaskSourceCore.cs:34,65`).
+- `DispatcherProcessingDisabled` of WindowsBase: `Dispatcher.DisableProcessing` adds 1 to `_disableProcessingCount` and returns the struct with its `_dispatcher` set, and `Dispose` checks only that field of the struct before it subtracts 1 and clears it, so the `Dispose` of a copy subtracts a second time (dotnet/wpf `src/Microsoft.DotNet.Wpf/src/WindowsBase/System/Windows/Threading/DispatcherProcessingDisabled.cs` at `v10.0.0` and `v11.0.0`, the same; the IL of `Dispose` and `DisableProcessing` in the WindowsBase of the .NET Framework 4.8.1 does the same).
 
 Checked and not marked:
 
@@ -1467,13 +1470,13 @@ A view holds a reference to storage and copies no elements when it is copied. Be
 
 ### Members of the Non-copyable Types That Take One by Value
 
-Sixteen members of the built-in non-copyable structs take the struct by value and only read it, so they are marked `borrows`. They are read on dotnet/runtime `main`, 16 November 2026: `ToIntPtr` returns `value._handle` and `Equals` compares `_handle` in `GCHandle`, `GCHandle<T>`, `PinnedGCHandle<T>` and `WeakGCHandle<T>`; the `==`, `!=` and `IntPtr` conversion of `GCHandle` do the same; `GCHandleExtensions.GetAddressOfArrayData` and `GetAddressOfStringData` read `handle.Target` once; `AsyncFlowControl.Equals` compares `_thread`, and its operators call it. None frees, stores or changes the value.
+Eighteen members of the built-in non-copyable structs take the struct by value and only read it, so they are marked `borrows`. They are read on dotnet/runtime `main`, 16 November 2026: `ToIntPtr` returns `value._handle` and `Equals` compares `_handle` in `GCHandle`, `GCHandle<T>`, `PinnedGCHandle<T>` and `WeakGCHandle<T>`; the `==`, `!=` and `IntPtr` conversion of `GCHandle` do the same; `GCHandleExtensions.GetAddressOfArrayData` and `GetAddressOfStringData` read `handle.Target` once; `AsyncFlowControl.Equals` compares `_thread`, and its operators call it. The `==` and `!=` of `DispatcherProcessingDisabled` call its `Equals(object)`, which compares `_dispatcher` (dotnet/wpf at `v10.0.0` and `v11.0.0`). None frees, stores or changes the value. `DispatcherProcessingDisabled.Equals(object)` has no line: its argument is a box, and a stored value converted to one is a copy.
 
 Not marked `borrows`: `MemoryHandle..ctor(void*, GCHandle, IPinnable)` keeps the handle and frees it in `Dispose`, so a stored handle passed to it is a second owner. `JavaMarshal.GetContext(GCHandle)` is not marked either: the evidence has no reading of its source.
 
 ### Members That Get at a Built-in Non-copyable Type Other Than by Value
 
-A member of an assembly that was not built with the analyzer and that takes a value of one of the ten built-in non-copyable types by `ref`, `in` or `ref readonly`, in a container, in a view or through a pointer needs a `borrows` entry, or its use gets a warning (see [Code Not Built With the Analyzer](../../Docs/articles/rules/unchecked-code.md)). `FrameworkScanTests` finds every such member of the shared frameworks. Each is read in the runtime source, and the same evidence is in the comments of the list:
+A member of an assembly that was not built with the analyzer and that takes a value of one of the built-in non-copyable types by `ref`, `in` or `ref readonly`, in a container, in a view or through a pointer needs a `borrows` entry, or its use gets a warning (see [Code Not Built With the Analyzer](../../Docs/articles/rules/unchecked-code.md)). `FrameworkScanTests` finds every such member of the shared frameworks. Each is read in the runtime source, and the same evidence is in the comments of the list:
 
 | Member | What it does with the value | List entry |
 |---|---|---|
@@ -1589,7 +1592,7 @@ A parameter whose type mentions a type parameter that is not marked is taken to 
 
 ## Members That Receive a Value and Keep Nothing of It
 
-A value that is converted to a type which hides it, as the argument of a member of the list, is let through only where the member is marked `borrows`. A line with no marker says how the member treats the values that it holds; it does not say that the member forgets a reference that it is given, and `List<T>.Add`, `Task.FromResult`, `TaskCompletionSource<T>.SetResult`, `ChannelWriter<T>.TryWrite`, `Interlocked.Exchange` and the `state` of a task keep theirs. Every member of the list with a parameter that can receive such a conversion (by value, `in` or `params`, of a type that is `object`, an interface, a class that is not sealed, or a type parameter) is read: 218, of which 32 keep nothing of what they are given and are marked `borrows`. The other 186 keep the argument, hand it back, hand out a view or a reference of it, or give it to code that the application can supply, and keep their line with no marker. The 30 key lookups of the dictionaries are among them: they give the key to the dictionary's comparer, which can keep it.
+A value that is converted to a type which hides it, as the argument of a member of the list, is let through only where the member is marked `borrows`. A line with no marker says how the member treats the values that it holds; it does not say that the member forgets a reference that it is given, and `List<T>.Add`, `Task.FromResult`, `TaskCompletionSource<T>.SetResult`, `ChannelWriter<T>.TryWrite`, `Interlocked.Exchange` and the `state` of a task keep theirs. Every member of the list with a parameter that can receive such a conversion (by value, `in` or `params`, of a type that is `object`, an interface, a class that is not sealed, or a type parameter) is read: 218, of which 32 keep nothing of what they are given and are marked `borrows`. The other 186 keep the argument, hand it back, hand out a view or a reference of it, or give it to code that the application can supply, and keep their line without `borrows`. The 30 key lookups of the dictionaries are among them: they give the key to the dictionary's comparer, which can keep it.
 
 | Members | Why they keep nothing |
 |---|---|
@@ -1600,6 +1603,25 @@ A value that is converted to a type which hides it, as the argument of a member 
 | `Task.WaitAll(Task[])`, `Task.WaitAll(IEnumerable<Task>, CancellationToken)`, `Task.WaitAny(Task[])` (3) | They wait for the tasks during the call; `WaitAny` returns an index. `WhenAll` and `WhenAny` keep the tasks in the task that they return, and keep their line with no marker |
 
 `borrows` also lets a stored value of a non-copyable type be passed by value to these members, and counts a container that they are given as used: neither is new for them, since none of them keeps what it is given.
+
+## Members That Keep Nothing of a Value in Some Outcomes
+
+`borrowswhen=false` says that a member keeps nothing of a value that it is given by value where it returned false, and has taken it where it returned true or threw. The caller still holds the value where the member returned false. Each member that has it returns false before it keeps anything of the item, which was read at the release tags `v10.0.0` and `v11.0.0`.
+
+| Member | Where it takes the value | Where it returns false | Source |
+|---|---|---|---|
+| `TaskCompletionSource<TResult>.TrySetResult(TResult)` | `Task<TResult>.TrySetResult` reserves the completion and stores `m_result` | Where the task was completed already, with nothing stored | TaskCompletionSource_T.cs:216-225, Future.cs (Task_T.cs in .NET 11):357-390 |
+| `Dictionary<TKey, TValue>.TryAdd(TKey, TValue)` | `TryInsert(..., InsertionBehavior.None)`: `entry.value = value` | For a key that is there, before the store | Dictionary.cs:506-630 |
+| `Dictionary<TKey, TValue>.AlternateLookup<TAlternateKey>.TryAdd(TAlternateKey, TValue)` | `GetValueRefOrAddDefault`, then `slot = value` for a slot that it added | For a key that is there, before the store | Dictionary.cs:947-1020 |
+| `ConcurrentDictionary<TKey, TValue>.TryAdd(TKey, TValue)` and the lookup's `TryAdd` | `TryAddInternal` (or its twin for an alternate key) makes the node with the value | For a key that is there, with nothing stored | ConcurrentDictionary.cs:367-375, 921-1050, 1941-2070, 2376-2490 |
+| `BlockingCollection<T>.TryAdd(T)`, `(T, TimeSpan)`, `(T, int)`, `(T, int, CancellationToken)` | `TryAddWithNoTimeValidation`: `_collection.TryAdd(item)` into the collection's own `ConcurrentQueue<T>` | Where no room came up in time, before the item goes in | BlockingCollection.cs:300-470 |
+| `ChannelWriter<T>.TryWrite(T)` | The buffer, a reader that is waiting, or the callback for dropped items | Where the channel is done writing, or a bounded one is full in the mode `Wait`, before it does anything with the item | BoundedChannel.cs:363-465, RendezvousChannel.cs:303-334, UnboundedChannel.cs, SingleConsumerUnboundedChannel.cs and UnboundedPriorityChannel.cs, at the `TryWrite` of each |
+
+The row of `TryWrite` covers each of the five writers of the framework's channels: bounded, rendezvous, unbounded, unbounded for a single consumer and unbounded by priority. No other class of the framework derives from `ChannelWriter<T>`. `TryWrite` is abstract, so for a writer of another library the claim holds as far as that writer does what its documentation says: it returns "true if the item was written; otherwise, false if it wasn't written" (ChannelWriter.cs:22-25), as `ReadAllAsync` relies on its documentation above.
+
+The other members of the list that return `bool` and take a value by value that is not a key are the ones in the table above.
+
+**A note for a maintainer.** A member that throws may have taken the value, and some members of the list do throw after they have taken it. `TryWrite` and `WriteAsync` of a channel are two: the callback for dropped items of a bounded or rendezvous channel runs outside the lock and lets its exception through, and a reader that is completed with the item runs its continuation at once where the channel allows synchronous continuations, with no `try` around it (BoundedChannel.cs:363-455, 515-620; RendezvousChannel.cs:303-330; AsyncOperation.cs:190-285).
 
 ## Classes That Clone Themselves
 
@@ -1648,6 +1670,18 @@ The other 28 are internal: `Stroke.Clip`, `Copy`, `Erase` and `DrawInternal`, `G
 
 **The Xml classes.** The members of the Xml classes are not analyzed, so `XmlSchemaObject` and `XmlQualifiedName` are not marked `clones=complete`, and every member of them and of the XmlSchema classes counts as one that can clone. A symbol list file can mark them, where its author vouches for their members: a `clones=complete` line counts wherever it stands, and a plain `clones` line takes nothing away. GiveFeedbackEventArgs is marked `clones=complete`: see [Members Whose Own Object Reaches Other Code](#members-whose-own-object-reaches-other-code).
 
+**The .NET Framework 4.8.1.** The same scans read its implementation assemblies: every assembly that `RedistList/FrameworkList.xml` of its reference assemblies names, from the global assembly cache or the folder of the runtime, 235 of them (the list also names System.Activities.Statements, which exists neither as a reference assembly nor in the runtime). They find the classes above, and 7 classes that only the .NET Framework has, can be derived from in another assembly, and clone `this` with `MemberwiseClone`. Their lines end in `# netfx`:
+
+| Line | Assembly | What clones |
+|---|---|---|
+| `T:System.Messaging.MessagePropertyFilter;clones` | System.Messaging | `Clone()`, public, virtual |
+| `T:System.Workflow.Activities.Rules.Rule;clones` | System.Workflow.Activities | `Clone()`, public, which clones its condition and its actions as well |
+| `T:System.Workflow.Activities.Rules.RuleSet;clones` | System.Workflow.Activities | `Clone()`, public, which clones its rules as well |
+| `T:System.Workflow.Activities.Rules.RuleHaltAction;clones`, `RuleStatementAction`, `RuleUpdateAction` | System.Workflow.Activities | `Clone()`, public, the override of the abstract `RuleAction.Clone` |
+| `T:Microsoft.VisualBasic.Activities.VisualBasicImportReference;clones` | System.Activities | `Clone()`, internal |
+
+The six public `Clone` methods have `M:...;clones` lines of their own, and the members scan finds no other public or protected member of these classes that clones. Their members were not analyzed for what reaches other code, so the lines say `clones`, not `clones=complete`, and every member of them that no line names counts as one that can clone. Their assemblies are not in FrameworkAssemblies.txt: the analyzer takes them for other libraries, whose classes it knows nothing of, so a class of a project that derives from one of these got a warning before as well, with the text of an unknown base class. The scan also finds no member of the .NET Framework that gets at one of its three built-in non-copyable types, `SpinLock`, `GCHandle` and `AsyncFlowControl`, other than by value and has no entry.
+
 **The members that can hand back another object of their class.** A member of these classes whose result, or `out` or `ref` parameter, the object converts to by reference (the class, a class above it, `object`, an interface that it implements, or a type parameter) could hand back the object itself for another member to clone, and gets the warning unless a line says that it does not. Besides the `Clone` methods, which have their `clones` lines, 5 such members of the 8 classes with member lines and of the framework classes that derive from them have a line with no marker, and the scan checks that no path of their IL returns argument 0:
 
 | Line | What it hands back |
@@ -1685,7 +1719,8 @@ encoder and decoder fallbacks and their buffers, `Encoder` and `Decoder`, the bu
 `GregorianCalendarHelper` of the calendars based on the Gregorian one, and the `StrokeNodeIterator` and `StrokeInfo` that a stroke
 makes to walk its own points. Each exists to serve the class, which hands its object to it by its own design, but an application's own
 subclass of a fallback, an `Encoder` or a `Decoder` does receive the object. **A few methods of the runtime** with no body to read are
-taken to keep nothing of the object: those of `Monitor`, and `RuntimeHelpers.GetHashCode` and `TryGetHashCode`. Constructors are not
+taken to keep nothing of the object: those of `Monitor`, `RuntimeHelpers.GetHashCode` and `TryGetHashCode`, and `MemberwiseClone` on the
+.NET Framework (see below). Constructors are not
 members that an application calls on an existing object, but one can store the new object in another object that a member hands out
 afterwards, so the scan follows them too.
 
@@ -1698,6 +1733,17 @@ constructor leads to a line; the others hand nothing on, for the reasons below:
 | `Stroke.AddPropertyData`, `Stroke.RemovePropertyData`, `Stroke.Transform`, `Stroke.OnDrawingAttributesChanged`, `Stroke.OnDrawingAttributesReplaced`, `Stroke.OnInvalidated`, `Stroke.OnPropertyChanged`, `Stroke.OnPropertyDataChanged`, `Stroke.OnStylusPointsChanged`, `Stroke.OnStylusPointsReplaced`, `DrawingAttributes.OnAttributeChanged`, `DrawingAttributes.OnPropertyChanged`, `DrawingAttributes.OnPropertyDataChanged` | They raise an event of the object with the object as the sender. A handler gets it only where it was subscribed: through the object, which warns as a member whose handler type takes `object` (SCA1009), through a `Stroke`, a `DrawingAttributes` or an `INotifyPropertyChanged` that the object was converted to, which warns there, or by code of the object's own class, which is judged on its own |
 | `new Stroke()`, `new DrawingAttributes()`, `Stroke.DrawingAttributes`, `Stroke.StylusPoints` | They subscribe a handler of the object's own to an event of its drawing attributes, its stylus points or its extended properties: the delegate holds the object as its target, and the event of the other object runs only that handler of the object's own class. No member hands out the invocation list of those events |
 | `PageSettings.HardMarginX`, `PageSettings.HardMarginY`, `PageSettings.PrintableArea` | They give the page settings to `PrinterSettings.CreateDeviceContext(PageSettings)` or `CreateInformationContext(PageSettings)`, which copy them into a native DEVMODE and keep nothing. The scan tells the overloads of a method apart by their number of parameters only, and sees the overload with an `HGLOBAL` hand its argument to `GlobalLock` |
+
+### The .NET Framework 4.8.1
+
+The scan of the .NET Framework 4.8.1, of its implementation assemblies of file versions 4.8.9221 to 4.8.9363, flags the members above and 14 more, 9 of `PrinterSettings` (14 with their overloads) and 5 of `PageSettings`. None of them has a line. A line applies to its ID on every framework, so a line for one of them would add warnings on .NET, where none of them hands its object on, and one of them is `ToString`, which no `clones` line may name: the code that the compiler writes for a record calls it, and is not checked for that reason (see DESIGN.md). What the scan sees, and what was judged:
+
+| Members | What the scan sees on the .NET Framework 4.8.1, and why it is not a hand-on that matters |
+|---|---|
+| `PrinterSettings.Collate`, `PrinterSettings.Copies`, `PrinterSettings.Duplex`, `PrinterSettings.IsPlotter`, `PrinterSettings.SupportsColor`, `PrinterSettings.CreateMeasurementGraphics` (four overloads), `PrinterSettings.GetHdevmode` (two), `PrinterSettings.IsDirectPrintingSupported` (two), `PrinterSettings.ToString` | Each reaches the internal `GetHdevmodeInternal`, directly or through `GetModeField`, `CreateDeviceContext` or `CreateInformationContext`, and that throws `new InvalidPrinterException(this)` where the printer name is not valid. The exception keeps the printer settings in a private field, and they get out of it only through its `GetObjectData`, which adds them to the `SerializationInfo` of a serialization of the exception. That is judged not to be a hand-on that matters: no member of the exception hands them to code, and what a formatter does with them is what it does with any serializable object that it is given; `PrinterSettings` is serializable on its own. A round trip through a formatter does make a new object, for a derived class that is serializable too. On .NET the exception keeps nothing |
+| `PageSettings.Bounds`, `PageSettings.CopyToHdevmode`, `PageSettings.PaperSource`, `PageSettings.PrinterResolution`, `PageSettings.ToString` | They give `new HandleRef(this, handle)` to native methods, and the scan sees the constructor of `HandleRef` store the object in its field. A `HandleRef` keeps nothing: it is a struct that the call is given by value, and it keeps the object alive until the call returns. The members of `PrinterSettings` above make one as well |
+
+The scan of the .NET Framework would also flag every `Clone` of the classes whose line says `clones=complete` and the members of `Stroke` that clone through it, 18 rows, each a member with a `clones` line: `Object.MemberwiseClone` has no body there, and the scan takes a method with no body to keep its arguments. It is taken to keep nothing, as `RuntimeHelpers.GetHashCode` is: it copies the object into a new one, and the scan of what a member clones finds the clone by the call. On .NET it has a body, which the scan reads.
 
 ## Entry Validation
 

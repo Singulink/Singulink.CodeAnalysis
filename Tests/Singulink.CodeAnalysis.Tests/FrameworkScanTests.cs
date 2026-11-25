@@ -6,16 +6,19 @@ using PrefixClassName.MsTest;
 namespace Singulink.CodeAnalysis.Tests;
 
 /// <summary>
-/// Scans the shared frameworks that the tests run on for members that the rules for code which was not built with the analyzer
-/// reach: every public or protected member that gets at one of the ten built-in non-copyable types other than by value, or hands out a
-/// container of one, must have its entry in the built-in list.
+/// Scans the shared frameworks that the tests run on, and the .NET Framework 4.8.1 where it is installed, for members that the rules for
+/// code which was not built with the analyzer reach: every public or protected member that gets at one of the built-in non-copyable
+/// types other than by value, or hands out a container of one, must have its entry in the built-in list.
 /// </summary>
 /// <remarks>
-/// Docs: articles/guides/symbol-list.md and articles/concepts/unchecked-code.md.
+/// Docs: articles/guides/symbol-list.md and articles/rules/unchecked-code.md.
 /// </remarks>
 [PrefixTestClass]
 public partial class FrameworkScanTests
 {
+    // The one built-in non-copyable type of WindowsBase, which of the shared frameworks only Microsoft.WindowsDesktop.App has.
+    private const string DispatcherProcessingDisabled = "System.Windows.Threading.DispatcherProcessingDisabled";
+
     private static readonly string[] BuiltInTypes = [
         "System.Threading.SpinLock",
         "System.Runtime.InteropServices.GCHandle",
@@ -27,24 +30,41 @@ public partial class FrameworkScanTests
         "System.Runtime.CompilerServices.DefaultInterpolatedStringHandler",
         "System.Threading.AsyncFlowControl",
         "System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore`1",
+        DispatcherProcessingDisabled,
     ];
 
-    // A member that gets at one of them other than by value needs 'borrows'; one that hands out a container of one needs 'new'.
+    // The built-in non-copyable types that the .NET Framework 4.8.1 has. MemoryHandle and ManualResetValueTaskSourceCore come to it in
+    // the packages System.Memory and Microsoft.Bcl.AsyncInterfaces, which are no part of it, and the others only .NET has.
+    private static readonly string[] BuiltInTypesOfNetFramework = [
+        "System.Threading.SpinLock",
+        "System.Runtime.InteropServices.GCHandle",
+        "System.Threading.AsyncFlowControl",
+        DispatcherProcessingDisabled,
+    ];
+
+    // A member that gets at one of them other than by value needs 'borrows'; one that hands out a container of one needs 'new'. Where
+    // Microsoft.WindowsDesktop.App is not installed, as on a machine that is not Windows, its type is not there to scan.
     [TestMethod]
     public void SharedFrameworks_EveryMemberThatGetsAtABuiltInTypeOtherThanByValueIsListed()
     {
-        var frameworks = FindSharedFrameworks();
-        Assert.IsNotEmpty(frameworks);
+        bool hasWindowsDesktop = FindSharedFrameworks().Any(directory => directory.Contains("Microsoft.WindowsDesktop.App", StringComparison.Ordinal));
+        CheckMembersThatGetAtABuiltInType(GetSharedFrameworkAssemblies(), [.. BuiltInTypes.Where(name => hasWindowsDesktop || name is not DispatcherProcessingDisabled)]);
+    }
 
-        var references = frameworks
-            .SelectMany(directory => Directory.GetFiles(directory, "*.dll"))
-            .Where(HasMetadata)
-            .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path))
-            .ToList();
+    // The same for the .NET Framework 4.8.1, which has four of them.
+    [TestMethod]
+    public async Task NetFramework_EveryMemberThatGetsAtABuiltInTypeOtherThanByValueIsListed() =>
+        CheckMembersThatGetAtABuiltInType(await GetNetFrameworkAssembliesAsync(), BuiltInTypesOfNetFramework);
 
+    private static void CheckMembersThatGetAtABuiltInType(List<string> assemblies, string[] builtInTypesThere)
+    {
+        Assert.IsNotEmpty(assemblies);
+
+        var references = assemblies.Select(path => (MetadataReference)MetadataReference.CreateFromFile(path)).ToList();
         var compilation = CSharpCompilation.Create("Scan", references: references);
-        var ten = BuiltInTypes.Select(name => compilation.GetTypeByMetadataName(name)).OfType<INamedTypeSymbol>().ToHashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
-        Assert.HasCount(BuiltInTypes.Length, ten, "Every built-in non-copyable type is in the shared framework.");
+        var builtIn = BuiltInTypes.Select(name => compilation.GetTypeByMetadataName(name)).OfType<INamedTypeSymbol>().ToHashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+        string[] present = [.. BuiltInTypes.Where(name => compilation.GetTypeByMetadataName(name) is not null)];
+        Assert.IsTrue(present.SequenceEqual(builtInTypesThere), "The built-in non-copyable types that the scanned assemblies have are: " + string.Join(", ", present));
 
         var entries = ReadEntries();
         var missing = new SortedSet<string>(StringComparer.Ordinal);
@@ -59,12 +79,12 @@ public partial class FrameworkScanTests
             {
                 types++;
 
-                // A member of one of the ten is trusted with a value of its own type and with what it hands out.
-                var owner = ten.Contains(type.OriginalDefinition) ? type.OriginalDefinition : null;
+                // A member of one of them is trusted with a value of its own type and with what it hands out.
+                var owner = builtIn.Contains(type.OriginalDefinition) ? type.OriginalDefinition : null;
 
                 foreach (var member in type.GetMembers().Where(IsVisible))
                 {
-                    var (inbound, outbound) = Judge(member, ten, owner);
+                    var (inbound, outbound) = Judge(member, builtIn, owner);
 
                     if (!inbound && !outbound)
                         continue;
@@ -81,11 +101,11 @@ public partial class FrameworkScanTests
             }
         }
 
-        Assert.IsGreaterThan(1000, types, "The scan reads the types of the shared frameworks.");
+        Assert.IsGreaterThan(1000, types, "The scan reads the types of the framework.");
         Assert.IsEmpty(missing, $"{found} members reach a built-in non-copyable type; these have no entry with the marker that they need:\n" + string.Join("\n", missing));
     }
 
-    private static (bool Inbound, bool Outbound) Judge(ISymbol member, HashSet<INamedTypeSymbol> ten, INamedTypeSymbol? owner)
+    private static (bool Inbound, bool Outbound) Judge(ISymbol member, HashSet<INamedTypeSymbol> builtIn, INamedTypeSymbol? owner)
     {
         // The value of a setter or an init accessor that the scan can see is a parameter, after those of an indexer.
         var parameters = member switch {
@@ -98,7 +118,7 @@ public partial class FrameworkScanTests
         bool inbound = parameters.Any(parameter =>
             parameter.RefKind is not RefKind.Out &&
             !IsOwnType(parameter.Type, owner) &&
-            ((parameter.RefKind is not RefKind.None && IsOneOf(parameter.Type, ten)) || Carries(parameter.Type, ten)));
+            ((parameter.RefKind is not RefKind.None && IsOneOf(parameter.Type, builtIn)) || Carries(parameter.Type, builtIn)));
 
         var handedOut = member switch {
             IMethodSymbol { MethodKind: not (MethodKind.PropertyGet or MethodKind.PropertySet or MethodKind.EventAdd or MethodKind.EventRemove) } method => method.ReturnType,
@@ -106,7 +126,7 @@ public partial class FrameworkScanTests
             _ => null,
         };
 
-        bool outbound = owner is null && handedOut is not null && Carries(handedOut, ten);
+        bool outbound = owner is null && handedOut is not null && Carries(handedOut, builtIn);
 
         // An accessor is judged with its property.
         if (member is IMethodSymbol { AssociatedSymbol: not null })
@@ -123,17 +143,17 @@ public partial class FrameworkScanTests
         return owner is not null && SymbolEqualityComparer.Default.Equals(type.OriginalDefinition, owner);
     }
 
-    private static bool IsOneOf(ITypeSymbol type, HashSet<INamedTypeSymbol> ten) =>
-        type is INamedTypeSymbol named && ten.Contains(named.OriginalDefinition);
+    private static bool IsOneOf(ITypeSymbol type, HashSet<INamedTypeSymbol> builtIn) =>
+        type is INamedTypeSymbol named && builtIn.Contains(named.OriginalDefinition);
 
-    // A type that holds one of the ten without being one: an array, a pointer, a generic type with one among its type arguments.
-    private static bool Carries(ITypeSymbol type, HashSet<INamedTypeSymbol> ten) => !IsOneOf(type, ten) && Mentions(type, ten);
+    // A type that holds one of them without being one: an array, a pointer, a generic type with one among its type arguments.
+    private static bool Carries(ITypeSymbol type, HashSet<INamedTypeSymbol> builtIn) => !IsOneOf(type, builtIn) && Mentions(type, builtIn);
 
-    private static bool Mentions(ITypeSymbol type, HashSet<INamedTypeSymbol> ten) => type switch {
-        IArrayTypeSymbol array => Mentions(array.ElementType, ten),
-        IPointerTypeSymbol pointer => Mentions(pointer.PointedAtType, ten),
-        INamedTypeSymbol named => ten.Contains(named.OriginalDefinition) || named.TypeArguments.Any(argument => Mentions(argument, ten)) ||
-            (named.ContainingType is { } containing && Mentions(containing, ten)),
+    private static bool Mentions(ITypeSymbol type, HashSet<INamedTypeSymbol> builtIn) => type switch {
+        IArrayTypeSymbol array => Mentions(array.ElementType, builtIn),
+        IPointerTypeSymbol pointer => Mentions(pointer.PointedAtType, builtIn),
+        INamedTypeSymbol named => builtIn.Contains(named.OriginalDefinition) || named.TypeArguments.Any(argument => Mentions(argument, builtIn)) ||
+            (named.ContainingType is { } containing && Mentions(containing, builtIn)),
         _ => false,
     };
 
@@ -163,6 +183,11 @@ public partial class FrameworkScanTests
     // FrameworkAssemblies.txt: of those assemblies the built-in list says which classes clone themselves, because the scans of this
     // class read them. So the file must name every assembly that the scans read. A new assembly of a shared framework fails here, and
     // is added to the file together with what the scans find in it.
+    //
+    // The .NET Framework 4.8.1 has no such test. Its assemblies that the file names are among those that the scans of it read, so what
+    // the built-in list says of them is checked there too. The others, such as System.Messaging, are other libraries for the analyzer
+    // by design, as every library that is no part of a shared framework is, and a test that pinned their names would pin a list that
+    // does not change: 4.8.1 is the last version of the .NET Framework.
     [TestMethod]
     public void FrameworkAssemblies_NameEveryAssemblyOfTheSharedFrameworks()
     {
@@ -182,7 +207,7 @@ public partial class FrameworkScanTests
         var missing = new SortedSet<string>(StringComparer.Ordinal);
         int read = 0;
 
-        foreach (string path in FindSharedFrameworks().SelectMany(directory => Directory.GetFiles(directory, "*.dll")).Where(HasMetadata))
+        foreach (string path in GetSharedFrameworkAssemblies())
         {
             read++;
             string name = System.Reflection.AssemblyName.GetAssemblyName(path).Name!;
@@ -198,7 +223,7 @@ public partial class FrameworkScanTests
             Assert.Contains(name, names, $"FrameworkAssemblies.txt names {name}.");
     }
 
-    private static bool HasMetadata(string path)
+    internal static bool HasMetadata(string path)
     {
         try
         {
@@ -210,6 +235,10 @@ public partial class FrameworkScanTests
             return false;
         }
     }
+
+    // Every assembly of the shared frameworks that the tests run on.
+    private static List<string> GetSharedFrameworkAssemblies() =>
+        [.. FindSharedFrameworks().SelectMany(directory => Directory.GetFiles(directory, "*.dll")).Where(HasMetadata)];
 
     /// <summary>
     /// Gets the folders of the shared frameworks of the runtime that the tests run on: Microsoft.NETCore.App, and Microsoft.AspNetCore.App

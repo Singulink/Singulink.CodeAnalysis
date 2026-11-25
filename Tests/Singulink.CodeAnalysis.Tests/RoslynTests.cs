@@ -10,7 +10,7 @@ namespace Singulink.CodeAnalysis.Tests;
 /// be used with a non-copyable type.
 /// </summary>
 /// <remarks>
-/// Docs: articles/concepts/roslyn-differences.md.
+/// Docs: articles/rules/roslyn-differences.md.
 /// </remarks>
 [PrefixTestClass]
 public class RoslynTests
@@ -144,7 +144,7 @@ public class RoslynTests
         {
             void M()
             {
-                var local {|#0:= GetRef()|};
+                var local = {|#0:GetRef()|};
             }
 
             ref GCHandle GetRef() => throw null;
@@ -891,7 +891,7 @@ public class RoslynTests
                 void Method(in CannotCopy cannotCopy)
                 {
                     // Test with initializer
-                    var local {|#0:= AsRef(in cannotCopy)|};
+                    var local = {|#0:AsRef(in cannotCopy)|};
 
                     // Test with assignment to local
                     local = {|#1:AsRef(in cannotCopy)|};
@@ -1097,12 +1097,12 @@ public class RoslynTests
                 {
                     S s = new();
                     MyCollection m = [{|#0:s|}, new S()];
-                    S last = s;
+                    S last = {|#1:s|};
                 }
             }
 
             namespace Singulink.CodeAnalysis { internal sealed class NonCopyableAttribute : System.Attribute { } }
             """,
-        ExpectedDiagnostics = { Verify.CopyOfStoredValue(0, "The collection takes", "S") },
+        ExpectedDiagnostics = { Verify.UsedAfterHandOff(1, "s", "S", "the collection took its value", 0) },
     }.RunAsync();
 }

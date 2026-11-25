@@ -6,7 +6,7 @@ namespace Singulink.CodeAnalysis.Tests;
 /// Tests of the language constructs that read from a value without a member being named. Each is as new as what it reads from.
 /// </summary>
 /// <remarks>
-/// Docs: articles/concepts/new-and-stored-values.md.
+/// Docs: articles/rules/new-and-stored-values.md.
 /// </remarks>
 [PrefixTestClass]
 public class LanguageConstructTests
@@ -30,8 +30,8 @@ public class LanguageConstructTests
                 var (entered, ok) = rwLock.TryEnterTuple();
                 var result = rwLock.TryEnterTuple();
                 result.guard.Dispose();
-                Guard taken {|#2:= result.guard|};
-                result.guard.Dispose();
+                Guard taken = {|#2:{|#4:result|}.guard|};
+                {|#5:result|}.guard.Dispose();
 
                 if (boxed is Guard {|#3:unboxed|}) { }
             }
@@ -41,7 +41,7 @@ public class LanguageConstructTests
         """,
         Verify.CopyByAssignmentIntoVariable(0, "Guard", "copy"),
         Verify.CopyOfStoredValue(1, "'?.' runs on", "Guard?"),
-        Verify.CopyByAssignment(2, "Guard"),
+        Verify.UsedAfterHandOff(5, "result", "(Guard guard, bool ok)", "its field \'guard\' was read", 4),
         Verify.CopyByAssignmentOutOfBox(3, "Guard", "object"));
 
     [TestMethod]
@@ -157,10 +157,10 @@ public class LanguageConstructTests
                 (_field, bool cOk) = rwLock.TryEnterTuple();
                 var (_, dOk) = tuple;
 
-                var ({|#0:e|}, eOk) = tuple;
-                (Guard {|#1:f|}, bool fOk) = tuple;
-                ({|#2:_field|}, bool gOk) = tuple;
-                var (({|#3:h|}, hNumber), hOk) = nested;
+                var ({|#0:e|}, eOk) = {|#6:tuple|};
+                (Guard {|#1:f|}, bool fOk) = {|#7:tuple|};
+                ({|#2:_field|}, bool gOk) = {|#8:tuple|};
+                var (({|#3:h|}, hNumber), hOk) = {|#10:nested|};
 
                 // The elements of a tuple literal are assigned one by one.
                 (Guard i, bool iOk) = (rwLock.Enter(), true);
@@ -170,21 +170,21 @@ public class LanguageConstructTests
                 // A Deconstruct method is a member like any other.
                 var (first, second) = pair;
                 var (key, value) = CreatePair();
-                var (storedKey, {|#5:storedValue|}) = keyValue;
+                var (storedKey, {|#5:storedValue|}) = {|#13:keyValue|};
 
                 // Each is used again here, so none of the deconstructions above is at the last use of what it reads.
-                _ = (tuple, nested, a, keyValue);
+                _ = ({|#9:tuple|}, {|#11:nested|}, {|#12:a|}, {|#14:keyValue|});
             }
         }
 
         {{Sources.Guard}}
         """,
-        Verify.CopyByAssignmentIntoVariable(0, "Guard", "e"),
-        Verify.CopyByAssignmentIntoVariable(1, "Guard", "f"),
-        Verify.CopyByAssignment(2, "Guard"),
-        Verify.CopyByAssignmentIntoVariable(3, "Guard", "h"),
-        Verify.CopyByAssignment(4, "Guard"),
-        Verify.CopyByAssignmentIntoVariable(5, "Guard", "storedValue"));
+        Verify.UsedAfterHandOff(12, "a", "Guard", "the tuple took its value", 4),
+        Verify.UsedAfterHandOff(7, "tuple", "(Guard guard, bool ok)", "its value was deconstructed", 6),
+        Verify.UsedAfterHandOff(8, "tuple", "(Guard guard, bool ok)", "its value was deconstructed", 7),
+        Verify.UsedAfterHandOff(9, "tuple", "(Guard guard, bool ok)", "its value was deconstructed", 8),
+        Verify.UsedAfterHandOff(11, "nested", "((Guard guard, int number) inner, bool ok)", "its value was deconstructed", 10),
+        Verify.UsedAfterHandOff(14, "keyValue", "System.Collections.Generic.KeyValuePair<int, Guard>", "its value was deconstructed", 13));
 
     [TestMethod]
     public Task TupleLiteral_ElementsAreMovedIn() => Verify.AnalyzerAsync(
@@ -218,15 +218,15 @@ public class LanguageConstructTests
                 Guard[] fromLocal = new[] { {|#2:parameter|} };
 
                 // The last use of the parameter moves it in.
-                List<Guard> list = [rwLock.Enter(), parameter];
+                List<Guard> list = [rwLock.Enter(), {|#3:parameter|}];
             }
         }
 
         {{Sources.Guard}}
         """,
         Verify.CopyOfStoredValue(0, "The tuple takes", "Guard"),
-        Verify.CopyOfStoredValue(1, "The tuple takes", "Guard"),
-        Verify.CopyOfStoredValue(2, "The array takes", "Guard"));
+        Verify.UsedAfterHandOff(2, "parameter", "Guard", "the tuple took its value", 1),
+        Verify.UsedAfterHandOff(3, "parameter", "Guard", "the array took its value", 2));
 
     [TestMethod]
     public Task TupleLiteral_WithContainers() => Verify.AnalyzerAsync(
@@ -382,7 +382,7 @@ public class LanguageConstructTests
                 MyCollection<Guard> a = {|#0:[rwLock.Enter()]|};
                 var b = new MyCollection<Guard> { {|#1:rwLock.Enter()|} };
                 Sack<Guard> c = {|#2:[rwLock.Enter()]|};
-                MyCollection<Guard> d = {|#3:[{|#4:.. stored|}]|};
+                MyCollection<Guard> d = {|#3:[.. {|#4:stored|}]|};
 
                 // Without an element there is no call of Add, and both members of List<T> are on the built-in list.
                 MyCollection<Guard> e = [];
@@ -423,11 +423,11 @@ public class LanguageConstructTests
 
             void M(RwLock rwLock, Guard[] array, Guard[,] matrix, Span<Guard> span, ReadOnlySpan<Guard> readOnlySpan, List<Guard> list)
             {
-                foreach (Guard {|#0:item|} in array) { }
-                foreach (var {|#1:item|} in matrix) { }
-                foreach (Guard {|#2:item|} in span) { }
-                foreach (var {|#3:item|} in readOnlySpan) { }
-                foreach (var {|#4:item|} in CreateArray()) { }
+                foreach (Guard item in {|#0:array|}) { }
+                foreach (var item in {|#1:matrix|}) { }
+                foreach (Guard item in {|#2:span|}) { }
+                foreach (var item in {|#3:readOnlySpan|}) { }
+                foreach (var item in {|#4:CreateArray()|}) { }
 
                 foreach (ref Guard item in span) { }
                 foreach (ref readonly Guard item in span) { }
@@ -441,7 +441,7 @@ public class LanguageConstructTests
 
                 // The variables of a deconstruction are as new as the element.
                 foreach (var (guard, number) in CreateTuples()) { }
-                foreach (var ({|#6:guard|}, number) in new (Guard, int)[1]) { }
+                foreach (var (guard, number) in {|#6:new (Guard, int)[1]|}) { }
 
                 // Elements that do not carry the non-copyable type are not looked at.
                 foreach (int number in new int[1]) { }
@@ -488,12 +488,12 @@ public class LanguageConstructTests
             void M(RwLock rwLock, (Guard guard, bool ok) stored)
             {
                 Guard fromNew = rwLock.TryEnterTuple().guard;
-                Guard fromStored {|#0:= stored.guard|};
+                Guard fromStored = {|#0:stored.guard|};
                 stored.guard.Dispose();
                 ref Guard reference = ref stored.guard;
 
                 // A field of an object is a stored value, even if the object has just been created.
-                Guard fromObject {|#1:= new Holder().Field|};
+                Guard fromObject = {|#1:new Holder().Field|};
             }
         }
 
@@ -796,15 +796,15 @@ public class LanguageConstructTests
                 _maybe ??= {|#1:parameter|};
 
                 // At its last use a variable is moved from.
-                _maybe ??= stored;
-                _maybe ??= parameter;
+                _maybe ??= {|#2:stored|};
+                _maybe ??= {|#3:parameter|};
             }
         }
 
         {{Sources.Guard}}
         """,
-        Verify.CopyByAssignment(0, "Guard"),
-        Verify.CopyByAssignment(1, "Guard?"));
+        Verify.UsedAfterHandOff(2, "stored", "Guard", "its value was assigned", 0),
+        Verify.UsedAfterHandOff(3, "parameter", "Guard?", "its value was assigned", 1));
 
     [TestMethod]
     public Task InterpolatedStringHandler_FormatsAContainerAsAPlainStringDoes() => Verify.AnalyzerAsync(
@@ -1058,14 +1058,14 @@ public class LanguageConstructTests
                 // One that the operator takes by value is copied. The last use of the parameter is moved in.
                 Counter f = {|#0:_counter|} + 1;
                 Counter g = -{|#1:parameter|};
-                bool alsoSame = {|#2:_counter|} == parameter;
+                bool alsoSame = {|#2:_counter|} == {|#3:parameter|};
             }
 
             Counter Returned() => Counter.Make() + 1;
         }
         """,
         Verify.CopyOfStoredValue(0, "'Counter.operator +(Counter, int)' receives", "Counter"),
-        Verify.CopyOfStoredValue(1, "'Counter.operator -(Counter)' receives", "Counter"),
+        Verify.UsedAfterHandOff(3, "parameter", "Counter", "'Counter.operator -(Counter)' received its value", 1),
         Verify.CopyOfStoredValue(2, "'Counter.operator ==(Counter, Counter)' receives", "Counter"));
 
     [TestMethod]
@@ -1168,12 +1168,12 @@ public class LanguageConstructTests
                 Guard fromNew = Create()[0];
 
                 // Reading an element by value copies it, and copying the buffer copies them all.
-                Guard copy {|#1:= _buffer[0]|};
-                Guard fromGeneric {|#2:= _generic[0]|};
-                GuardBuffer whole {|#3:= _buffer|};
-                Buffer<Guard> wholeGeneric {|#4:= _generic|};
+                Guard copy = {|#1:_buffer[0]|};
+                Guard fromGeneric = {|#2:_generic[0]|};
+                GuardBuffer whole = {|#3:_buffer|};
+                Buffer<Guard> wholeGeneric = {|#4:_generic|};
 
-                foreach (Guard {|#5:guard|} in _buffer) { }
+                foreach (Guard guard in {|#5:_buffer|}) { }
 
                 // Through a read-only reference to the buffer a member that is not readonly runs on a copy of the element.
                 {|#6:byIn[0]|}.Dispose();
@@ -1216,14 +1216,14 @@ public class LanguageConstructTests
 
                 // A stored value is copied in, and reading an element by value copies it out.
                 Span<Guard> copied = stackalloc Guard[] { Make(), {|#0:_stored|} };
-                Guard copy {|#1:= empty[0]|};
+                Guard copy = {|#1:empty[0]|};
 
-                foreach (Guard {|#2:guard|} in empty) { }
+                foreach (Guard guard in {|#2:empty|}) { }
 
                 // The same through a pointer.
                 Guard* pointer = stackalloc Guard[2];
                 pointer[0].Dispose();
-                Guard viaPointer {|#3:= pointer[0]|};
+                Guard viaPointer = {|#3:pointer[0]|};
             }
         }
 
@@ -1477,8 +1477,8 @@ public class LanguageConstructTests
                 var (i, j) = readOnlyPair;
 
                 // A 'foreach' copies each element of an array or a span before it deconstructs it.
-                foreach ({|#3:var (k, l)|} in array) { }
-                foreach ({|#4:var (m, n)|} in span) { }
+                foreach (var (k, l) in {|#3:array|}) { }
+                foreach (var (m, n) in {|#4:span|}) { }
                 foreach (var (o, p) in readOnlyArray) { }
 
                 foreach (ref Pair pair in span)
@@ -1617,14 +1617,14 @@ public class LanguageConstructTests
             static void Copy(RwLock rwLock)
             {
                 var result = (rwLock.Enter(), 1);
-                (Guard guard, int number) copy {|#0:= result|};
-                (Guard guard, int number) last = result;
+                (Guard guard, int number) copy = {|#0:result|};
+                (Guard guard, int number) last = {|#1:result|};
             }
         }
 
         {{Sources.Guard}}
         """,
-        Verify.CopyByAssignment(0, "(Guard guard, int number)"));
+        Verify.UsedAfterHandOff(1, "result", "(Guard, int)", "its value was assigned to \'copy\'", 0));
 
     [TestMethod]
     public Task Pattern_AValueGoesToOneVariableOnly() => Verify.AnalyzerAsync(
@@ -1826,7 +1826,7 @@ public class LanguageConstructTests
                 var (read, write) = {|#1:lease|};
                 read.Dispose();
                 write.Dispose();
-                lease.Dispose();
+                {|#5:lease|}.Dispose();
             }
 
             void Parameter(Lease lease, ref Lease byRef)
@@ -1835,7 +1835,7 @@ public class LanguageConstructTests
                 (read, write) = {|#2:lease|};
                 read.Dispose();
                 write.Dispose();
-                lease.Dispose();
+                {|#6:lease|}.Dispose();
 
                 var (otherRead, otherWrite) = {|#3:byRef|};
                 otherRead.Dispose();
@@ -1877,8 +1877,8 @@ public class LanguageConstructTests
         {{Sources.Guard}}
         """,
         Verify.DeconstructionOfStoredValue(0, "Lease", "Lease.Deconstruct(out Guard, out Guard)"),
-        Verify.DeconstructionOfStoredValue(1, "Lease", "Lease.Deconstruct(out Guard, out Guard)"),
-        Verify.DeconstructionOfStoredValue(2, "Lease", "Lease.Deconstruct(out Guard, out Guard)"),
+        Verify.UsedAfterHandOff(5, "lease", "Lease", "its value was deconstructed", 1),
+        Verify.UsedAfterHandOff(6, "lease", "Lease", "its value was deconstructed", 2),
         Verify.DeconstructionOfStoredValue(3, "Lease", "Lease.Deconstruct(out Guard, out Guard)"),
         Verify.DeconstructionOfStoredValue(4, "Lease", "Lease.Deconstruct(out Guard, out Guard)"));
 
@@ -2035,7 +2035,7 @@ public class LanguageConstructTests
                 public void Twice()
                 {
                     Sink.Take({|#0:guard|});
-                    Sink.Take(guard);
+                    Sink.Take({|#7:guard|});
                 }
 
                 // A lambda captures the receiver, which makes a field of it.
@@ -2047,7 +2047,7 @@ public class LanguageConstructTests
                 public void ThroughAnotherTwice()
                 {
                     {|#2:guard|}.Once();
-                    guard.Once();
+                    {|#8:guard|}.Once();
                 }
             }
 
@@ -2081,7 +2081,7 @@ public class LanguageConstructTests
                 // Used again: the first use is a copy.
                 Guard twice = rwLock.Enter();
                 {|#4:twice|}.Once();
-                twice.Dispose();
+                {|#9:twice|}.Dispose();
 
                 // A field is a stored value.
                 {|#5:_held|}.Once();
@@ -2097,20 +2097,20 @@ public class LanguageConstructTests
                 }
                 finally
                 {
-                    guard.Dispose();
+                    {|#10:guard|}.Dispose();
                 }
             }
         }
 
         {{Sources.Guard}}
         """,
-        Verify.CopyOfStoredValue(0, "'Sink.Take(Guard)' receives", "Guard"),
+        Verify.UsedAfterHandOff(7, "guard", "Guard", "'Sink.Take(Guard)' received its value", 0),
+        Verify.UsedAfterHandOff(8, "guard", "Guard", "'Extensions.extension(Guard).Once()' received its value", 2),
+        Verify.UsedAfterHandOff(9, "twice", "Guard", "'Extensions.extension(Guard).Once()' received its value", 4),
+        Verify.UsedAfterHandOffInHandler(10, "guard", "Guard", "'Extensions.extension(Guard).Once()' received its value", 6),
         Verify.CopyOfStoredValue(1, "'Sink.Take(Guard)' receives", "Guard"),
-        Verify.CopyOfStoredValue(2, "'Extensions.extension(Guard).Once()' receives", "Guard"),
         Verify.CopyOfStoredValue(3, "'Sink.Take(Guard)' receives", "Guard"),
-        Verify.CopyOfStoredValue(4, "'Extensions.extension(Guard).Once()' receives", "Guard"),
-        Verify.CopyOfStoredValue(5, "'Extensions.extension(Guard).Once()' receives", "Guard"),
-        Verify.CopyOfStoredValue(6, "'Extensions.extension(Guard).Once()' receives", "Guard", usedByHandler: "guard"));
+        Verify.CopyOfStoredValue(5, "'Extensions.extension(Guard).Once()' receives", "Guard"));
 
     // An 'await foreach' awaits what MoveNextAsync and DisposeAsync return. The members of that awaiting are bound by the compiler,
     // and the compiler that the analyzer is built against does not give them, so an awaitable of the project's own over a

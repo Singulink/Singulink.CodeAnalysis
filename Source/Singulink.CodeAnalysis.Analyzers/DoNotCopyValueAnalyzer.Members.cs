@@ -957,7 +957,8 @@ public sealed partial class DoNotCopyValueAnalyzer
                 return null;
             }
 
-            var site = operation.Syntax;
+            // What the spread runs is reported at what it enumerates, which an unsafe(...) expression can hold, and the '..' cannot.
+            var site = operand.Syntax;
             var enumeratorType = getEnumerator.ReturnType;
             var handledOperand = operand;
             CheckExtensionReceiver(operand, getEnumerator);
@@ -1100,8 +1101,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                 IsBoxType(elementType) &&
                 types.IsNonCopyableType(unboxed.Type))
             {
-                var location = unboxed.Locations.FirstOrDefault(l => l.IsInSource) ?? operation.LoopControlVariable.Syntax.GetLocation();
-                Report(Rules.CopyByAssignmentOutOfBox, location, unboxed.Type, elementType);
+                Report(Rules.CopyByAssignmentOutOfBox, collection.Syntax, unboxed.Type, elementType);
                 return;
             }
 
@@ -1178,8 +1178,9 @@ public sealed partial class DoNotCopyValueAnalyzer
                 bool isBoxed = types.IsNonCopyableType(elementType) && variableType is { IsValueType: false } && !types.IsNonCopyableType(variableType);
 
                 // The loop converts each element to the type of its variable, with no conversion in the operation tree: a container to a
-                // type that hides its elements, or a value to a reference type, which boxes it.
-                SyntaxNode conversionSite = syntax is ForEachStatementSyntax { Type: var typeSyntax } ? typeSyntax : declarator.Syntax;
+                // type that hides its elements, or a value to a reference type, which boxes it. What the loop does with each element is
+                // reported at the collection, which an unsafe(...) expression can hold, and the declaration of the variable cannot.
+                var conversionSite = collection.Syntax;
 
                 if (types.HidesNonCopyableType(elementType, variableType))
                 {
@@ -1199,8 +1200,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                 }
                 else if (!elementIsNew && declarator.Symbol.RefKind is RefKind.None && types.IsNonCopyableType(elementType))
                 {
-                    var location = declarator.Symbol.Locations.FirstOrDefault(l => l.IsInSource) ?? declarator.Syntax.GetLocation();
-                    Report(Rules.CopyByAssignmentIntoForEachVariable, location, elementType, declarator.Symbol.Name);
+                    Report(Rules.CopyByAssignmentIntoForEachVariable, collection.Syntax, elementType, declarator.Symbol.Name);
                 }
             }
             else if (syntax is ForEachVariableStatementSyntax variableSyntax)
@@ -1215,11 +1215,11 @@ public sealed partial class DoNotCopyValueAnalyzer
                     bool takesByValue = deconstruct.IsExtensionMethod && NonCopyableTypes.GetUnreduced(deconstruct).Parameters is [{ RefKind: RefKind.None }, ..];
 
                     if (takesByValue || deconstruct is { IsStatic: false, IsExtensionMethod: false, IsReadOnly: false })
-                        Report(Rules.CopyByAssignmentForDeconstruct, variableSyntax.Variable, elementType, Display(deconstruct));
+                        Report(Rules.CopyByAssignmentForDeconstruct, collection.Syntax, elementType, Display(deconstruct));
                 }
 
                 MarkDeconstructionTargets(variable, handled);
-                CheckDeconstruction(variable, null, deconstruction, elementIsNew, handled, elementType, variableSyntax.Variable);
+                CheckDeconstruction(variable, null, deconstruction, elementIsNew, handled, elementType, collection.Syntax);
             }
         }
 
@@ -1259,7 +1259,9 @@ public sealed partial class DoNotCopyValueAnalyzer
         }
 
         /// <summary>
-        /// Checks the Dispose member that a 'using' calls on a resource whose type carries a non-copyable type.
+        /// Checks the Dispose member that a 'using' calls on a resource whose type carries a non-copyable type. The report is at the
+        /// value of the resource, as the report of a copy is, so that an 'unsafe(...)' expression around the value covers it: for a
+        /// declared variable that is its initializer, since an 'unsafe' block around the declaration would end the scope of the variable.
         /// </summary>
         private void CheckDisposal(IOperation resources, bool isAsynchronous)
         {
@@ -1268,7 +1270,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                 foreach (var declaration in group.Declarations)
                 {
                     foreach (var declarator in declaration.Declarators)
-                        CheckDisposal(declarator.Syntax, declarator.Symbol.Type, isAsynchronous);
+                        CheckDisposal(declarator.Initializer?.Value.Syntax ?? declarator.Syntax, declarator.Symbol.Type, isAsynchronous);
                 }
             }
             else

@@ -8,7 +8,7 @@ namespace Singulink.CodeAnalysis.Tests;
 /// non-copyable type (SCA1025), and of the 'trusted' line of a list file that vouches for one.
 /// </summary>
 /// <remarks>
-/// Docs: articles/diagnostics/sca1025.md, articles/concepts/unchecked-code.md and articles/guides/symbol-list.md.
+/// Docs: articles/diagnostics/sca1025.md, articles/rules/unchecked-code.md and articles/guides/symbol-list.md.
 /// </remarks>
 [PrefixTestClass]
 public class UncheckedAssemblyTests

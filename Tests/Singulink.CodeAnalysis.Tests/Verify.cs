@@ -19,6 +19,11 @@ internal static class Verify
     public const string ListFileName = "NonCopyableSymbols.txt";
 
     /// <summary>
+    /// The feature flag that turns the updated memory safety rules on.
+    /// </summary>
+    public const string UpdatedRulesFeature = "updated-memory-safety-rules";
+
+    /// <summary>
     /// The marker that the targets file of the package adds to an assembly that was built with the analyzer.
     /// </summary>
     public const string AnalyzedMarker = """[assembly: System.Reflection.AssemblyMetadata("Singulink.CodeAnalysis.Analyzed", "1")]""";
@@ -74,6 +79,61 @@ internal static class Verify
     public static Task AnalyzerAsync([StringSyntax("C#-test")] string source, params DiagnosticResult[] expected)
     {
         var test = new Test { TestCode = source };
+        test.ExpectedDiagnostics.AddRange(expected);
+        return test.RunAsync();
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether the compiler of the target applies the updated memory safety rules: under them, the 'unsafe'
+    /// modifier gives no unsafe context.
+    /// </summary>
+    public static bool CompilerHasUpdatedRules => CompilerHasUpdatedRulesLazy.Value;
+
+    private static readonly Lazy<bool> CompilerHasUpdatedRulesLazy = new(() => CreateUpdatedRulesProbe(withFlag: true)
+        .GetDiagnostics().Any(d => d.Severity is DiagnosticSeverity.Error));
+
+    /// <summary>
+    /// Creates a compilation that dereferences a pointer in an 'unsafe' method, which is an error under the updated memory safety rules.
+    /// </summary>
+    public static CSharpCompilation CreateUpdatedRulesProbe(bool withFlag)
+    {
+        var options = new CSharpParseOptions(LanguageVersion.Preview);
+
+        if (withFlag)
+            options = options.WithFeatures([new(UpdatedRulesFeature, "true")]);
+
+        return CSharpCompilation.Create(
+            "Probe",
+            [CSharpSyntaxTree.ParseText("class C { unsafe void M() { int* p = null; _ = *p; } }", options)],
+            [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, allowUnsafe: true));
+    }
+
+    /// <summary>
+    /// Runs the analyzer on test code under the updated memory safety rules, with the preview version of the language, which has
+    /// <c>unsafe(expr)</c>. The test is inconclusive with a compiler that does not apply the updated rules.
+    /// </summary>
+    public static Task UpdatedRulesAsync([StringSyntax("C#-test")] string source, params DiagnosticResult[] expected)
+    {
+        if (!CompilerHasUpdatedRules)
+            Assert.Inconclusive("The compiler of this target does not apply the updated memory safety rules.");
+
+        var test = new Test { TestCode = source, LanguageVersion = LanguageVersion.Preview, Features = [UpdatedRulesFeature] };
+        test.ExpectedDiagnostics.AddRange(expected);
+        return test.RunAsync();
+    }
+
+    /// <summary>
+    /// Runs the analyzer on test code with a user list file under the updated memory safety rules, as
+    /// <see cref="UpdatedRulesAsync(string, DiagnosticResult[])"/> does.
+    /// </summary>
+    public static Task UpdatedRulesAsync([StringSyntax("C#-test")] string source, string listFile, params DiagnosticResult[] expected)
+    {
+        if (!CompilerHasUpdatedRules)
+            Assert.Inconclusive("The compiler of this target does not apply the updated memory safety rules.");
+
+        var test = new Test { TestCode = source, LanguageVersion = LanguageVersion.Preview, Features = [UpdatedRulesFeature] };
+        test.TestState.AdditionalFiles.Add((ListFileName, listFile));
         test.ExpectedDiagnostics.AddRange(expected);
         return test.RunAsync();
     }
@@ -265,6 +325,56 @@ internal static class Verify
         $"{what} a copy of the stored value of non-copyable type '{type}'{HandlerHint(usedByHandler, usedAfterFinally)}. Use the value in place, use a new value, " +
         "or move the stored value out first with NonCopyable.Move.");
 
+    /// <summary>
+    /// A use of a variable after its value was handed over by value.
+    /// </summary>
+    /// <param name="location">The number of the marked use.</param>
+    /// <param name="variable">The variable.</param>
+    /// <param name="type">The non-copyable type of the variable.</param>
+    /// <param name="handOff">What the first hand-off did with the variable: "'C.Take(Guard)' received its value", "its value was returned".</param>
+    /// <param name="handOffs">The numbers of the marked hand-offs that reach the use, in the order of the source.</param>
+    public static DiagnosticResult UsedAfterHandOff(int location, string variable, string type, string handOff, params int[] handOffs) => WithLocations(
+        Diagnostic(
+            DiagnosticIds.UsedAfterHandOff,
+            location,
+            $"'{variable}' is used after {handOff}, so that hand-off was a copy of non-copyable type '{type}'. Use '{variable}' only before " +
+            $"the hand-off, pass it by reference, or hand over NonCopyable.Move(ref {variable})."),
+        handOffs);
+
+    /// <summary>
+    /// A use of a variable after its value was handed over by value, where only a handler uses the variable after the hand-off.
+    /// </summary>
+    public static DiagnosticResult UsedAfterHandOffInHandler(int location, string variable, string type, string handOff, params int[] handOffs) => WithLocations(
+        Diagnostic(
+            DiagnosticIds.UsedAfterHandOff,
+            location,
+            $"'{variable}' is used after {handOff}, so that hand-off was a copy of non-copyable type '{type}': a 'catch', a 'finally' or an " +
+            $"exception filter that uses '{variable}' can still run after the hand-off. Use '{variable}' only before the hand-off, or, where a " +
+            "'catch' uses it, store the value at the end of the 'try' block, after everything that can throw."),
+        handOffs);
+
+    /// <summary>
+    /// A use of a variable after its value was handed over by value, where the hand-off would be a commit at the end of a 'try' block but
+    /// for a reference that can be a null reference.
+    /// </summary>
+    public static DiagnosticResult UsedAfterHandOffBeforeNullReference(int location, string variable, string type, string handOff, string reference, params int[] handOffs) => WithLocations(
+        Diagnostic(
+            DiagnosticIds.UsedAfterHandOff,
+            location,
+            $"'{variable}' is used after {handOff}, so that hand-off was a copy of non-copyable type '{type}': the 'try' block then reads or " +
+            $"writes through '{reference}', which can be a null reference, so this can still run. Check the reference first, with " +
+            $"NonCopyable.ThrowIfNullRef(in {reference}) or with a method whose parameter is marked [NotNullRef], which counts only in an " +
+            "assembly that was built with the analyzer."),
+        handOffs);
+
+    private static DiagnosticResult WithLocations(DiagnosticResult result, int[] locations)
+    {
+        foreach (int location in locations)
+            result = result.WithLocation(location);
+
+        return result;
+    }
+
     public static DiagnosticResult SwitchStatementMatchesCopy(int location, string type) => Diagnostic(
         DiagnosticIds.UnsupportedUse,
         location,
@@ -321,7 +431,7 @@ internal static class Verify
         "where a derived class can hold a non-copyable value that the clone copies. Seal the class, copy its fields in a constructor " +
         "instead, or suppress this warning as a rule that no derived class may hold a non-copyable value. To keep the class open and " +
         $"cloneable in a library, add '{id ?? "T:" + type};clones' to the symbol list file that ships with the library, so that a class that " +
-        "derives from it in another project gets a warning for a non-copyable value, and then suppress this warning.");
+        "derives from it in another project is reported for a non-copyable value, and then suppress this warning.");
 
     public static DiagnosticResult MemberwiseCloneThroughListedBase(int location, string type, string listedBase, string fieldType, string field, bool isParameter = false) => Diagnostic(
         DiagnosticIds.CloningBase,
@@ -374,7 +484,7 @@ internal static class Verify
         $"'{type}' derives from '{listedBase}', whose own code clones an object field by field with MemberwiseClone, so a clone of an object " +
         $"of '{type}' copies its field '{field}' of type '{fieldType}' with the non-copyable value that a project binds to its type parameter. " +
         $"Suppress this warning only where the code of '{type}' never clones its objects: a project that binds a non-copyable type gets a " +
-        $"warning of its own where it hands such an object to the code of '{listedBase}'. Or hold the value in an object of a class that " +
+        $"report of its own where it hands such an object to the code of '{listedBase}'. Or hold the value in an object of a class that " +
         $"'{type}' refers to, which the clone shares.");
 
     public static DiagnosticResult CloningUseConversion(int location, string source, string target, string cloning, string boundType, string boundTo) => Diagnostic(
@@ -462,7 +572,7 @@ internal static class Verify
         location,
         $"'{member}' clones its object through '{through}', and an object of '{type}' can hold a non-copyable value that another project " +
         $"derives or binds, where nothing shows the clone. Add '{id};clones' to the symbol list file that ships with the library, so that a " +
-        $"call of '{member}' on such an object gets a warning where it is made" +
+        $"call of '{member}' on such an object is reported where it is made" +
         (cloningOfLibrary is null ? string.Empty : $"; once the 'clones' lines name every member of '{cloningOfLibrary}' that clones its object or hands it on, write its line as '{cloningId};clones=complete'") +
         ".");
 
@@ -602,6 +712,43 @@ internal static class Verify
             .WithMessage(
                 $"This line of the symbol list file names '{id}' for {added}, where the built-in framework symbol list names it for '{builtIn}' " +
                 "only. It has no effect, because a line of a file can claim less of a member than the built-in list, not more.");
+
+    /// <summary>
+    /// A 'borrowswhen' line of a file that lists outcomes which the built-in framework symbol list does not list for the member.
+    /// </summary>
+    /// <param name="line">The line in the list file.</param>
+    /// <param name="endColumn">The column after the end of the line.</param>
+    /// <param name="id">The ID that the line names.</param>
+    /// <param name="outcomes">The outcomes in words: "the outcome 'true'".</param>
+    public static DiagnosticResult SafeListClaimsMoreOutcomesThanBuiltIn(int line, int endColumn, string id, string outcomes) =>
+        new DiagnosticResult(DiagnosticIds.SafeListLine, DiagnosticSeverity.Warning)
+            .WithSpan(ListFileName, line, 1, line, endColumn)
+            .WithMessage(
+                $"This line of the symbol list file lists {outcomes} for '{id}' with 'borrowswhen', which the built-in framework symbol list " +
+                "does not list for that member. That claims more than the built-in list does, and has no effect, because a line of a file " +
+                "can claim less of a member than the built-in list, not more.");
+
+    /// <summary>
+    /// A 'borrows' line of a file for a member that the built-in framework symbol list names with 'borrowswhen' or with no marker.
+    /// </summary>
+    /// <param name="line">The line in the list file.</param>
+    /// <param name="endColumn">The column after the end of the line.</param>
+    /// <param name="id">The ID that the line names.</param>
+    /// <param name="builtIn">What the built-in entry says, in words: "with 'borrowswhen=false'", "with no marker".</param>
+    public static DiagnosticResult SafeListBorrowsBeyondBuiltIn(int line, int endColumn, string id, string builtIn) =>
+        new DiagnosticResult(DiagnosticIds.SafeListLine, DiagnosticSeverity.Warning)
+            .WithSpan(ListFileName, line, 1, line, endColumn)
+            .WithMessage(
+                $"This line of the symbol list file marks '{id}' with 'borrows', where the built-in framework symbol list names it {builtIn}. " +
+                "That claims more than the built-in list does, and has no effect, because a line of a file can claim less of a member than " +
+                "the built-in list, not more.");
+
+    public static DiagnosticResult SafeListUnknownOutcome(int line, int endColumn, string outcome) =>
+        new DiagnosticResult(DiagnosticIds.SafeListLine, DiagnosticSeverity.Warning)
+            .WithSpan(ListFileName, line, 1, line, endColumn)
+            .WithMessage(
+                $"This line of the symbol list file gives 'borrowswhen' the outcome '{outcome}', which the analyzer does not know. It is left " +
+                "out, so the line claims less of the member: the outcomes are 'true' and 'false'.");
 
     public static DiagnosticResult RequiresCopyableMember(int location, string member, string type, string typeParameter) => Diagnostic(
         DiagnosticIds.RequiresCopyable,
@@ -1052,7 +1199,7 @@ internal static class Verify
         DiagnosticIds.NotNullRefNotChecked,
         location,
         $"The analyzer does not check that '{member}' returns only if the reference that it is given for parameter '{parameter}' refers to " +
-        "something, as [NotNullRef] says: its warnings about a [MovedFrom] parameter and about a value that is committed at the end of a " +
+        "something, as [NotNullRef] says: its reports about a [MovedFrom] parameter and about a value that is committed at the end of a " +
         "'try' block rest on that. Verify and test the method, then suppress this warning here.");
 
     /// <summary>
@@ -1192,14 +1339,14 @@ internal static class Verify
         DiagnosticIds.ForeignNonCopyableAttribute,
         location,
         $"'{attribute}' is not the attribute that the analyzer reads: only 'Singulink.CodeAnalysis.NonCopyableAttribute' is recognised, so a " +
-        "struct that is marked with this class is copied with no warning. Declare the class in the namespace 'Singulink.CodeAnalysis', or " +
+        "struct that is marked with this class is copied with nothing reported. Declare the class in the namespace 'Singulink.CodeAnalysis', or " +
         "suppress this warning if the attribute is meant for something else.");
 
     public static DiagnosticResult NonCopyableAttributeWithNoSuffix(int location, string attribute) => Diagnostic(
         DiagnosticIds.ForeignNonCopyableAttribute,
         location,
         $"'{attribute}' is not the attribute that the analyzer reads: only 'Singulink.CodeAnalysis.NonCopyableAttribute' is recognised, by " +
-        "that name, so a struct that is marked with this class is copied with no warning. Name the class 'NonCopyableAttribute' and declare " +
+        "that name, so a struct that is marked with this class is copied with nothing reported. Name the class 'NonCopyableAttribute' and declare " +
         "it in the namespace 'Singulink.CodeAnalysis', or suppress this warning if the attribute is meant for something else.");
 
     public static DiagnosticResult ForeignNonCopyableAttributeUse(int location, string attribute, string assembly, string effect) => Diagnostic(
@@ -1242,6 +1389,22 @@ internal static class Verify
         new DiagnosticResult(id, DiagnosticSeverity.Warning).WithLocation(location).WithMessage(message);
 
     /// <summary>
+    /// The IDs of copies, hand-offs and wrong declarations: under the updated memory safety rules an error that cannot be suppressed, and
+    /// a warning where it is reported in code that is in an unsafe context. Under the current rules every ID is an ordinary warning.
+    /// </summary>
+    public static readonly ImmutableHashSet<string> EnforcedIds = [
+        "SCA1001", "SCA1002", "SCA1003", "SCA1004", "SCA1005", "SCA1006", "SCA1007", "SCA1008", "SCA1009", "SCA1010", "SCA1011", "SCA1012",
+        "SCA1013", "SCA1014", "SCA1015", "SCA1016", "SCA1020", "SCA1021", "SCA1022", "SCA1023", "SCA1024", "SCA1030", "SCA1031", "SCA1032",
+        "SCA1033", "SCA1040", "SCA1041", "SCA1043", "SCA1044", "SCA1046", "SCA1048",
+    ];
+
+    /// <summary>
+    /// Gets the result as the error that its rule is reported with under the updated memory safety rules, outside an unsafe context. The
+    /// helpers give the warning, which it is everywhere under the current rules and in an unsafe context under the updated ones.
+    /// </summary>
+    public static DiagnosticResult AsError(this DiagnosticResult result) => result.WithSeverity(DiagnosticSeverity.Error);
+
+    /// <summary>
     /// A test of the analyzer on .NET 10, with the latest C# version and a reference to the attributes package.
     /// </summary>
     public sealed class Test : CSharpAnalyzerTest<DoNotCopyValueAnalyzer, DefaultVerifier>
@@ -1265,6 +1428,13 @@ internal static class Verify
             // The attributes assembly is the one for .NET 10, which the compiler remarks on when warnings are checked.
             DisabledDiagnostics.Add("CS1701");
             TestState.AdditionalReferences.Add(typeof(NonCopyableAttribute).Assembly);
+
+            // The testing library runs each test again under a '#pragma warning disable' line, and takes a diagnostic to be suppressible
+            // or not by its ID: not where any descriptor of the ID is not configurable. Every ID of a copy has such a descriptor, the error
+            // of the updated memory safety rules, so the library would expect the ordinary warning of the current rules to stay. The
+            // added line also moves the lines that a message names. SeverityTests checks what '#pragma', NoWarn and [SuppressMessage] do
+            // under both rule sets.
+            TestBehaviors |= TestBehaviors.SkipSuppressionCheck;
         }
 
         public LanguageVersion LanguageVersion { get; init; } = LanguageVersion.Latest;
@@ -1299,6 +1469,17 @@ internal static class Verify
         /// </summary>
         public bool ChecksOverflow { get; init; }
 
+        /// <summary>
+        /// Gets the features of the compiler that the project turns on, as <c>&lt;Features&gt;</c> in the project file does, such as
+        /// <c>updated-memory-safety-rules</c>.
+        /// </summary>
+        public string[] Features { get; init; } = [];
+
+        /// <summary>
+        /// Gets the IDs that the project suppresses, as <c>&lt;NoWarn&gt;</c> in the project file does.
+        /// </summary>
+        public string[] NoWarn { get; init; } = [];
+
         protected override Task RunImplAsync(CancellationToken cancellationToken)
         {
             if (_buildProperties.Count > 0)
@@ -1311,10 +1492,27 @@ internal static class Verify
             return base.RunImplAsync(cancellationToken);
         }
 
-        protected override CompilationOptions CreateCompilationOptions() =>
-            ((CSharpCompilationOptions)base.CreateCompilationOptions()).WithOverflowChecks(ChecksOverflow);
+        protected override CompilationOptions CreateCompilationOptions()
+        {
+            var options = ((CSharpCompilationOptions)base.CreateCompilationOptions()).WithOverflowChecks(ChecksOverflow);
 
-        protected override ParseOptions CreateParseOptions() =>
-            ((CSharpParseOptions)base.CreateParseOptions()).WithLanguageVersion(LanguageVersion).WithPreprocessorSymbols(PreprocessorSymbols);
+            return NoWarn.Length is 0
+                ? options
+                : options.WithSpecificDiagnosticOptions(options.SpecificDiagnosticOptions.SetItems(NoWarn.Select(id => KeyValuePair.Create(id, ReportDiagnostic.Suppress))));
+        }
+
+        protected override ParseOptions CreateParseOptions()
+        {
+            var options = ((CSharpParseOptions)base.CreateParseOptions()).WithLanguageVersion(LanguageVersion).WithPreprocessorSymbols(PreprocessorSymbols);
+            return Features.Length is 0 ? options : options.WithFeatures(options.Features.Concat(Features.Select(feature => KeyValuePair.Create(feature, "true"))));
+        }
+
+        /// <summary>
+        /// Includes every diagnostic of the analyzer. Its errors and warnings carry the tag of a compiler diagnostic, so that a
+        /// [SuppressMessage] does not suppress them, and the testing library would otherwise judge them by the level of compiler
+        /// diagnostics that a test checks.
+        /// </summary>
+        protected override bool IsCompilerDiagnosticIncluded(Diagnostic diagnostic, CompilerDiagnostics compilerDiagnostics) =>
+            diagnostic.Id.StartsWith("SCA", StringComparison.Ordinal) || base.IsCompilerDiagnosticIncluded(diagnostic, compilerDiagnostics);
     }
 }

@@ -6,7 +6,7 @@ namespace Singulink.CodeAnalysis.Tests;
 /// Tests of the move on the last use: a variable that is never used again is a new value where it is used for the last time.
 /// </summary>
 /// <remarks>
-/// Docs: articles/concepts/last-use.md.
+/// Docs: articles/rules/last-use.md.
 /// </remarks>
 [PrefixTestClass]
 public class LastUseTests
@@ -37,7 +37,7 @@ public class LastUseTests
             {
                 Guard guard = rwLock.Enter();
                 _field = {|#0:guard|};
-                guard.Dispose();
+                {|#2:guard|}.Dispose();
             }
 
             // Every branch has a last use of its own.
@@ -129,7 +129,7 @@ public class LastUseTests
                 System.Action<Guard> storeAndRelease = guard =>
                 {
                     _field = {|#1:guard|};
-                    guard.Dispose();
+                    {|#3:guard|}.Dispose();
                 };
 
                 System.Action create = () =>
@@ -144,8 +144,8 @@ public class LastUseTests
 
         {{Sources.Guard}}
         """,
-        Verify.CopyByAssignment(0, "Guard"),
-        Verify.CopyByAssignment(1, "Guard"));
+        Verify.UsedAfterHandOff(2, "guard", "Guard", "its value was assigned", 0),
+        Verify.UsedAfterHandOff(3, "guard", "Guard", "its value was assigned", 1));
 
     [TestMethod]
     public Task LastUse_IsJudgedInTheOrderOfEvaluationAlongEveryPath() => Verify.AnalyzerAsync(
@@ -194,14 +194,14 @@ public class LastUseTests
                 again:
                 _field = {|#1:guard|};
 
-                if (guard.Value == 0)
+                if ({|#5:guard|}.Value == 0)
                     goto again;
             }
 
             // The first argument is read before 'Echo' uses the variable, whatever the order of the parameters.
-            void NamedArguments(Guard guard) => Use(b: {|#2:guard|}, a: Echo(ref guard));
+            void NamedArguments(Guard guard) => Use(b: {|#2:guard|}, a: Echo(ref {|#6:guard|}));
 
-            void ReadTwice(Guard guard) => Use({|#3:guard|}, guard);
+            void ReadTwice(Guard guard) => Use({|#3:guard|}, {|#7:guard|});
 
             void InEachSection(Guard guard, int number)
             {
@@ -234,9 +234,9 @@ public class LastUseTests
         {{Sources.Guard}}
         """,
         Verify.CopyByAssignment(0, "Guard"),
-        Verify.CopyByAssignment(1, "Guard"),
-        Verify.CopyOfStoredValue(2, "'C.Use(Guard, Guard)' receives", "Guard"),
-        Verify.CopyOfStoredValue(3, "'C.Use(Guard, Guard)' receives", "Guard"),
+        Verify.UsedAfterHandOff(5, "guard", "Guard", "its value was assigned", 1),
+        Verify.UsedAfterHandOff(6, "guard", "Guard", "'C.Use(Guard, Guard)' received its value", 2),
+        Verify.UsedAfterHandOff(7, "guard", "Guard", "'C.Use(Guard, Guard)' received its value", 3),
         Verify.CopyByAssignment(4, "Guard"));
 
     [TestMethod]
@@ -265,7 +265,7 @@ public class LastUseTests
                 }
                 catch
                 {
-                    guard.Dispose();
+                    {|#4:guard|}.Dispose();
                 }
             }
 
@@ -279,7 +279,7 @@ public class LastUseTests
                 }
                 finally
                 {
-                    guard.Dispose();
+                    {|#5:guard|}.Dispose();
                 }
             }
 
@@ -291,7 +291,7 @@ public class LastUseTests
                 {
                     _holder.Take({|#2:guard|});
                 }
-                catch (Exception) when (guard.Value == 0)
+                catch (Exception) when ({|#6:guard|}.Value == 0)
                 {
                 }
             }
@@ -313,7 +313,7 @@ public class LastUseTests
                 }
                 catch
                 {
-                    guard.Dispose();
+                    {|#7:guard|}.Dispose();
                 }
             }
 
@@ -348,10 +348,10 @@ public class LastUseTests
 
         {{Sources.Guard}}
         """,
-        Verify.CopyOfStoredValue(0, "'Holder.Take(Guard)' receives", "Guard", usedByHandler: "guard"),
-        Verify.CopyOfStoredValue(1, "'Holder.Take(Guard)' receives", "Guard", usedByHandler: "guard"),
-        Verify.CopyOfStoredValue(2, "'Holder.Take(Guard)' receives", "Guard", usedByHandler: "guard"),
-        Verify.CopyOfStoredValue(3, "'Holder.Take(Guard)' receives", "Guard", usedByHandler: "guard"));
+        Verify.UsedAfterHandOffInHandler(4, "guard", "Guard", "'Holder.Take(Guard)' received its value", 0),
+        Verify.UsedAfterHandOffInHandler(5, "guard", "Guard", "'Holder.Take(Guard)' received its value", 1),
+        Verify.UsedAfterHandOffInHandler(6, "guard", "Guard", "'Holder.Take(Guard)' received its value", 2),
+        Verify.UsedAfterHandOffInHandler(7, "guard", "Guard", "'Holder.Take(Guard)' received its value", 3));
 
     [TestMethod]
     public Task LastUse_OnlyALocalOrAByValueParameterIsMovedFrom() => Verify.AnalyzerAsync(
@@ -819,7 +819,7 @@ public class LastUseTests
             void Views()
             {
                 Span<Guard> span = new Guard[1];
-                Guard first {|#12:= span[0]|};
+                Guard first = {|#12:span[0]|};
 
                 var segment = new ArraySegment<Guard>(new Guard[1]);
                 Guard second = {|#13:segment[0]|};
@@ -840,8 +840,8 @@ public class LastUseTests
             void ValueTaskReadTwice(RwLock rwLock)
             {
                 var pending = rwLock.EnterAsync();
-                var first = {|#14:pending.Result|};
-                var second = pending.Result;
+                var first = {|#14:{|#17:pending|}.Result|};
+                var second = {|#18:pending|}.Result;
             }
         }
 
@@ -861,7 +861,7 @@ public class LastUseTests
         Verify.ReadFromStoredContainer(11, "'List<T>.this[int]'", "Guard"),
         Verify.CopyByAssignment(12, "Guard"),
         Verify.ReadFromStoredContainer(13, "'ArraySegment<T>.this[int]'", "Guard"),
-        Verify.ReadFromStoredContainer(14, "'ValueTask<TResult>.Result'", "Guard"),
+        Verify.UsedAfterHandOff(18, "pending", "System.Threading.Tasks.ValueTask<Guard>", "'ValueTask<Guard>.Result' read its value", 17),
         Verify.ReadFromStoredContainer(15, "'await'", "Guard", because: "'viewed' is not the method's own anywhere in the method, because on line 61 'Task<Guard>.ConfigureAwait(bool)' can keep it, hand out a view of it or take in what something else holds"),
         Verify.ReadFromStoredContainer(16, "'List<T>.this[int]'", "Guard"));
 
@@ -1058,7 +1058,7 @@ public class LastUseTests
                 }
                 catch
                 {
-                    guard.Dispose();
+                    {|#6:guard|}.Dispose();
                     throw;
                 }
             }
@@ -1075,7 +1075,7 @@ public class LastUseTests
                 }
                 catch
                 {
-                    guard.Dispose();
+                    {|#7:guard|}.Dispose();
                     throw;
                 }
             }
@@ -1092,7 +1092,7 @@ public class LastUseTests
                 }
                 catch
                 {
-                    guard.Dispose();
+                    {|#8:guard|}.Dispose();
                     throw;
                 }
             }
@@ -1108,7 +1108,7 @@ public class LastUseTests
                 }
                 catch
                 {
-                    guard.Dispose();
+                    {|#9:guard|}.Dispose();
                     throw;
                 }
             }
@@ -1125,7 +1125,7 @@ public class LastUseTests
                 }
                 finally
                 {
-                    guard.Dispose();
+                    {|#10:guard|}.Dispose();
                 }
             }
 
@@ -1150,19 +1150,19 @@ public class LastUseTests
                 }
                 catch
                 {
-                    guard.Dispose();
+                    {|#11:guard|}.Dispose();
                 }
             }
         }
 
         {{Sources.Guard}}
         """,
-        Verify.CopyByAssignment(0, "Guard", usedByHandler: "guard"),
-        Verify.CopyByAssignment(1, "Guard", usedByHandler: "guard"),
-        Verify.CopyByAssignment(2, "Guard", usedByHandler: "guard"),
-        Verify.CopyOfStoredValue(3, "'Holder.Take(Guard)' receives", "Guard", usedByHandler: "guard"),
-        Verify.CopyByAssignment(4, "Guard", usedByHandler: "guard"),
-        Verify.CopyByAssignment(5, "Guard", usedByHandler: "guard"));
+        Verify.UsedAfterHandOffInHandler(6, "guard", "Guard", "its value was assigned", 0),
+        Verify.UsedAfterHandOffInHandler(7, "guard", "Guard", "its value was assigned", 1),
+        Verify.UsedAfterHandOffInHandler(8, "guard", "Guard", "its value was assigned", 2),
+        Verify.UsedAfterHandOffInHandler(9, "guard", "Guard", "'Holder.Take(Guard)' received its value", 3),
+        Verify.UsedAfterHandOffInHandler(10, "guard", "Guard", "its value was assigned", 4),
+        Verify.UsedAfterHandOffInHandler(11, "guard", "Guard", "its value was assigned", 5));
 
     [TestMethod]
     public Task LastUse_ADeconstructMethodIsAUseWhereTheValueIsDeconstructed() => Verify.AnalyzerAsync(
@@ -1195,7 +1195,7 @@ public class LastUseTests
             void DeconstructedAfter(Pair pair)
             {
                 _pair = {|#0:pair|};
-                var (first, second) = pair;
+                var (first, second) = {|#1:pair|};
             }
 
             void NeverDeconstructed(Pair pair) => _pair = pair;
@@ -1203,7 +1203,7 @@ public class LastUseTests
 
         {{Sources.Guard}}
         """,
-        Verify.CopyByAssignment(0, "Pair"));
+        Verify.UsedAfterHandOff(1, "pair", "Pair", "its value was assigned", 0));
 
     [TestMethod]
     public Task LastUse_ABlockThatDoesNotEndInTheNormalWayCommitsNothing() => Verify.AnalyzerAsync(
@@ -1237,7 +1237,7 @@ public class LastUseTests
                 }
                 finally
                 {
-                    guard.Dispose();
+                    {|#17:guard|}.Dispose();
                 }
             }
 
@@ -1247,17 +1247,17 @@ public class LastUseTests
                 var local = new InvalidOperationException();
 
                 try { Work(); _held = {|#1:guard|}; throw local; }
-                catch { guard.Dispose(); }
+                catch { {|#18:guard|}.Dispose(); }
 
                 guard = rwLock.Enter();
 
                 try { Work(); _held = {|#2:guard|}; throw parameter; }
-                catch { guard.Dispose(); }
+                catch { {|#19:guard|}.Dispose(); }
 
                 guard = rwLock.Enter();
 
                 try { Work(); _held = {|#3:guard|}; throw null!; }
-                catch { guard.Dispose(); }
+                catch { {|#20:guard|}.Dispose(); }
             }
 
             void RethrownIntoAnOuterCatch(RwLock rwLock)
@@ -1271,7 +1271,7 @@ public class LastUseTests
                 }
                 catch
                 {
-                    guard.Dispose();
+                    {|#21:guard|}.Dispose();
                 }
             }
 
@@ -1286,7 +1286,7 @@ public class LastUseTests
                 }
                 finally
                 {
-                    guard.Dispose();
+                    {|#22:guard|}.Dispose();
                 }
             }
 
@@ -1302,7 +1302,7 @@ public class LastUseTests
                 }
                 catch
                 {
-                    guard.Dispose();
+                    {|#23:guard|}.Dispose();
                 }
             }
 
@@ -1320,7 +1320,7 @@ public class LastUseTests
                 Guard guard = rwLock.Enter();
 
                 try { Work(); _held = {|#7:guard|}; return; }
-                finally { guard.Dispose(); }
+                finally { {|#24:guard|}.Dispose(); }
             }
 
             // 'continue', 'break' and 'goto' leave the 'try' or stay in it.
@@ -1352,7 +1352,7 @@ public class LastUseTests
                 }
                 catch
                 {
-                    guard.Dispose();
+                    {|#25:guard|}.Dispose();
                     throw;
                 }
             }
@@ -1378,7 +1378,7 @@ public class LastUseTests
                 }
                 catch
                 {
-                    second.Dispose();
+                    {|#26:second|}.Dispose();
                     throw;
                 }
             }
@@ -1389,7 +1389,7 @@ public class LastUseTests
                 Guard guard = rwLock.Enter();
 
                 try { Work(); _held = {|#10:guard|}; yield return 1; }
-                finally { guard.Dispose(); }
+                finally { {|#27:guard|}.Dispose(); }
             }
 
             IEnumerable<int> EndedAfterTheStore(RwLock rwLock)
@@ -1397,7 +1397,7 @@ public class LastUseTests
                 Guard guard = rwLock.Enter();
 
                 try { yield return 1; _held = {|#11:guard|}; yield break; }
-                finally { guard.Dispose(); }
+                finally { {|#28:guard|}.Dispose(); }
             }
 
             async Task AwaitedAfterTheStore(RwLock rwLock, Task pending)
@@ -1405,7 +1405,7 @@ public class LastUseTests
                 Guard guard = rwLock.Enter();
 
                 try { Work(); _held = {|#12:guard|}; await pending; }
-                catch { guard.Dispose(); throw; }
+                catch { {|#29:guard|}.Dispose(); throw; }
             }
 
             // Falling out of a 'lock' or a 'using' runs a hidden 'finally', which can throw inside the 'try'.
@@ -1423,7 +1423,7 @@ public class LastUseTests
                 }
                 catch
                 {
-                    guard.Dispose();
+                    {|#30:guard|}.Dispose();
                     throw;
                 }
             }
@@ -1442,7 +1442,7 @@ public class LastUseTests
                 }
                 catch
                 {
-                    guard.Dispose();
+                    {|#31:guard|}.Dispose();
                     throw;
                 }
             }
@@ -1462,7 +1462,7 @@ public class LastUseTests
                 }
                 catch
                 {
-                    guard.Dispose();
+                    {|#32:guard|}.Dispose();
                     throw;
                 }
             }
@@ -1512,7 +1512,7 @@ public class LastUseTests
                 }
                 catch
                 {
-                    second.Dispose();
+                    {|#33:second|}.Dispose();
                     throw;
                 }
             }
@@ -1520,23 +1520,23 @@ public class LastUseTests
 
         {{Sources.Guard}}
         """,
-        Verify.CopyByAssignment(0, "Guard", usedByHandler: "guard"),
-        Verify.CopyByAssignment(1, "Guard", usedByHandler: "guard"),
-        Verify.CopyByAssignment(2, "Guard", usedByHandler: "guard"),
-        Verify.CopyByAssignment(3, "Guard", usedByHandler: "guard"),
-        Verify.CopyByAssignment(4, "Guard", usedByHandler: "guard"),
-        Verify.CopyByAssignment(5, "Guard", usedByHandler: "guard"),
-        Verify.CopyByAssignment(6, "Guard", usedByHandler: "guard"),
-        Verify.CopyByAssignment(7, "Guard", usedByHandler: "guard"),
-        Verify.CopyByAssignment(8, "Guard", usedByHandler: "guard"),
-        Verify.CopyByAssignment(9, "Guard", usedByHandler: "second"),
-        Verify.CopyByAssignment(10, "Guard", usedByHandler: "guard"),
-        Verify.CopyByAssignment(11, "Guard", usedByHandler: "guard"),
-        Verify.CopyByAssignment(12, "Guard", usedByHandler: "guard"),
-        Verify.CopyByAssignment(13, "Guard", usedByHandler: "guard"),
-        Verify.CopyByAssignment(14, "Guard", usedByHandler: "guard"),
-        Verify.CopyByAssignment(15, "Guard", usedByHandler: "guard"),
-        Verify.CopyByAssignment(16, "Guard", usedByHandler: "second"));
+        Verify.UsedAfterHandOffInHandler(17, "guard", "Guard", "its value was assigned", 0),
+        Verify.UsedAfterHandOffInHandler(18, "guard", "Guard", "its value was assigned", 1),
+        Verify.UsedAfterHandOffInHandler(19, "guard", "Guard", "its value was assigned", 2),
+        Verify.UsedAfterHandOffInHandler(20, "guard", "Guard", "its value was assigned", 3),
+        Verify.UsedAfterHandOffInHandler(21, "guard", "Guard", "its value was assigned", 4),
+        Verify.UsedAfterHandOffInHandler(22, "guard", "Guard", "its value was assigned", 5),
+        Verify.UsedAfterHandOffInHandler(23, "guard", "Guard", "its value was assigned", 6),
+        Verify.UsedAfterHandOffInHandler(24, "guard", "Guard", "its value was assigned", 7),
+        Verify.UsedAfterHandOffInHandler(25, "guard", "Guard", "its value was assigned", 8),
+        Verify.UsedAfterHandOffInHandler(26, "second", "Guard", "its value was assigned", 9),
+        Verify.UsedAfterHandOffInHandler(27, "guard", "Guard", "its value was assigned", 10),
+        Verify.UsedAfterHandOffInHandler(28, "guard", "Guard", "its value was assigned", 11),
+        Verify.UsedAfterHandOffInHandler(29, "guard", "Guard", "its value was assigned", 12),
+        Verify.UsedAfterHandOffInHandler(30, "guard", "Guard", "its value was assigned", 13),
+        Verify.UsedAfterHandOffInHandler(31, "guard", "Guard", "its value was assigned", 14),
+        Verify.UsedAfterHandOffInHandler(32, "guard", "Guard", "its value was assigned", 15),
+        Verify.UsedAfterHandOffInHandler(33, "second", "Guard", "its value was assigned", 16));
 
     [TestMethod]
     public Task LastUse_AFieldOfThisCanFollowTheCommit() => Verify.AnalyzerAsync(
@@ -1599,7 +1599,7 @@ public class LastUseTests
                 Guard guard = rwLock.Enter();
 
                 try { Work(); _held = {|#0:guard|}; s_count = 1; }
-                catch { guard.Dispose(); throw; }
+                catch { {|#5:guard|}.Dispose(); throw; }
             }
 
             void FieldOfAnotherObject(RwLock rwLock)
@@ -1607,7 +1607,7 @@ public class LastUseTests
                 Guard guard = rwLock.Enter();
 
                 try { Work(); _held = {|#1:guard|}; _other.State = 1; }
-                catch { guard.Dispose(); throw; }
+                catch { {|#6:guard|}.Dispose(); throw; }
             }
 
             void Property(RwLock rwLock)
@@ -1615,7 +1615,7 @@ public class LastUseTests
                 Guard guard = rwLock.Enter();
 
                 try { Work(); _held = {|#2:guard|}; Count = 1; }
-                catch { guard.Dispose(); throw; }
+                catch { {|#7:guard|}.Dispose(); throw; }
             }
 
             void ValueThatCanThrow(RwLock rwLock)
@@ -1623,7 +1623,7 @@ public class LastUseTests
                 Guard guard = rwLock.Enter();
 
                 try { Work(); _held = {|#3:guard|}; _flag = Compute(); }
-                catch { guard.Dispose(); throw; }
+                catch { {|#8:guard|}.Dispose(); throw; }
             }
         }
 
@@ -1648,17 +1648,17 @@ public class LastUseTests
                 Guard guard = rwLock.Enter();
 
                 try { C.Work(); slot = {|#4:guard|}; _state = 1; }
-                catch { guard.Dispose(); throw; }
+                catch { {|#9:guard|}.Dispose(); throw; }
             }
         }
 
         {{Sources.Guard}}
         """,
-        Verify.CopyByAssignment(0, "Guard", usedByHandler: "guard"),
-        Verify.CopyByAssignment(1, "Guard", usedByHandler: "guard"),
-        Verify.CopyByAssignment(2, "Guard", usedByHandler: "guard"),
-        Verify.CopyByAssignment(3, "Guard", usedByHandler: "guard"),
-        Verify.CopyByAssignment(4, "Guard", usedByHandler: Verify.ThenThrough("guard", "this")));
+        Verify.UsedAfterHandOffInHandler(5, "guard", "Guard", "its value was assigned", 0),
+        Verify.UsedAfterHandOffInHandler(6, "guard", "Guard", "its value was assigned", 1),
+        Verify.UsedAfterHandOffInHandler(7, "guard", "Guard", "its value was assigned", 2),
+        Verify.UsedAfterHandOffInHandler(8, "guard", "Guard", "its value was assigned", 3),
+        Verify.UsedAfterHandOffBeforeNullReference(9, "guard", "Guard", "its value was assigned", "this", 4));
 
     [TestMethod]
     public Task LastUse_APrimaryConstructorParameterThatOneInitializerUses() => Verify.AnalyzerAsync(
@@ -1775,13 +1775,13 @@ public class LastUseTests
                 catch { guard.Dispose(); throw; }
             }
 
-            // A use by a handler: with the moves on, the message says why the read is a copy.
+            // A use by a handler: with the moves on, the handler's use is reported as a use after the hand-off.
             void UsedByAHandler(RwLock rwLock)
             {
                 Guard guard = rwLock.Enter();
 
                 try { _held = {|#8:guard|}; Work(); }
-                catch { guard.Dispose(); throw; }
+                catch { {|#10:guard|}.Dispose(); throw; }
             }
 
             // An explicit move hands a value over either way.
@@ -1809,7 +1809,7 @@ public class LastUseTests
     [TestMethod]
     public Task ImplicitMoves_AreOnWithoutTheProperty() => Verify.AnalyzerAsync(
         ImplicitMoves,
-        Verify.CopyByAssignment(8, "Guard", usedByHandler: "guard"),
+        Verify.UsedAfterHandOffInHandler(10, "guard", "Guard", "its value was assigned", 8),
         Verify.MovedFromParameterNotAssigned(6, "C.LeavesWithTheValue(ref Guard, bool)", "value"));
 
     [TestMethod]
@@ -1820,7 +1820,7 @@ public class LastUseTests
     public Task ImplicitMoves_OnlyFalseTurnsThemOff(string value)
     {
         var test = CreateTest(ImplicitMoves, value);
-        test.ExpectedDiagnostics.Add(Verify.CopyByAssignment(8, "Guard", usedByHandler: "guard"));
+        test.ExpectedDiagnostics.Add(Verify.UsedAfterHandOffInHandler(10, "guard", "Guard", "its value was assigned", 8));
         test.ExpectedDiagnostics.Add(Verify.MovedFromParameterNotAssigned(6, "C.LeavesWithTheValue(ref Guard, bool)", "value"));
         return test.RunAsync();
     }
@@ -1872,7 +1872,7 @@ public class LastUseTests
                 Guard guard = rwLock.Enter();
 
                 try { return {|#0:guard|}; }
-                finally { guard.Dispose(); }
+                finally { {|#10:guard|}.Dispose(); }
             }
 
             async Task<Guard> Async(RwLock rwLock)
@@ -1886,7 +1886,7 @@ public class LastUseTests
                 }
                 finally
                 {
-                    guard.Dispose();
+                    {|#11:guard|}.Dispose();
                 }
             }
 
@@ -1895,13 +1895,13 @@ public class LastUseTests
                 Guard guard = rwLock.Enter();
 
                 try { return {|#2:guard|}; }
-                finally { guard.Dispose(); }
+                finally { {|#12:guard|}.Dispose(); }
             };
 
             Guard? AsANullable(Guard guard)
             {
                 try { return {|#3:guard|}; }
-                finally { guard.Dispose(); }
+                finally { {|#13:guard|}.Dispose(); }
             }
 
             Guard InAnInnerTry(RwLock rwLock)
@@ -1915,7 +1915,7 @@ public class LastUseTests
                 }
                 finally
                 {
-                    guard.Dispose();
+                    {|#14:guard|}.Dispose();
                 }
             }
 
@@ -1969,7 +1969,18 @@ public class LastUseTests
         {{Sources.Guard}}
         """;
 
+    // With the moves on, the 'finally' that uses the variable after the return is reported as a use after the hand-off.
     private static readonly Microsoft.CodeAnalysis.Testing.DiagnosticResult[] s_returnedAndUsed = [
+        Verify.UsedAfterHandOffInHandler(10, "guard", "Guard", "its value was returned", 0),
+        Verify.UsedAfterHandOffInHandler(11, "guard", "Guard", "its value was returned", 1),
+        Verify.UsedAfterHandOffInHandler(12, "guard", "Guard", "its value was returned", 2),
+        Verify.UsedAfterHandOffInHandler(13, "guard", "Guard", "its value was returned", 3),
+        Verify.UsedAfterHandOffInHandler(14, "guard", "Guard", "its value was returned", 4),
+        Verify.CopyByReturnOfVariableUsedAfter(5, "Guard", "guard"),
+    ];
+
+    // With the moves off, every such return is reported where it is.
+    private static readonly Microsoft.CodeAnalysis.Testing.DiagnosticResult[] s_returnedAndUsedWithTheMovesOff = [
         Verify.CopyByReturnOfVariableUsedAfter(0, "Guard", "guard"),
         Verify.CopyByReturnOfVariableUsedAfter(1, "Guard", "guard"),
         Verify.CopyByReturnOfVariableUsedAfter(2, "Guard", "guard"),
@@ -1986,7 +1997,7 @@ public class LastUseTests
     public Task LastUse_AReturnedVariableIsJudgedWithTheMovesTurnedOff()
     {
         var test = CreateTest(Returned, "false");
-        test.ExpectedDiagnostics.AddRange(s_returnedAndUsed);
+        test.ExpectedDiagnostics.AddRange(s_returnedAndUsedWithTheMovesOff);
         return test.RunAsync();
     }
 
@@ -2018,32 +2029,32 @@ public class LastUseTests
             void M()
             {
                 Lease first = default;
-                first.Uses = Lease.Close({|#0:first|});
+                {|#6:first|}.Uses = Lease.Close({|#0:first|});
 
                 Lease second = default;
-                second[0] = Lease.Close({|#1:second|});
+                {|#7:second|}[0] = Lease.Close({|#1:second|});
 
                 Lease third = default;
-                third.Uses += Lease.Close({|#2:third|});
+                {|#8:third|}.Uses += Lease.Close({|#2:third|});
 
                 Lease fourth = default;
-                fourth.Closed += Lease.CloseLater({|#3:fourth|});
+                {|#9:fourth|}.Closed += Lease.CloseLater({|#3:fourth|});
 
                 (Lease lease, int count) fifth = default;
-                fifth.lease.Uses = Lease.Close({|#4:fifth.lease|});
+                {|#11:fifth|}.lease.Uses = Lease.Close({|#4:{|#10:fifth|}.lease|});
 
                 // A field is assigned where the assignment stands as well.
                 Lease sixth = default;
-                sixth.Field = Lease.Close({|#5:sixth|});
+                {|#12:sixth|}.Field = Lease.Close({|#5:sixth|});
             }
         }
         """,
-        Verify.CopyOfStoredValue(0, "'Lease.Close(Lease)' receives", "Lease"),
-        Verify.CopyOfStoredValue(1, "'Lease.Close(Lease)' receives", "Lease"),
-        Verify.CopyOfStoredValue(2, "'Lease.Close(Lease)' receives", "Lease"),
-        Verify.CopyOfStoredValue(3, "'Lease.CloseLater(Lease)' receives", "Lease"),
-        Verify.CopyOfStoredValue(4, "'Lease.Close(Lease)' receives", "Lease"),
-        Verify.CopyOfStoredValue(5, "'Lease.Close(Lease)' receives", "Lease"));
+        Verify.UsedAfterHandOff(6, "first", "Lease", "'Lease.Close(Lease)' received its value", 0),
+        Verify.UsedAfterHandOff(7, "second", "Lease", "'Lease.Close(Lease)' received its value", 1),
+        Verify.UsedAfterHandOff(8, "third", "Lease", "'Lease.Close(Lease)' received its value", 2),
+        Verify.UsedAfterHandOff(9, "fourth", "Lease", "'Lease.CloseLater(Lease)' received its value", 3),
+        Verify.UsedAfterHandOff(12, "sixth", "Lease", "'Lease.Close(Lease)' received its value", 5),
+        Verify.UsedAfterHandOff(11, "fifth", "(Lease lease, int count)", "its field \'lease\' was read", 10));
 
     // An assignment stores when it runs, wherever its target stands: the outer target is evaluated before the commit and written after it.
     [TestMethod]
@@ -2074,7 +2085,7 @@ public class LastUseTests
                 Guard g = rwLock.Enter();
 
                 try { Work(); node.Owner = _current = {|#0:g|}; }
-                catch { g.Dispose(); throw; }
+                catch { {|#5:g|}.Dispose(); throw; }
             }
 
             void IntoAnElement(RwLock rwLock, IDisposable?[] owners, int index)
@@ -2082,7 +2093,7 @@ public class LastUseTests
                 Guard g = rwLock.Enter();
 
                 try { Work(); owners[index] = _current = {|#1:g|}; }
-                catch { g.Dispose(); throw; }
+                catch { {|#6:g|}.Dispose(); throw; }
             }
 
             void ThroughAReference(RwLock rwLock, ref bool fresh)
@@ -2090,7 +2101,7 @@ public class LastUseTests
                 Guard g = rwLock.Enter();
 
                 try { Work(); fresh = (_held = {|#2:g|}) is { Value: 0 }; }
-                catch { g.Dispose(); throw; }
+                catch { {|#7:g|}.Dispose(); throw; }
             }
 
             void IntoAStaticField(RwLock rwLock)
@@ -2098,7 +2109,7 @@ public class LastUseTests
                 Guard g = rwLock.Enter();
 
                 try { Work(); s_fresh = (_held = {|#3:g|}) is { Value: 0 }; }
-                catch { g.Dispose(); throw; }
+                catch { {|#8:g|}.Dispose(); throw; }
             }
 
             // The stores of a deconstruction are made when it runs as well.
@@ -2108,7 +2119,7 @@ public class LastUseTests
                 int n;
 
                 try { Work(); (node.Flag, n) = ((_held = {|#4:g|}) is { Value: 0 }, 1); }
-                catch { g.Dispose(); throw; }
+                catch { {|#9:g|}.Dispose(); throw; }
             }
 
             // A local and a field of 'this' in a class cannot fail.
@@ -2133,11 +2144,11 @@ public class LastUseTests
 
         {{Sources.Guard}}
         """,
-        Verify.Boxing(0, "Guard", "System.IDisposable"),
-        Verify.Boxing(1, "Guard", "System.IDisposable"),
-        Verify.CopyByAssignment(2, "Guard", usedByHandler: Verify.ThenThrough("g", "fresh")),
-        Verify.CopyByAssignment(3, "Guard", usedByHandler: "g"),
-        Verify.CopyByAssignment(4, "Guard", usedByHandler: "g"));
+        Verify.UsedAfterHandOffInHandler(5, "g", "Guard", "its value was converted to \'IDisposable\'", 0),
+        Verify.UsedAfterHandOffInHandler(6, "g", "Guard", "its value was converted to \'IDisposable\'", 1),
+        Verify.UsedAfterHandOffBeforeNullReference(7, "g", "Guard", "its value was assigned", "fresh", 2),
+        Verify.UsedAfterHandOffInHandler(8, "g", "Guard", "its value was assigned", 3),
+        Verify.UsedAfterHandOffInHandler(9, "g", "Guard", "its value was assigned", 4));
 
     [TestMethod]
     public Task LastUse_ThisInAStructCanFailAfterTheCommit() => Verify.AnalyzerAsync(
@@ -2155,7 +2166,7 @@ public class LastUseTests
                 Guard g = rwLock.Enter();
 
                 try { Work(); slot = {|#0:g|}; this = default; }
-                catch { g.Dispose(); throw; }
+                catch { {|#4:g|}.Dispose(); throw; }
             }
 
             void Copies(RwLock rwLock, ref Guard slot)
@@ -2163,7 +2174,7 @@ public class LastUseTests
                 Guard g = rwLock.Enter();
 
                 try { Work(); slot = {|#1:g|}; Host copy = this; }
-                catch { g.Dispose(); throw; }
+                catch { {|#5:g|}.Dispose(); throw; }
             }
 
             bool Tests(RwLock rwLock, ref Guard slot)
@@ -2172,7 +2183,7 @@ public class LastUseTests
                 bool isFirst;
 
                 try { Work(); slot = {|#2:g|}; isFirst = this is { State: 1 }; }
-                catch { g.Dispose(); throw; }
+                catch { {|#6:g|}.Dispose(); throw; }
 
                 return isFirst;
             }
@@ -2188,7 +2199,7 @@ public class LastUseTests
                 int read;
 
                 try { Work(); slot = {|#3:g|}; read = seed; }
-                catch { g.Dispose(); throw; }
+                catch { {|#7:g|}.Dispose(); throw; }
 
                 return read;
             }
@@ -2217,10 +2228,10 @@ public class LastUseTests
 
         {{Sources.Guard}}
         """,
-        Verify.CopyByAssignment(0, "Guard", usedByHandler: Verify.ThenThrough("g", "this")),
-        Verify.CopyByAssignment(1, "Guard", usedByHandler: Verify.ThenThrough("g", "this")),
-        Verify.CopyByAssignment(2, "Guard", usedByHandler: Verify.ThenThrough("g", "this")),
-        Verify.CopyByAssignment(3, "Guard", usedByHandler: Verify.ThenThrough("g", "this")));
+        Verify.UsedAfterHandOffBeforeNullReference(4, "g", "Guard", "its value was assigned", "this", 0),
+        Verify.UsedAfterHandOffBeforeNullReference(5, "g", "Guard", "its value was assigned", "this", 1),
+        Verify.UsedAfterHandOffBeforeNullReference(6, "g", "Guard", "its value was assigned", "this", 2),
+        Verify.UsedAfterHandOffBeforeNullReference(7, "g", "Guard", "its value was assigned", "this", 3));
 
     // The note on a read that would be a last use names a 'catch', a 'finally' or a filter that uses the variable only where there is
     // one. The 'finally' that the compiler adds for a 'foreach' uses nothing: the variable is used by what follows the loop.
@@ -2258,7 +2269,7 @@ public class LastUseTests
                 }
                 catch
                 {
-                    g.Dispose();
+                    {|#2:g|}.Dispose();
                     throw;
                 }
             }
@@ -2267,7 +2278,7 @@ public class LastUseTests
         {{Sources.Guard}}
         """,
         Verify.CopyOfStoredValue(0, "'C.Consume(Guard)' receives", "Guard", usedAfterFinally: "g"),
-        Verify.CopyOfStoredValue(1, "'C.Consume(Guard)' receives", "Guard", usedByHandler: "g"));
+        Verify.UsedAfterHandOffInHandler(2, "g", "Guard", "'C.Consume(Guard)' received its value", 1));
 
     // A hole of an interpolated string takes its value like a parameter that takes it by value: a new value is moved into it, and so
     // is a local or a by-value parameter at its last use. A stored value is copied.
@@ -2296,7 +2307,7 @@ public class LastUseTests
             static string UsedAgain(Guard guard)
             {
                 string text = $"{ {|#0:guard|} }";
-                guard.Dispose();
+                {|#3:guard|}.Dispose();
                 return text;
             }
 
@@ -2305,7 +2316,7 @@ public class LastUseTests
 
         {{Sources.Guard}}
         """,
-        Verify.CopyOfStoredValue(0, "The interpolated string takes", "Guard"),
+        Verify.UsedAfterHandOff(3, "guard", "Guard", "the interpolated string took its value", 0),
         Verify.CopyOfStoredValue(1, "The interpolated string takes", "Guard"),
         Verify.CopyOfStoredValue(2, "The interpolated string takes", "Guard"));
 
@@ -2350,13 +2361,13 @@ public class LastUseTests
             {
                 Guard guard = Create();
                 var next = {|#0:guard|} with { Value = 1 };
-                guard.Dispose();
+                {|#6:guard|}.Dispose();
             }
 
             void ReadInTheInitializer()
             {
                 Guard guard = Create();
-                var next = {|#1:guard|} with { Value = guard.Value + 1 };
+                var next = {|#1:guard|} with { Value = {|#7:guard|}.Value + 1 };
             }
 
             void InALoop(int count)
@@ -2377,7 +2388,7 @@ public class LastUseTests
                 }
                 finally
                 {
-                    guard.Dispose();
+                    {|#8:guard|}.Dispose();
                 }
             }
 
@@ -2389,10 +2400,10 @@ public class LastUseTests
 
         {{Sources.Guard}}
         """,
-        Verify.CopyOfStoredValue(0, "'with' changes", "Guard"),
-        Verify.CopyOfStoredValue(1, "'with' changes", "Guard"),
+        Verify.UsedAfterHandOff(6, "guard", "Guard", "\'with\' copied its value", 0),
+        Verify.UsedAfterHandOff(7, "guard", "Guard", "\'with\' copied its value", 1),
+        Verify.UsedAfterHandOffInHandler(8, "guard", "Guard", "\'with\' copied its value", 3),
         Verify.CopyOfStoredValue(2, "'with' changes", "Guard"),
-        Verify.CopyOfStoredValue(3, "'with' changes", "Guard"),
         Verify.CopyOfStoredValue(4, "'with' changes", "Guard"),
         Verify.CopyOfStoredValue(5, "'with' changes", "Guard"));
 
@@ -2423,25 +2434,25 @@ public class LastUseTests
             static void Plain()
             {
                 Lease lease = Make();
-                lease.Uses = Close({|#0:lease|});
+                {|#5:lease|}.Uses = Close({|#0:lease|});
             }
 
             static void WithABranch(bool flag)
             {
                 Lease lease = Make();
-                lease.Uses = flag ? Close({|#1:lease|}) : 0;
+                {|#6:lease|}.Uses = flag ? Close({|#1:lease|}) : 0;
             }
 
             static void WithACoalesce(int? count)
             {
                 Lease lease = Make();
-                lease.Uses = count ?? Close({|#2:lease|});
+                {|#7:lease|}.Uses = count ?? Close({|#2:lease|});
             }
 
             static void IndexerWithABranch(bool flag)
             {
                 Lease lease = Make();
-                lease[flag ? 1 : 0] = Close({|#3:lease|});
+                {|#8:lease|}[flag ? 1 : 0] = Close({|#3:lease|});
             }
 
             static void UsedBeforeAndAfter(bool flag)
@@ -2458,9 +2469,9 @@ public class LastUseTests
             }
         }
         """,
-        Verify.CopyOfStoredValue(0, "'C.Close(Lease)' receives", "Lease"),
-        Verify.CopyOfStoredValue(1, "'C.Close(Lease)' receives", "Lease"),
-        Verify.CopyOfStoredValue(2, "'C.Close(Lease)' receives", "Lease"),
-        Verify.CopyOfStoredValue(3, "'C.Close(Lease)' receives", "Lease"),
+        Verify.UsedAfterHandOff(5, "lease", "Lease", "'C.Close(Lease)' received its value", 0),
+        Verify.UsedAfterHandOff(6, "lease", "Lease", "'C.Close(Lease)' received its value", 1),
+        Verify.UsedAfterHandOff(7, "lease", "Lease", "'C.Close(Lease)' received its value", 2),
+        Verify.UsedAfterHandOff(8, "lease", "Lease", "'C.Close(Lease)' received its value", 3),
         Verify.CopyOfStoredValue(4, "'C.Close(Lease)' receives", "Lease"));
 }

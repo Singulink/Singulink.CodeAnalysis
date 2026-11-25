@@ -23,11 +23,11 @@ public class AttributeTests
             void M()
             {
                 var local = new Guard();
-                var copy {|#0:= local|};
+                var copy = {|#0:local|};
                 Take({|#1:_field|});
 
-                // The variable is used again, so the read above is not its last use.
-                var last = local;
+                // The variable is used again, so the read above is not its last use, and this use is reported.
+                var last = {|#2:local|};
             }
 
             void Take(Guard guard) { }
@@ -110,7 +110,7 @@ public class AttributeTests
 
             public static Guard Take([MovedFrom] ref Guard value)
             {
-                Guard taken {|#14:= value|};
+                Guard taken = {|#14:value|};
                 value = default;
                 return taken;
             }
@@ -126,7 +126,7 @@ public class AttributeTests
 
             void M(Pool<Guard> pool, Holder holder)
             {
-                Guard copy {|#0:= _field|};
+                Guard copy = {|#0:_field|};
                 Guard[] all = {|#1:pool.ToArray()|};
                 Guard stored = {|#2:holder.GetGuards()[0]|};
                 Guard taken = Holder.Take(ref _field);
@@ -204,7 +204,7 @@ public class AttributeTests
             // The analyzer honours the mark in this project all the same.
             void M()
             {
-                var copy {|#6:= _handle|};
+                var copy = {|#6:_handle|};
             }
         }
         """;
@@ -243,8 +243,8 @@ public class AttributeTests
 
             void M(Pool<Guard> pool, Pool<int> numbers)
             {
-                Guard copy {|#0:= _field|};
-                Guard<int> second {|#1:= _generic|};
+                Guard copy = {|#0:_field|};
+                Guard<int> second = {|#1:_generic|};
 
                 // The mark on the type parameter of the pool has no effect: the pool is an unmarked generic.
                 Guard taken = {|#2:pool.Get()|};
@@ -283,7 +283,7 @@ public class AttributeTests
         [NonCopyable]
         struct Guard { }
         """,
-        Verify.CopyByAssignment(0, "Guard"),
+        Verify.UsedAfterHandOff(2, "local", "Guard", "its value was assigned to \'copy\'", 0),
         Verify.CopyOfStoredValue(1, "'C.Take(Guard)' receives", "Guard"));
 
     [TestMethod]
@@ -294,7 +294,7 @@ public class AttributeTests
         [Singulink.CodeAnalysis.NonCopyableAttribute]
         struct Guard { }
         """,
-        Verify.CopyByAssignment(0, "Guard"),
+        Verify.UsedAfterHandOff(2, "local", "Guard", "its value was assigned to \'copy\'", 0),
         Verify.CopyOfStoredValue(1, "'C.Take(Guard)' receives", "Guard"));
 
     // A project may declare the attributes itself, internal ones included, and take no dependency: each of the five is recognised by
@@ -545,15 +545,15 @@ public class AttributeTests
             void M()
             {
                 var local = new Guard<int>();
-                var copy {|#0:= local|};
-                var last = local;
+                var copy = {|#0:local|};
+                var last = {|#1:local|};
             }
         }
 
         [NonCopyable]
         struct Guard<T> { }
         """,
-        Verify.CopyByAssignment(0, "Guard<int>"));
+        Verify.UsedAfterHandOff(1, "local", "Guard<int>", "its value was assigned to \'copy\'", 0));
 
     [TestMethod]
     public Task UnrelatedAttribute() => Verify.AnalyzerAsync(
@@ -645,7 +645,7 @@ public class AttributeTests
                         // The mark is seen in the source of the project that declares the attribute, whether its symbol is defined or not.
                         void M()
                         {
-                            var copy {|#5:= _handle|};
+                            var copy = {|#5:_handle|};
                         }
                     }
                 }
@@ -773,7 +773,7 @@ public class AttributeTests
 
                         void M()
                         {
-                            var copy {|#2:= _handle|};
+                            var copy = {|#2:_handle|};
                         }
                     }
                 }
@@ -834,7 +834,7 @@ public class AttributeTests
 
                 void M()
                 {
-                    var copy {|#2:= _handle|};
+                    var copy = {|#2:_handle|};
                 }
             }
             """;
@@ -918,8 +918,8 @@ public class AttributeTests
 
                         void M(Pool<Guard> pool)
                         {
-                            var copy {|#1:= _guard|};
-                            var second {|#2:= _read|};
+                            var copy = {|#1:_guard|};
+                            var second = {|#2:_read|};
 
                             // The type parameter is marked, so the pool is checked code and may hold a guard.
                             ref Guard slot = ref pool.Slot;
@@ -978,7 +978,7 @@ public class AttributeTests
 
                     void M()
                     {
-                        Guard copy {|#0:= _field|};
+                        Guard copy = {|#0:_field|};
                     }
                 }
                 """,
@@ -1151,7 +1151,7 @@ public class AttributeTests
                     // The analyzer honours the mark in this project all the same.
                     void M()
                     {
-                        var copy {|#3:= _handle|};
+                        var copy = {|#3:_handle|};
                     }
                 }
                 """,
@@ -1304,7 +1304,7 @@ public class AttributeTests
                     void M()
                     {
                         var copy = _handle;
-                        var token {|#2:= _token|};
+                        var token = {|#2:_token|};
                     }
                 }
                 """,

@@ -7,10 +7,11 @@ using System.Reflection.PortableExecutable;
 namespace Singulink.CodeAnalysis.Tests;
 
 /// <content>
-/// Scans the IL of the shared frameworks for the members that clone an object of a class that clones itself, directly with
-/// MemberwiseClone or through other members, and for those whose own object reaches other code: every such member that code of another
-/// assembly can call needs a 'clones' line of its own, or for the second kind an entry in the evidence that says why it hands nothing on,
-/// since a member of such a class with no line is taken neither to clone the object that it is called on nor to hand it on.
+/// Scans the IL of the shared frameworks, and of the .NET Framework 4.8.1 where it is installed, for the members that clone an object of a
+/// class that clones itself, directly with MemberwiseClone or through other members, and for those whose own object reaches other code:
+/// every such member that code of another assembly can call needs a 'clones' line of its own, or for the second kind an entry in the
+/// evidence that says why it hands nothing on, since a member of such a class with no line is taken neither to clone the object that it
+/// is called on nor to hand it on.
 /// </content>
 /// <remarks>
 /// Docs: articles/rules/framework-symbol-list.md and NonCopyableSymbols.evidence.md, Classes That Clone Themselves and Members Whose Own
@@ -21,11 +22,19 @@ public partial class FrameworkScanTests
     // Every public or protected member of a class of the framework whose base chain reaches a class with a 'clones' line, which clones its
     // own object or an object that it is given, directly or through other members of the framework, has a 'clones' line of its own.
     [TestMethod]
-    public void SharedFrameworks_EveryMemberThatClonesItsObjectHasAClonesLine()
+    public void SharedFrameworks_EveryMemberThatClonesItsObjectHasAClonesLine() =>
+        CheckMembersThatClone(GetSharedFrameworkAssemblies());
+
+    // The same for the .NET Framework 4.8.1.
+    [TestMethod]
+    public async Task NetFramework_EveryMemberThatClonesItsObjectHasAClonesLine() =>
+        CheckMembersThatClone(await GetNetFrameworkAssembliesAsync());
+
+    private static void CheckMembersThatClone(List<string> assemblies)
     {
         var scan = new CloningMemberScan();
 
-        foreach (string path in FindSharedFrameworks().SelectMany(directory => Directory.GetFiles(directory, "*.dll")).Where(HasMetadata))
+        foreach (string path in assemblies)
             scan.Read(path);
 
         var entries = ReadEntries();
@@ -107,7 +116,7 @@ public partial class FrameworkScanTests
         Assert.IsNotEmpty(roots);
 
         foreach (string root in roots)
-            Assert.IsTrue(scan.HasType(root), $"{root} says 'clones=complete', and the scan finds no such class in the shared frameworks.");
+            Assert.IsTrue(scan.HasType(root), $"{root} says 'clones=complete', and the scan finds no such class in the framework.");
 
         var covered = scan.FindCoveredClasses(roots).Select(id => id[2..]).ToHashSet(StringComparer.Ordinal);
         var derived = complete.Except(roots).ToHashSet(StringComparer.Ordinal);
@@ -722,11 +731,14 @@ public partial class FrameworkScanTests
         }
 
         // Methods of the runtime with no body to read that keep nothing of the object that they are given and run no code of an application:
-        // the identity hash code and the type of the object. The methods of Monitor are taken to keep nothing as well.
+        // the identity hash code and the type of the object, and MemberwiseClone of the .NET Framework, which has no body there and copies
+        // the object into a new one. The clone itself is what the scan of what a method clones finds, by the call. The methods of Monitor
+        // are taken to keep nothing as well.
         private static readonly HashSet<string> s_runtimeKeepsNothing = new(StringComparer.Ordinal) {
             "System.Runtime.CompilerServices.RuntimeHelpers::GetHashCode",
             "System.Runtime.CompilerServices.RuntimeHelpers::TryGetHashCode",
             "System.Object::GetType",
+            "System.Object::MemberwiseClone",
         };
 
         // The members of the classes whose chain reaches a class that clones itself, that code of another assembly can call, whose own object
@@ -984,7 +996,20 @@ public partial class FrameworkScanTests
             return result;
         }
 
-        private IEnumerable<int> GetImplementations(int key, bool isVirtual)
+        // The methods that a call of a key can run: the method itself, and for a virtual call the overrides of every class that derives
+        // from its class. The classes do not change once they are read, so each is worked out once: a virtual call of a member of object
+        // would walk every class of the framework.
+        private int[] GetImplementations(int key, bool isVirtual)
+        {
+            if (!_implementations.TryGetValue((key, isVirtual), out int[]? known))
+                _implementations[(key, isVirtual)] = known = [.. FindImplementations(key, isVirtual)];
+
+            return known;
+        }
+
+        private readonly Dictionary<(int Key, bool IsVirtual), int[]> _implementations = [];
+
+        private IEnumerable<int> FindImplementations(int key, bool isVirtual)
         {
             if (_methodsByKey.TryGetValue(key, out var exact))
             {

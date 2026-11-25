@@ -174,6 +174,29 @@ public sealed partial class DoNotCopyValueAnalyzer
         public int[] GetSuccessors(int block) => (_successors ??= FindSuccessors())[block];
 
         /// <summary>
+        /// Gets the blocks that control can go to from the end of a block that branches on a condition, where the value that the block
+        /// branches on is the given one. A branch out of a 'try' with a 'finally' goes to the 'finally' first, from whose end the code
+        /// goes on as <see cref="GetSuccessors"/> says. Null for a block that does not branch on a condition.
+        /// </summary>
+        public int[]? GetSuccessorsWhen(int block, bool value)
+        {
+            var basicBlock = Graph.Blocks[block];
+
+            if (basicBlock.ConditionKind is ControlFlowConditionKind.None)
+                return null;
+
+            var branch = (basicBlock.ConditionKind is ControlFlowConditionKind.WhenTrue) == value ? basicBlock.ConditionalSuccessor : basicBlock.FallThroughSuccessor;
+
+            if (branch is null)
+                return null;
+
+            if (!branch.FinallyRegions.IsEmpty)
+                return [branch.FinallyRegions[0].FirstBlockOrdinal];
+
+            return branch.Destination is { } destination ? [destination.Ordinal] : null;
+        }
+
+        /// <summary>
         /// Gets the first blocks of the 'catch' clauses, exception filters and 'finally' clauses that an exception in a block can reach.
         /// </summary>
         public int[] GetHandlers(int block) => (_handlers ??= FindHandlers())[block];

@@ -7,7 +7,7 @@ namespace Singulink.CodeAnalysis.Tests;
 /// combined delegate, the clauses of a <c>switch</c>, a spread, and the members that it calls on the receiver of an extension.
 /// </summary>
 /// <remarks>
-/// Docs: articles/concepts/compiler-copies.md.
+/// Docs: articles/rules/compiler-copies.md.
 /// </remarks>
 [PrefixTestClass]
 public class CompilerCopyTests
@@ -437,8 +437,8 @@ public class CompilerCopyTests
             // A view never owns its elements, so a spread over one copies them, whatever the view came from.
             void M(Table table)
             {
-                Guard[] snapshot = [{|#0:.. table.GetItems()|}];
-                List<Guard> list = [{|#1:.. table.GetItems()|}];
+                Guard[] snapshot = [.. {|#0:table.GetItems()|}];
+                List<Guard> list = [.. {|#1:table.GetItems()|}];
             }
         }
 
@@ -958,14 +958,14 @@ public class CompilerCopyTests
         class C
         {
             static readonly Bag<Guard> s_bag = new();
-            static readonly int[] s_counts = [{|#0:.. s_bag|}];
+            static readonly int[] s_counts = [.. {|#0:s_bag|}];
 
             void M(Bag<Guard> bag, Guards guards, Bag<int> numbers, in Batch batch)
             {
-                int[] counts = [{|#1:.. bag|}];
+                int[] counts = [.. {|#1:bag|}];
                 foreach (int count in {|#2:bag|}) { }
 
-                int[] ofGuards = [{|#3:.. guards|}];
+                int[] ofGuards = [.. {|#3:guards|}];
                 foreach (int count in {|#4:guards|}) { }
 
                 int[] ofABatch = [.. {|#5:batch|}];
@@ -1284,7 +1284,7 @@ public class CompilerCopyTests
 
             void Postfix(Holder holder)
             {
-                Counter old {|#0:= {|#1:holder.G|}++|};
+                Counter old = {|#0:{|#1:holder.G|}++|};
             }
 
             void Prefix(Holder holder)

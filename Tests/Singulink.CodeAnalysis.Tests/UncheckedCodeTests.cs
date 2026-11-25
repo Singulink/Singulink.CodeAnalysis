@@ -10,7 +10,7 @@ namespace Singulink.CodeAnalysis.Tests;
 /// hands out.
 /// </summary>
 /// <remarks>
-/// Docs: articles/concepts/unchecked-code.md.
+/// Docs: articles/rules/unchecked-code.md.
 /// </remarks>
 [PrefixTestClass]
 public class UncheckedCodeTests
@@ -365,20 +365,20 @@ public class UncheckedCodeTests
                 {
                     void ForEach(List<List<Guard>> lists)
                     {
-                        foreach ({|#1:Pool|} pool in {|#0:lists|}) { }
+                        foreach (Pool pool in {|#0:{|#1:lists|}|}) { }
                     }
 
                     Pool[] Spread()
                     {
                         var lists = new List<List<Guard>>();
-                        return [{|#2:.. lists|}];
+                        return [.. {|#2:lists|}];
                     }
 
                     void Compound(List<Guard> guards, Pool pool) => {|#4:guards += pool|};
 
                     void Deconstruction(Pair pair)
                     {
-                        ({|#5:Pool pool|}, int count) = pair;
+                        (Pool pool, int count) = {|#5:pair|};
                     }
 
                     void Event(Box box, Action<List<Guard>> handler)
@@ -433,8 +433,8 @@ public class UncheckedCodeTests
         const string ToPool = "M:Vendor.Pool.op_Implicit(System.Collections.Generic.List{Vendor.Guard})~Vendor.Pool";
 
         test.ExpectedDiagnostics.AddRange([
-            Verify.UncheckedMember(0, "Pool.implicit operator Pool(List<Guard>)", "guards", GuardList, ToPool),
             Verify.OpaqueConversion(1, GuardList, "Vendor.Pool"),
+            Verify.UncheckedMember(0, "Pool.implicit operator Pool(List<Guard>)", "guards", GuardList, ToPool),
             Verify.UncheckedMember(2, "Pool.implicit operator Pool(List<Guard>)", "guards", GuardList, ToPool),
             Verify.UncheckedMember(4, "Pool.implicit operator Pool(List<Guard>)", "guards", GuardList, ToPool),
             Verify.UncheckedMember(5, "Pool.implicit operator Pool(List<Guard>)", "guards", GuardList, ToPool),

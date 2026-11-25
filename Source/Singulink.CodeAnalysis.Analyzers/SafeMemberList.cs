@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Text;
 
@@ -23,12 +24,25 @@ internal sealed class SafeMemberList
 
     private const string ForKeyword = "for";
     private const string ClonesKeyword = "clones";
+    private const string BorrowsWhenKeyword = "borrowswhen";
+    private const string TrueValue = "true";
+    private const string FalseValue = "false";
     private const string CompleteValue = "complete";
     private const string NoneValue = "none";
     private const string AssemblyPrefix = "A:";
     private const string OwnedIsForATask = "the marker 'owned' is for an instance property of a class whose type is 'Task<TResult>'";
 
     private const string DrainsIsForASequence = "the marker 'drains' is for a method that returns a sequence, an IEnumerable<T> or an IAsyncEnumerable<T>";
+
+    private const string ResultIsForABoolean =
+        "the marker 'borrowswhen' is for a method that returns bool, Task<bool> or ValueTask<bool>";
+
+    private const string BorrowsWhenTakesOutcomes =
+        "'borrowswhen' takes one or more outcomes, separated by commas, as in 'borrowswhen=false'; the outcomes are 'true' and 'false'";
+
+    private const string BorrowsWhenNeedsAParameter =
+        "the marker 'borrowswhen' is for a method with a parameter that it takes by value, of a struct type or of a type parameter that the entry covers";
+
     private const string BuiltInResourceName = "Singulink.CodeAnalysis.Analyzers." + FileName;
 
     private static readonly Lazy<Dictionary<string, SafeListEntry>> s_builtInEntries = new(() => ToEntryMap(ParseBuiltIn()));
@@ -116,7 +130,7 @@ internal sealed class SafeMemberList
     /// </summary>
     public static bool ContradictsClones(SafeListEntry entry, IEnumerable<string>? clonesOfFiles = null) =>
         entry.Id[0] is 'M' or 'P' or 'E' &&
-        entry.Marker is SafeListMarker.None or SafeListMarker.New or SafeListMarker.Borrows or SafeListMarker.Drains or SafeListMarker.Owned &&
+        IsForMember(entry.Marker) &&
         (s_builtInClones.Value.Contains(entry.Id) || (clonesOfFiles?.Contains(entry.Id, StringComparer.Ordinal) ?? false));
 
     /// <summary>
@@ -318,6 +332,16 @@ internal sealed class SafeMemberList
         if (entry.Marker is SafeListMarker.Drains && !symbols.Any(ReturnsSequence))
             return DrainsIsForASequence;
 
+        // A method that is not called by its name, such as an operator, has no call that a condition could be made of.
+        if (entry.Marker is SafeListMarker.BorrowsWhen)
+        {
+            if (!symbols.Any(s => s is IMethodSymbol { MethodKind: MethodKind.Ordinary }))
+                return "the marker 'borrowswhen' is for a method that is called by its name, not for a constructor, an operator, a conversion or an accessor";
+
+            if (!symbols.Any(s => s is IMethodSymbol { MethodKind: MethodKind.Ordinary, ReturnsByRef: false, ReturnsByRefReadonly: false } method && IsBooleanResult(method.ReturnType)))
+                return ResultIsForABoolean;
+        }
+
         foreach (string name in entry.TypeParameterNames ?? [])
         {
             if (!symbols.Any(s => CountTypeParameters(s, name) > 0))
@@ -328,7 +352,51 @@ internal sealed class SafeMemberList
                 return $"'{name}' names more than one type parameter of the member and of the types that contain it";
         }
 
+        if (entry.Marker is SafeListMarker.BorrowsWhen &&
+            !symbols.Any(s => s is IMethodSymbol method && method.Parameters.Any(p => p.RefKind is RefKind.None && CanBeTaken(p.Type, entry))))
+        {
+            return BorrowsWhenNeedsAParameter;
+        }
+
         return null;
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether a member's result can say whether it has taken a value: it is a bool, or a task of a bool that
+    /// is awaited, Task&lt;bool&gt; or ValueTask&lt;bool&gt;.
+    /// </summary>
+    public static bool IsBooleanResult(ITypeSymbol type) =>
+        type.SpecialType is SpecialType.System_Boolean || IsTaskOfBoolean(type);
+
+    /// <summary>
+    /// Gets a value indicating whether a type is Task&lt;bool&gt; or ValueTask&lt;bool&gt;.
+    /// </summary>
+    public static bool IsTaskOfBoolean(ITypeSymbol? type) =>
+        type is INamedTypeSymbol { Name: "Task" or "ValueTask", Arity: 1, ContainingType: null, TypeArguments: [{ SpecialType: SpecialType.System_Boolean }] } &&
+        NonCopyableTypes.IsInNamespace(type, "System.Threading.Tasks");
+
+    /// <summary>
+    /// Gets a value indicating whether a 'borrowswhen' entry covers a parameter of a member, by the type of the parameter in the member's
+    /// definition: a type parameter that can be a struct, or a struct, where the entry covers every type parameter that the type
+    /// mentions. The value that is passed decides the rest: only a value of a non-copyable type is followed.
+    /// </summary>
+    public static bool CanBeTaken(ITypeSymbol definitionType, SafeListEntry entry) => definitionType switch {
+        ITypeParameterSymbol typeParameter => !typeParameter.IsReferenceType && entry.Covers(typeParameter),
+        INamedTypeSymbol { TypeKind: TypeKind.Struct, SpecialType: SpecialType.None } type => CoversEveryTypeParameter(type, entry),
+        _ => false,
+    };
+
+    private static bool CoversEveryTypeParameter(ITypeSymbol type, SafeListEntry entry)
+    {
+        RuntimeHelpers.EnsureSufficientExecutionStack();
+
+        return type switch {
+            ITypeParameterSymbol typeParameter => entry.Covers(typeParameter),
+            IArrayTypeSymbol array => CoversEveryTypeParameter(array.ElementType, entry),
+            INamedTypeSymbol named => named.TypeArguments.All(argument => CoversEveryTypeParameter(argument, entry)) &&
+                (named.ContainingType is not { } containing || CoversEveryTypeParameter(containing, entry)),
+            _ => true,
+        };
     }
 
     /// <summary>
@@ -503,8 +571,10 @@ internal sealed class SafeMemberList
     /// </summary>
     public SafeListEntry? GetMember(string id) => _entries.TryGetValue(id, out var entry) && IsForMember(entry.Marker) ? entry : null;
 
+    // A 'borrowswhen' entry is an ordinary entry besides: the member is safe to use, as with no marker.
     private static bool IsForMember(SafeListMarker marker) =>
-        marker is SafeListMarker.None or SafeListMarker.New or SafeListMarker.Borrows or SafeListMarker.Drains or SafeListMarker.Owned;
+        marker is SafeListMarker.None or SafeListMarker.New or SafeListMarker.Borrows or SafeListMarker.Drains or SafeListMarker.Owned or
+            SafeListMarker.BorrowsWhen;
 
     // The marker 'drains' says that the sequence which the method returns takes each element out of its source as it hands it
     // out. That can be said only of a sequence: a list or an array that a method returns holds its elements. And it is said of
@@ -617,15 +687,110 @@ internal sealed class SafeMemberList
         return added.Count is 0 ? null : ("'" + string.Join("', '", added) + "'", builtInText);
     }
 
+    /// <summary>
+    /// Gets, for a 'borrowswhen' line of a user file that names a member of the built-in list, the outcomes that it lists and the
+    /// built-in entry does not, in words: "the outcome 'true'". The merge keeps the outcomes that both lines list, so those have no
+    /// effect. Null for any other line, and for one that is left out for the type parameters that it names
+    /// (<see cref="FindWideningOfBuiltIn"/>).
+    /// </summary>
+    public static string? FindOutcomesBeyondBuiltIn(SafeListEntry entry)
+    {
+        if (entry.Marker is not SafeListMarker.BorrowsWhen ||
+            !s_builtInEntries.Value.TryGetValue(entry.Id, out var builtIn) ||
+            FindWideningOfBuiltIn(entry) is not null)
+        {
+            return null;
+        }
+
+        var beyond = entry.BorrowedOutcomes & ~builtIn.BorrowedOutcomes;
+
+        if (beyond is SafeListOutcomes.None)
+            return null;
+
+        var names = new List<string>(2);
+
+        if (beyond.HasFlag(SafeListOutcomes.True))
+            names.Add("'true'");
+
+        if (beyond.HasFlag(SafeListOutcomes.False))
+            names.Add("'false'");
+
+        return names.Count is 1 ? "the outcome " + names[0] : "the outcomes " + string.Join(", ", names.Take(names.Count - 1)) + " and " + names[^1];
+    }
+
+    /// <summary>
+    /// Gets, for a 'borrows' line of a user file that names a member which the built-in list names with 'borrowswhen' or with no marker,
+    /// what the built-in entry says in words: "with 'borrowswhen=false'", "with no marker". The merge keeps what the built-in entry says,
+    /// so the line has no effect. Null for any other line, for one that is left out for the type parameters that it names (<see
+    /// cref="FindWideningOfBuiltIn"/>), and for one whose <c>for=</c> leaves out a type parameter that the built-in entry covers: it takes
+    /// the entry away for that type parameter, which is an effect.
+    /// </summary>
+    public static string? FindBorrowsBeyondBuiltIn(SafeListEntry entry, Compilation compilation)
+    {
+        if (entry.Marker is not SafeListMarker.Borrows ||
+            !s_builtInEntries.Value.TryGetValue(entry.Id, out var builtIn) ||
+            builtIn.Marker is not (SafeListMarker.None or SafeListMarker.BorrowsWhen) ||
+            FindWideningOfBuiltIn(entry) is not null ||
+            LeavesOutTypeParameterOfBuiltIn(entry, builtIn, compilation))
+        {
+            return null;
+        }
+
+        if (builtIn.Marker is SafeListMarker.None)
+            return "with no marker";
+
+        var outcomes = new List<string>(2);
+
+        if (builtIn.BorrowedOutcomes.HasFlag(SafeListOutcomes.True))
+            outcomes.Add("true");
+
+        if (builtIn.BorrowedOutcomes.HasFlag(SafeListOutcomes.False))
+            outcomes.Add("false");
+
+        return "with 'borrowswhen=" + string.Join(",", outcomes) + "'";
+    }
+
+    // A line whose 'for=' leaves out a type parameter that the built-in entry covers, by its own 'for=' or, with none, as every type
+    // parameter of the member and of the types that contain it. A line that names nothing of the compilation leaves nothing out there.
+    private static bool LeavesOutTypeParameterOfBuiltIn(SafeListEntry entry, SafeListEntry builtIn, Compilation compilation)
+    {
+        if (entry.TypeParameterNames is not { } names)
+            return false;
+
+        if (builtIn.TypeParameterNames is { } builtInNames)
+            return builtInNames.Except(names, StringComparer.Ordinal).Any();
+
+        return DocumentationCommentId.GetSymbolsForDeclarationId(entry.Id, compilation)
+            .Any(member => GetTypeParameterNames(member).Except(names, StringComparer.Ordinal).Any());
+    }
+
+    private static IEnumerable<string> GetTypeParameterNames(ISymbol member)
+    {
+        if (member is IMethodSymbol method)
+        {
+            foreach (var parameter in method.TypeParameters)
+                yield return parameter.Name;
+        }
+
+        for (var type = member.ContainingType; type is not null; type = type.ContainingType)
+        {
+            foreach (var parameter in type.TypeParameters)
+                yield return parameter.Name;
+        }
+    }
+
     private static SafeListEntry Combine(SafeListEntry first, SafeListEntry second)
     {
-        // A member hands out a new value, may be passed a stored value, drains its source, or has a task that is its object's alone, only if both say so, and
-        // is vouched for only where both vouch for it. A type that one of them calls non-copyable is non-copyable, and one that only one of
-        // them calls erasable is not erasable.
+        // A member hands out a new value, may be passed a stored value, drains its source, or has a task that is its object's alone, only
+        // if both say so, and is vouched for only where both vouch for it. A type that one of them calls non-copyable is non-copyable, and
+        // one that only one of them calls erasable is not erasable. A member keeps nothing of a value that it is given in the outcomes that
+        // both lines list, where 'borrows' lists every outcome and any other marker none: 'borrows' and 'borrowswhen=false' give
+        // 'borrowswhen=false', and 'borrowswhen=false' and 'borrowswhen=true' give no marker.
         var marker = (first.Marker, second.Marker) switch {
             var (one, other) when one == other => one,
             (SafeListMarker.NonCopyable, _) or (_, SafeListMarker.NonCopyable) => SafeListMarker.NonCopyable,
             (SafeListMarker.View, _) or (_, SafeListMarker.View) => SafeListMarker.View,
+            (SafeListMarker.Borrows, SafeListMarker.BorrowsWhen) or (SafeListMarker.BorrowsWhen, SafeListMarker.Borrows) => SafeListMarker.BorrowsWhen,
             _ => SafeListMarker.None,
         };
 
@@ -635,7 +800,17 @@ internal sealed class SafeMemberList
             (var firstNames, var secondNames) => firstNames.Intersect(secondNames).ToArray(),
         };
 
-        return new SafeListEntry(first.Id, marker, typeParameterNames, first.Line);
+        var borrowed = SafeListOutcomes.None;
+
+        if (marker is SafeListMarker.BorrowsWhen)
+        {
+            borrowed = first.BorrowedOutcomes & second.BorrowedOutcomes;
+
+            if (borrowed is SafeListOutcomes.None)
+                marker = SafeListMarker.None;
+        }
+
+        return new SafeListEntry(first.Id, marker, typeParameterNames, first.Line, borrowedOutcomes: borrowed);
     }
 
     private static string RemoveComment(string line)
@@ -681,6 +856,9 @@ internal sealed class SafeMemberList
         bool isType = id[0] is 'T';
         var marker = SafeListMarker.None;
         bool isComplete = false;
+        bool hasMarker = false;
+        var borrowed = SafeListOutcomes.None;
+        List<string>? unknownOutcomes = null;
         string[]? typeParameterNames = null;
 
         for (int i = 1; i < parts.Length; i++)
@@ -726,11 +904,13 @@ internal sealed class SafeMemberList
                 return false;
             }
 
-            if (marker is not SafeListMarker.None)
+            if (hasMarker)
             {
                 reason = "an entry has one marker, which 'for=' can follow";
                 return false;
             }
+
+            hasMarker = true;
 
             // 'clones=complete' says of a class that its 'clones' lines name every member that clones its object or hands it on. White
             // space is allowed around the '=', as for 'for='.
@@ -759,6 +939,73 @@ internal sealed class SafeMemberList
 
                 marker = SafeListMarker.Clones;
                 isComplete = true;
+                continue;
+            }
+
+            // The value of 'borrowswhen' lists the outcomes of a method in which it keeps nothing of a value that it was given by value:
+            // 'true' or 'false' where it returned that. An outcome that it does not list is one in which the method has taken the value,
+            // and so is a throw. The outcomes come in any order, each once, with white space allowed around the '=' and the ',', as for
+            // 'for='. An outcome that the analyzer does not know is skipped, so the line claims less: a later version of the format can
+            // add one. A bare 'borrowswhen' gets the same reason as an empty outcome.
+            if (part.StartsWith(BorrowsWhenKeyword, StringComparison.Ordinal) && part[BorrowsWhenKeyword.Length..].TrimStart() is "" or ['=', ..])
+            {
+                string rest = part[BorrowsWhenKeyword.Length..].TrimStart();
+                string[] outcomes = rest.Length is 0 ? [string.Empty] : rest[1..].Split(',');
+
+                for (int n = 0; n < outcomes.Length; n++)
+                    outcomes[n] = outcomes[n].Trim();
+
+                if (outcomes.Any(outcome => outcome.Length is 0 || outcome.Any(char.IsWhiteSpace)))
+                {
+                    reason = BorrowsWhenTakesOutcomes;
+                    return false;
+                }
+
+                if (outcomes.GroupBy(outcome => outcome, StringComparer.Ordinal).FirstOrDefault(group => group.Count() > 1) is { } repeated)
+                {
+                    reason = $"'borrowswhen' lists the outcome '{repeated.Key}' twice";
+                    return false;
+                }
+
+                if (id[0] is not 'M')
+                {
+                    reason = isType
+                        ? "the marker 'borrowswhen' is for a method; a type takes 'view', 'noncopyable', 'copyable', 'erasable' or 'clones'"
+                        : "the marker 'borrowswhen' is for a method";
+
+                    return false;
+                }
+
+                foreach (string outcome in outcomes)
+                {
+                    switch (outcome)
+                    {
+                        case TrueValue:
+                            borrowed |= SafeListOutcomes.True;
+                            break;
+
+                        case FalseValue:
+                            borrowed |= SafeListOutcomes.False;
+                            break;
+
+                        default:
+                            (unknownOutcomes ??= []).Add(outcome);
+                            break;
+                    }
+                }
+
+                // 'true' and 'false' together would say that the member takes the value only where it throws, which no member was
+                // found to do. A member that keeps nothing of the value whatever happens is written 'borrows'.
+                if (borrowed.HasFlag(SafeListOutcomes.True | SafeListOutcomes.False))
+                {
+                    reason = "'borrowswhen' lists 'true' or 'false', not both; for a member that keeps nothing of the value whatever it returns, write 'borrows'";
+                    return false;
+                }
+
+                // A line whose every outcome is unknown claims nothing more than a line with no marker.
+                if (borrowed is not SafeListOutcomes.None)
+                    marker = SafeListMarker.BorrowsWhen;
+
                 continue;
             }
 
@@ -817,11 +1064,11 @@ internal sealed class SafeMemberList
                     return false;
 
                 case "view" or "noncopyable" or "copyable" or "erasable":
-                    reason = $"the marker '{part}' is for a type; a member takes 'new', 'borrows', 'drains', 'owned', 'clones' or no marker";
+                    reason = $"the marker '{part}' is for a type; a member takes 'new', 'borrows', 'drains', 'owned', 'borrowswhen', 'clones' or no marker";
                     return false;
 
                 default:
-                    reason = $"unknown marker '{part}'; the markers are 'new', 'borrows', 'drains', 'owned', 'view', 'noncopyable', 'copyable', 'erasable' and 'clones', and 'trusted' for an assembly";
+                    reason = $"unknown marker '{part}'; the markers are 'new', 'borrows', 'drains', 'owned', 'borrowswhen', 'view', 'noncopyable', 'copyable', 'erasable' and 'clones', and 'trusted' for an assembly";
                     return false;
             }
         }
@@ -832,7 +1079,7 @@ internal sealed class SafeMemberList
             return false;
         }
 
-        entry = new SafeListEntry(id, marker, typeParameterNames, line, isComplete);
+        entry = new SafeListEntry(id, marker, typeParameterNames, line, isComplete, borrowed, unknownOutcomes?.ToArray());
         reason = string.Empty;
         return true;
     }
@@ -990,6 +1237,13 @@ internal enum SafeListMarker
     Owned,
 
     /// <summary>
+    /// A method that is safe to use and that keeps nothing of a value that it is given by value in some of its outcomes, written
+    /// 'borrowswhen=' and the outcomes (<see cref="SafeListEntry.BorrowedOutcomes"/>): the caller still holds the value there. In every
+    /// other outcome the method has taken the value. Unlike <see cref="Borrows"/> it says nothing of a stored value or of a container.
+    /// </summary>
+    BorrowsWhen,
+
+    /// <summary>
     /// A struct whose copies share the elements instead of copying them.
     /// </summary>
     View,
@@ -1035,7 +1289,14 @@ internal enum SafeListMarker
 /// An entry of a safe list: the documentation comment ID of a member or a type, its marker, and for a member optionally the type parameters that
 /// the entry vouches for.
 /// </summary>
-internal sealed class SafeListEntry(string id, SafeListMarker marker, string[]? typeParameterNames, TextLine line, bool isComplete = false)
+internal sealed class SafeListEntry(
+    string id,
+    SafeListMarker marker,
+    string[]? typeParameterNames,
+    TextLine line,
+    bool isComplete = false,
+    SafeListOutcomes borrowedOutcomes = SafeListOutcomes.None,
+    string[]? unknownOutcomes = null)
 {
     public string Id { get; } = id;
 
@@ -1046,6 +1307,21 @@ internal sealed class SafeListEntry(string id, SafeListMarker marker, string[]? 
     /// clones its object or hands it to code that can.
     /// </summary>
     public bool IsComplete { get; } = isComplete;
+
+    /// <summary>
+    /// Gets the outcomes of a call in which the member keeps nothing of a value that it is given by value: those that 'borrowswhen' lists,
+    /// every outcome for 'borrows', and none for any other marker.
+    /// </summary>
+    public SafeListOutcomes BorrowedOutcomes { get; } = marker switch {
+        SafeListMarker.Borrows => SafeListOutcomes.True | SafeListOutcomes.False,
+        SafeListMarker.BorrowsWhen => borrowedOutcomes,
+        _ => SafeListOutcomes.None,
+    };
+
+    /// <summary>
+    /// Gets the outcomes after 'borrowswhen=' that the analyzer does not know, which the entry leaves out. Null if there are none.
+    /// </summary>
+    public string[]? UnknownOutcomes { get; } = unknownOutcomes;
 
     /// <summary>
     /// Gets the names after <c>for=</c>: the type parameters of the member or of a type that contains it that the entry vouches for. Null if the
@@ -1063,6 +1339,28 @@ internal sealed class SafeListEntry(string id, SafeListMarker marker, string[]? 
     /// of the member or of a type that contains it. If it does not, the member counts as not listed for that use.
     /// </summary>
     public bool Covers(ITypeParameterSymbol typeParameter) => TypeParameterNames is null || Array.IndexOf(TypeParameterNames, typeParameter.Name) >= 0;
+}
+
+/// <summary>
+/// The outcomes of a call of a method that a 'borrowswhen' entry can list.
+/// </summary>
+[Flags]
+internal enum SafeListOutcomes
+{
+    /// <summary>
+    /// No outcome.
+    /// </summary>
+    None = 0,
+
+    /// <summary>
+    /// The method returned true, or a task of a bool that gave true when it was awaited.
+    /// </summary>
+    True = 1,
+
+    /// <summary>
+    /// The method returned false, or a task of a bool that gave false when it was awaited.
+    /// </summary>
+    False = 2,
 }
 
 /// <summary>

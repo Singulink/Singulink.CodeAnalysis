@@ -33,6 +33,21 @@ public sealed partial class DoNotCopyValueAnalyzer
         // The locals and parameters of a non-copyable type that a lambda or a local function captures. Found when first asked for.
         private HashSet<ISymbol>? _capturedVariables;
 
+        // The reads of a variable of a non-copyable type that can be moved from, which are no last uses because the variable is used
+        // again, in the order in which they were judged.
+        private List<(IOperation Reference, ISymbol Variable)>? _readsBeforeLaterUses;
+
+        /// <summary>
+        /// Gets the reads by value of a local or a by-value parameter of a non-copyable type that can be moved from, where the read was no
+        /// last use because the variable is used again: the hand-offs that a report of a copy can have been made for.
+        /// </summary>
+        public IReadOnlyList<(IOperation Reference, ISymbol Variable)> ReadsBeforeLaterUses => _readsBeforeLaterUses ?? [];
+
+        /// <summary>
+        /// Gets the paths through the member.
+        /// </summary>
+        public MemberFlow Flow => _flow ??= new(context, types);
+
         /// <summary>
         /// Gets a value indicating whether a variable that a 'return' reads is used after the read: by a 'finally' block, or by the end
         /// of a 'using' scope that holds a reference to it. The paths decide, as for any other read, and whatever the switch for the
@@ -42,7 +57,16 @@ public sealed partial class DoNotCopyValueAnalyzer
         {
             variable = GetReferencedVariable(source);
 
-            return variable is not null && IsFollowedByCleanup(operation.Syntax) && !(_flow ??= new(context, types)).IsLastUse(source, variable);
+            if (variable is null || !IsFollowedByCleanup(operation.Syntax) || handOffs?.Contains(MemberFlow.GetKey(source)) is true)
+                return false;
+
+            if (Flow.IsLastUse(source, variable))
+                return false;
+
+            if (allowsImplicitMoves && IsOfMovableKind(variable) && IsMovable(variable))
+                NoteReadBeforeLaterUse(source, variable);
+
+            return true;
         }
 
         /// <summary>
@@ -162,9 +186,26 @@ public sealed partial class DoNotCopyValueAnalyzer
         private bool IsMovedAtLastUse(IOperation reference, ISymbol variable)
         {
             // With the moves turned off no read is a last use, and the paths through the member are not worked out for it.
-            if (!allowsImplicitMoves || !IsOfMovableKind(variable) || !CanMatterAsNew(reference))
+            if (!allowsImplicitMoves || !IsOfMovableKind(variable) || !CanMatterAsNew(reference) || !IsMovable(variable))
                 return false;
 
+            // The second walk of a member takes a hand-off for a last use, to find the reports that it made.
+            if (handOffs?.Contains(MemberFlow.GetKey(reference)) is true)
+                return true;
+
+            if (Flow.IsLastUse(reference, variable))
+                return true;
+
+            NoteReadBeforeLaterUse(reference, variable);
+            return false;
+        }
+
+        /// <summary>
+        /// Gets a value indicating whether a variable of a kind that can be moved from is not ruled out by what holds for the whole member
+        /// (see <see cref="CanBeMovedFrom"/>), worked out once for each variable.
+        /// </summary>
+        private bool IsMovable(ISymbol variable)
+        {
             if (!(_movableVariables ??= new(SymbolEqualityComparer.Default)).TryGetValue(variable, out bool isMovable))
             {
                 // Whether a local holds a container of its own is known only once every use of every such local has been looked at, and
@@ -177,7 +218,29 @@ public sealed partial class DoNotCopyValueAnalyzer
                 _movableVariables[variable] = isMovable = CanBeMovedFrom(variable);
             }
 
-            return isMovable && (_flow ??= new(context, types)).IsLastUse(reference, variable);
+            return isMovable;
+        }
+
+        /// <summary>
+        /// Notes a read of a variable of a non-copyable type that is no last use because the variable is used again. A variable that holds
+        /// a container is left out: what a read of one hands over is the container, which is judged by whether the method owns it.
+        /// </summary>
+        private void NoteReadBeforeLaterUse(IOperation reference, ISymbol variable)
+        {
+            var type = variable switch {
+                ILocalSymbol local => local.Type,
+                IParameterSymbol parameter => parameter.Type,
+                _ => null,
+            };
+
+            if (!types.IsNonCopyableType(type))
+                return;
+
+            var key = MemberFlow.GetKey(reference);
+            var reads = _readsBeforeLaterUses ??= [];
+
+            if (!reads.Any(read => MemberFlow.GetKey(read.Reference) == key))
+                reads.Add((reference, variable));
         }
 
         /// <summary>

@@ -542,7 +542,7 @@ public sealed partial class DoNotCopyValueAnalyzer
                 if (parameter.RefKind is not RefKind.Ref)
                 {
                     if (isLocal)
-                        context.ReportDiagnostic(Diagnostic.Create(Rules.MovedFromNotOnRefParameter, parameter.Locations.FirstOrDefault(l => l.IsInSource)));
+                        ReportDiagnostic(severities.Create(Rules.MovedFromNotOnRefParameter, parameter.Locations.FirstOrDefault(l => l.IsInSource)));
 
                     return;
                 }
