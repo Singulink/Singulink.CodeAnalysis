@@ -18,10 +18,13 @@ Each kind of warning has an ID of its own, so that a project can turn one down w
 Suppress a single warning on correct code where it stands, with a comment that says why the code is right:
 
 ```cs
-#pragma warning disable SCA1003 // TryWrite takes the lease only where it returns true
-if (!writer.TryWrite(lease))
+catch
+{
+#pragma warning disable SCA1016 // _channel can only throw before it takes the lease
     lease.Dispose();
-#pragma warning restore SCA1003
+#pragma warning restore SCA1016
+    throw;
+}
 ```
 
 [Correct Code That Still Gets a Warning](correct-code-with-warnings.md) shows the shapes that need this.
@@ -61,6 +64,18 @@ A local or a by-value parameter is a new value [where it is used for the last ti
 
 Then only `NonCopyable.Move` hands a value over. What else that turns off, and how to set it in a configuration file: [Turning Off the Move on the Last Use](../rules/msbuild-properties.md#turning-off-the-move-on-the-last-use).
 
-The ten built-in framework structs have a property of their own: see [Built-in Types](built-in-types.md).
+The built-in framework structs have a property of their own: see [Built-in Types](built-in-types.md).
+
+## Under the Updated Memory Safety Rules
+
+A project that turns on the updated memory safety rules of C# gets most reports as errors, and only code in an unsafe context can take one on itself:
+
+| To turn down | Write |
+|---|---|
+| One report on code that is correct | `unsafe(...)` around the expression that is reported, such as `unsafe(lease).Dispose();`, or an `unsafe` block around the statement, and `#pragma warning disable` with the reason |
+| A plain warning: SCA1042, SCA1045, SCA1047, and SCA1025 | As under the current rules |
+| Every error of the project | `NonCopyableErrorsAsWarnings` set to `true`, which makes the analyzer report as under the current rules |
+
+`.editorconfig`, `.globalconfig`, `NoWarn` and `[SuppressMessage]` have no effect on an error. In an unsafe context, all of them but `[SuppressMessage]` turn the warning off. See [Updated Memory Safety Rules](../rules/updated-memory-safety-rules.md#suppressing-the-warning).
 
 </div>

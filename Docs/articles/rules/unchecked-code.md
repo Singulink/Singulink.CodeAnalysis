@@ -10,7 +10,7 @@ The analyzer checks the code of the project, and of every assembly that was buil
 - **Passing a value by value is always fine:** the value is moved, as into any callee.
 - **A member that gets at a non-copyable value in any other way** gets a warning until a [symbol list entry](symbol-list-format.md) with `borrows` vouches for it (SCA1024).
 - **A container that such a member hands out counts as stored,** unless a symbol list entry marks the member `new`.
-- **An assembly that can use a non-copyable type of a project or a library** gets one warning (SCA1025), unless a `trusted` line vouches for it.
+- **An assembly that can use a non-copyable type of a project or a library** is reported once (SCA1025), unless a `trusted` line vouches for it.
 - **Marks that grant something count as absent** on such code. Marks that only restrict are honoured from anywhere.
 
 ## Which Code Needs Anything From You
@@ -105,7 +105,7 @@ The members of the non-copyable type itself stay trusted with values of that typ
 
 A member of the type that gets at another non-copyable value, or at a container, even one of its own type, is judged like any other member: `Lease.Grab(ref Guard)` needs its entry.
 
-The [built-in framework symbol list](framework-symbol-list.md) has the members of the framework that get at one of its ten non-copyable types in this way. A test of the analyzer scans the shared frameworks for every such member.
+The [built-in framework symbol list](framework-symbol-list.md) has the members of the framework that get at one of its built-in non-copyable types in this way. A test of the analyzer scans the shared frameworks for every such member.
 
 ## Containers Handed Out by Unchecked Code
 

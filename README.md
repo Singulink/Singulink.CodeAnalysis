@@ -24,14 +24,17 @@ public struct LockGuard : IDisposable
 }
 
 var guard = myLock.Enter();             // OK: a new value
-var copy = guard;                       // SCA1001: a copy of the variable
-TakeGuard(guard);                       // SCA1003: passed by value
+Console.WriteLine(guard.Id);            // OK: used in place
 TakeGuard(ref guard);                   // OK: passed by reference
-guard.Dispose();                        // OK: called on the variable itself
-TakeGuard(NonCopyable.Move(ref guard)); // OK: moved, and 'guard' is left empty
+TakeGuard(guard);                       // OK: 'guard' is not used again, so the guard moves
 
-var last = myLock.Enter();
-_guard = last;                          // OK: 'last' is not used again, so there is nothing to copy
+var copy = _guard;                      // SCA1001: a copy of the field
+TakeGuard(_guard);                      // SCA1003: passed by value, and the field still holds it
+TakeGuard(NonCopyable.Move(ref _guard)); // OK: moved, and '_guard' is left empty
+
+var other = myLock.Enter();
+TakeGuard(other);                       // a copy, since 'other' is used below
+other.Dispose();                        // SCA1016: used after it was handed over
 
 var guards = new List<LockGuard>();
 guards.Add(myLock.Enter());             // OK: a new value is moved in
@@ -61,7 +64,7 @@ This package is part of our **Singulink Libraries** collection. Visit https://gi
 You may not have added these analyzers yourself. A library whose public API has structs that must not be copied, such as lock guards or
 handles, can bring the analyzers with it, so that the projects that use the library get a warning when they copy those structs. The
 analyzers then check the types that the library marked. Even with nothing marked in your own code, you get a warning where your code
-copies one of the library's structs, or a collection or a task that holds one. In such a project, the analyzers do not check the ten
+copies one of the library's structs, or a collection or a task that holds one. In such a project, the analyzers do not check the
 framework structs that they otherwise treat as non-copyable.
 
 Four warnings are about code that can copy such a struct without a visible copy, so they can appear even in a project that copies
@@ -71,7 +74,8 @@ nothing:
 - a field that holds such a struct in a class that derives from a class that clones itself, such as `Encoding`, or such a struct bound to
   a generic class that derives from one (`SCA1009`);
 - any use of `RuntimeHelpers.GetObjectValue` (`SCA1007`);
-- a referenced assembly that uses the library's structs and was not built with the analyzers (`SCA1025`).
+- a referenced assembly that uses the library's structs and was not built with the analyzers (`SCA1025`, a message and not a warning
+  in such a project).
 
 Each warning has an ID of the form `SCA1001`, and its message names the value, says what receives the copy, and says what to do instead. The
 ID links to the warning's article on the [documentation site](https://www.singulink.com/Docs/Singulink.CodeAnalysis/index.html), which shows an example that gets the warning and
@@ -136,11 +140,11 @@ Take(NonCopyable.Move(ref _guard));                       // OK
 ```
 
 **A variable that is used after it was handed on:** read what you need first. A variable is a new value where it is used for the last time,
-so the hand-over has to be that last use.
+so the hand-over has to be that last use. The warning is at the use after the hand-over.
 
 ```cs
-_held = guard;                                            // SCA1001: 'guard' is read again below
-Log(guard.Id);
+_held = guard;                                            // a copy, since 'guard' is read again below
+Log(guard.Id);                                            // SCA1016: used after it was handed on
 
 int id = guard.Id;
 _held = guard;                                            // OK: the last use
@@ -167,8 +171,8 @@ int count = locks.With((ref LockGuard guard) => guard.Count);
 the constructor throws. Read it and clear it in two statements with nothing between them.
 
 ```cs
-try { return new UnitOfWork(scope, user); }               // SCA1003: the 'catch' can still run, so this is not the last use
-catch { scope.Dispose(); throw; }
+try { return new UnitOfWork(scope, user); }               // the 'catch' can still run, so this is not the last use...
+catch { scope.Dispose(); throw; }                         // SCA1016: ...and the 'catch' uses 'scope' after the hand-off
 
 public UnitOfWork([MovedFrom] ref TransactionScope scope, string user)
 {
@@ -215,6 +219,10 @@ dotnet_diagnostic.SCA1023.severity = none
 **One warning on correct code:** suppress it where it stands, with a comment that says why it is right. See
 [Turning Rules Down](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/guides/turning-rules-down.html) and [Symbol List](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/guides/symbol-list.html).
 
+> [!NOTE]
+> **The updated memory safety rules of C#:** in a project that turns them on, most reports are errors, and only code in an unsafe context
+> can suppress one. See [Updated Memory Safety Rules](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/rules/updated-memory-safety-rules.html).
+
 ## Marking a Struct of Your Own
 
 Reference `Singulink.CodeAnalysis` and mark the struct with `[NonCopyable]`, as in the example above. The analyzers recognize the
@@ -245,7 +253,7 @@ no runtime dependency:
 <PackageReference Include="Singulink.CodeAnalysis.Analyzers" Version="0.7.5" PrivateAssets="all" />
 ```
 
-In a project that references one of the two packages directly, the analyzers also treat ten framework structs as non-copyable, such as
+In a project that references one of the two packages directly, the analyzers also treat some framework structs as non-copyable, such as
 `GCHandle` and `SpinLock`. In a project that gets the analyzers only through a library, they do not. See
 [Non-copyable Types](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/rules/non-copyable-types.html) and
 [Leaving out the built-in non-copyable types](https://www.singulink.com/Docs/Singulink.CodeAnalysis/articles/guides/built-in-types.html).

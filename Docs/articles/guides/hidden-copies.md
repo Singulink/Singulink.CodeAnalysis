@@ -86,7 +86,7 @@ A new guard moves into a box, and calls through an interface run on the box. A s
 ```cs
 IDisposable boxed = myLock.Enter();          // OK: the guard moves into the box
 boxed.Dispose();                             // OK: runs on the box
-object copy = guard;                         // SCA1004: boxes a copy of a stored value
+object copy = _guard;                        // SCA1004: boxes a copy of a stored value
 LockGuard back = (LockGuard)boxed;           // SCA1001: a copy out of the box
 ```
 

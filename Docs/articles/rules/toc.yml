@@ -94,6 +94,9 @@
   - name: MSBuild Properties
     href: msbuild-properties.md
 
+  - name: Updated Memory Safety Rules
+    href: updated-memory-safety-rules.md
+
   - name: Code Not Built With the Analyzer
     href: unchecked-code.md
 

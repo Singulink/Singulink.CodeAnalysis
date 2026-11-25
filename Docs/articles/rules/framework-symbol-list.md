@@ -11,6 +11,7 @@ This page says what is on it, and what cannot be. The [symbol list files](symbol
 | A member that | Is on the built-in framework symbol list as |
 |---|---|
 | Takes a value out of its collection | Handing out a new value |
+| Takes a value in only where it returns true, as `TryAdd` does | `borrowswhen=false` |
 | Reads a value that the collection still holds | No marker: a copy on a stored collection (SCA1030) |
 | Uses a container or a value of its own non-copyable type during the call only | `borrows` |
 | Hands out a sequence that takes each element out of its source | `drains` |
@@ -23,7 +24,7 @@ The built-in framework symbol list marks as `borrows` the members of its own non
 - `ToIntPtr` and `Equals` of the four handle types;
 - the comparison operators and the conversion to <xref:System.IntPtr> of <xref:System.Runtime.InteropServices.GCHandle>;
 - `GetAddressOfArrayData` and `GetAddressOfStringData`;
-- the comparisons of <xref:System.Threading.AsyncFlowControl>.
+- the comparisons of <xref:System.Threading.AsyncFlowControl> and of <xref:System.Windows.Threading.DispatcherProcessingDisabled>.
 
 The constructor of <xref:System.Buffers.MemoryHandle> keeps the <xref:System.Runtime.InteropServices.GCHandle> that it is given, so a stored handle that is passed to it still gets a warning.
 
@@ -44,6 +45,7 @@ The built-in framework symbol list has the types that hand a value over between 
 | Member | On the framework symbol list as |
 |---|---|
 | A write | Moving the value in |
+| `TryWrite`, and the `TryAdd` of a concurrent dictionary and of a blocking collection | Moving the value in only where it returns true (see [Members That Take a Value Only Where They Return True](#members-that-take-a-value-only-where-they-return-true)) |
 | A read that takes the value out: `TryRead`, `ReadAsync`, `TryDequeue`, `TryPop`, `TryTake`, `Take`, `TryRemove` | Handing out a new value |
 | What hands out a value that the collection still holds: `TryPeek`, `TryGetValue`, `GetOrAdd`, the indexer, an enumerator | No marker: a copy on a stored collection (SCA1030) |
 | What copies every element (`ToArray`, `CopyTo`) and what compares values (`TryUpdate`, `AddOrUpdate`) | Not on the framework symbol list |
@@ -63,6 +65,47 @@ foreach (var guard in _pending.GetConsumingEnumerable())
 - **The same sequence behind `ConfigureAwait` or `WithCancellation`** is the same sequence, so `await foreach (var guard in reader.ReadAllAsync(ct).ConfigureAwait(false))` is clean as well.
 - **The marker describes the sequence as the call returns it.** An enumerator of the sequence that you drive by hand holds its current element until it moves on, so a second read of `Current` is a copy.
 - **A sequence that is kept in a field** is a stored container like any other.
+
+## Members That Take a Value Only Where They Return True
+
+These members take the value that they are given only where they return true. Where they return false, they have kept nothing of it, and the caller still holds the value. Their entries have the [`borrowswhen`](symbol-list-format.md#borrowswhen) marker:
+
+| Member | Entry |
+|---|---|
+| <xref:System.Threading.Tasks.TaskCompletionSource`1.TrySetResult*?displayProperty=nameWithType> | `borrowswhen=false` |
+| `TryAdd` of <xref:System.Collections.Generic.Dictionary`2> and of its alternate lookup | `borrowswhen=false;for=TValue` |
+| `TryAdd` of <xref:System.Collections.Concurrent.ConcurrentDictionary`2> and of its alternate lookup | `borrowswhen=false;for=TValue` |
+| `TryAdd` of <xref:System.Collections.Concurrent.BlockingCollection`1>, every overload | `borrowswhen=false` |
+| <xref:System.Threading.Channels.ChannelWriter`1.TryWrite*?displayProperty=nameWithType> | `borrowswhen=false` |
+
+So the branch where one of them returned false may dispose the value:
+
+```cs
+if (!_map.TryAdd(key, lease))
+    lease.Dispose();                                  // OK: TryAdd has not taken the lease here
+```
+
+> [!NOTE]
+> **A member that throws may have taken the value,** these members included. So a `catch` that uses the variable after the call gets a warning (SCA1016). Hand the value over after the `try` block instead: see [Cleaning Up When Something Throws](../guides/cleanup-when-throwing.md#into-a-collection).
+
+#### Sending to a Channel
+
+The usual loop that waits for room in a channel is clean:
+
+```cs
+async Task SendAsync([Kept] ChannelWriter<Lease> writer, Lease lease, CancellationToken ct)
+{
+    while (await writer.WaitToWriteAsync(ct))
+    {
+        if (writer.TryWrite(lease))
+            return;                                   // OK: TryWrite took the lease
+    }
+
+    lease.Dispose();                                  // OK: TryWrite never took the lease
+}
+```
+
+The method uses `writer` after an `await`, so the parameter needs `[Kept]`, or it gets [SCA1032](../diagnostics/sca1032.md). The same holds for a <xref:System.Threading.Channels.ChannelReader`1> or a <xref:System.Threading.Channels.Channel`1> parameter. The mark costs the caller nothing: a read that takes a value out of a channel hands out a new value whatever channel it reads.
 
 ## Dictionary Keys
 
@@ -96,6 +139,8 @@ The built-in framework symbol list marks as `clones` the classes of the framewor
 | <xref:System.Drawing.Printing.PageSettings>, <xref:System.Drawing.Printing.PrinterSettings> and <xref:System.Drawing.Printing.Margins> | `Clone` |
 | <xref:System.Xml.Schema.XmlSchemaObject> and every XmlSchema class, and <xref:System.Xml.XmlQualifiedName> | An internal `Clone` that the schema compiler calls |
 | <xref:System.Windows.Forms.GiveFeedbackEventArgs> | An internal `Clone` of drag and drop |
+| Only in the .NET Framework: `System.Messaging.MessagePropertyFilter`, and `Rule`, `RuleSet`, `RuleHaltAction`, `RuleStatementAction` and `RuleUpdateAction` of `System.Workflow.Activities.Rules` | `Clone` |
+| Only in the .NET Framework: `Microsoft.VisualBasic.Activities.VisualBasicImportReference` | An internal `Clone` |
 
 ```cs
 sealed class PinnedEncoding : UTF8Encoding
@@ -109,7 +154,7 @@ One line covers the class that makes the call, every class that derives from it,
 
 Each public or protected member in the table has a `clones` line of its own as well, such as `M:System.Globalization.CultureInfo.Clone` and `M:System.Globalization.CultureInfo.ReadOnly(System.Globalization.CultureInfo)`. So does `PrinterSettings.DefaultPageSettings`, which hands the printer settings on: the page settings that it returns refer back to them. No line of a symbol list file can vouch for any of these members: see [Clones](symbol-list-format.md#clones).
 
-The lines of every class in the table but the Xml classes say `clones=complete`: their `clones` lines name every member that clones the object or hands it on. So do the lines of the 19 public classes of the framework that derive from them (four encodings and 15 calendars). Any other member of these classes, such as `culture.Name`, gets no warning where it is used on an object whose class binds a non-copyable type, unless its signature shows that it can hand the object on. Five members have such a signature, and a line with no marker that says that they never hand back the object itself:
+The lines of every class in the table but the Xml classes and the classes that only the .NET Framework has say `clones=complete`: their `clones` lines name every member that clones the object or hands it on. So do the lines of the 19 public classes of the framework that derive from them (four encodings and 15 calendars). Any other member of these classes, such as `culture.Name`, gets no warning where it is used on an object whose class binds a non-copyable type, unless its signature shows that it can hand the object on. Five members have such a signature, and a line with no marker that says that they never hand back the object itself:
 
 - `CultureInfo.Parent`;
 - `CultureInfo.GetFormat`;
@@ -124,7 +169,7 @@ Where you can vouch for their members, a symbol list file of your own can mark t
 
 <xref:System.Windows.Forms.GiveFeedbackEventArgs> clones only through an internal member, has no member line, and is marked `clones=complete`.
 
-**A test keeps the list complete.** It reads the IL of every assembly of the shared frameworks of .NET 10 and .NET 11:
+**A test keeps the list complete.** It reads the IL of every assembly of the shared frameworks of .NET 10 and .NET 11, and of the .NET Framework 4.8.1:
 
 - It finds each class that clones `this`, or the argument of a static member of the class, and that another assembly can derive from. It fails for one that has no line, of its own or of a base class.
 - It follows the calls of the framework from the members of these classes to the ones that clone. It fails for a public or protected member that clones its object or one that it is given, through other members included, and has no line.
@@ -138,6 +183,12 @@ Two classes need no line:
 |---|---|
 | <xref:System.Delegate> | No class of C# can derive from it |
 | <xref:System.MarshalByRefObject> | It clones only where a derived class calls `MemberwiseClone(bool)`, which gets SCA1005 there |
+
+## .NET Framework
+
+The framework symbol list is checked against the .NET Framework 4.8.1 as it is against .NET 10 and .NET 11, by the same tests: the members that get at a built-in non-copyable type, and the classes and members that clone. So a project for the .NET Framework gets the same checks as a project for .NET.
+
+A few lines name classes that only the .NET Framework has, the last rows of [Classes That Clone Themselves](#classes-that-clone-themselves). Their lines say `clones` and not `clones=complete`, so every member of these classes that no line names counts as one that can clone. In a project for .NET such a line names nothing, and has no effect.
 
 ## What Cannot Be on the Built-in Framework Symbol List
 

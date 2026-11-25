@@ -2,7 +2,7 @@
 
 # Cleaning Up When Something Throws
 
-A method that acquires a guard often has to release it if the setup that follows fails. This page shows the shape that the analyzer keeps clean: acquire, set up, commit, or dispose on failure.
+A method that acquires a guard often has to release it if the setup that follows fails. This page shows the shape that the analyzer keeps clean, "acquire, set up, commit, or dispose on failure", and how to hand the guard to a member instead.
 
 ### At a Glance
 
@@ -15,18 +15,19 @@ catch { guard.Dispose(); throw; }
 - **Store the guard last** in the `try` block, with a plain assignment.
 - **Run nothing that can throw after the store.** In a class, setting a field of the object is fine.
 - **Let the block end normally,** not with a `throw`.
+- **Hand the guard to a member after the `try` statement,** such as `List<T>.Add`: a member that throws may have taken the guard.
 
 ## Why the Catch Matters
 
-A `catch` that disposes the guard is a later use of the guard. So a handover inside the `try` is not the guard's last use, and is a copy:
+A `catch` that disposes the guard is a later use of the guard. So a handover inside the `try` is not the guard's last use, and is a copy. The warning is at the use in the `catch`:
 
 ```cs
 LockGuard guard = myLock.Enter();
-try { _holder.Take(guard); }           // SCA1003: if Take throws, the catch still uses 'guard'
-catch { guard.Dispose(); }
+try { _holder.Take(guard); }           // if Take throws...
+catch { guard.Dispose(); }             // SCA1016: ...the catch still uses 'guard'
 ```
 
-The message says so: "'guard' is not used again after this, but a 'catch', a 'finally' or an exception filter that uses it can still run."
+The message says so: "a 'catch', a 'finally' or an exception filter that uses 'guard' can still run after the hand-off." A member that throws may have taken the guard, so this holds whatever the member is.
 
 ## Commit
 
@@ -55,6 +56,31 @@ return Task.CompletedTask;
 
 The exact list of what cannot throw is long and strict: see [What Counts as Able to Throw](../rules/what-can-throw.md).
 
+#### Into a Collection
+
+A hand-off to a member, such as `Add` of a list, is no commit: the member can throw after it has taken the value. So a `catch` after it gets a warning:
+
+```cs
+try { conn.Open(); _connections.Add(conn); }
+catch { conn.Dispose(); throw; }       // SCA1016: Add may have taken 'conn' before it threw
+```
+
+Do the work that can fail inside the `try`, and hand the value over after it:
+
+```cs
+try
+{
+    conn.Open();
+}
+catch
+{
+    conn.Dispose();
+    throw;
+}
+
+_connections.Add(conn);                // OK: no 'catch' runs after the hand-off
+```
+
 #### In a Struct
 
 In a struct, a field of `this` is reached through a reference that can be null. The store of the guard into a field of `this` proves that `this` refers to something, so a flag may follow it:
@@ -79,8 +105,8 @@ A `finally` runs after the commit as well, so a use in a `finally` always comes 
 
 ```cs
 try { Work(); }
-catch { _held = guard; throw; }      // SCA1001: the 'finally' still runs after the rethrow
-finally { guard.Dispose(); }
+catch { _held = guard; throw; }      // the 'finally' still runs after the rethrow...
+finally { guard.Dispose(); }         // SCA1016: ...and uses 'guard' after the store
 ```
 
 When the `finally` should release the guard only if it was not handed over, move the guard out in the `try` instead, which clears the variable:
@@ -96,8 +122,8 @@ finally { guard.Dispose(); }                           // disposes nothing if th
 A constructor that may throw before it takes the guard cannot take it by value: the caller's `catch` would still use the guard. Take it through a `[MovedFrom] ref` parameter, so that the caller still has it when the constructor throws:
 
 ```cs
-try { return new UnitOfWork(scope, user); }               // SCA1003: the 'catch' can still run, so this is not the last use
-catch { scope.Dispose(); throw; }
+try { return new UnitOfWork(scope, user); }               // the 'catch' can still run, so this is not the last use...
+catch { scope.Dispose(); throw; }                         // SCA1016: ...and the 'catch' uses 'scope' after the hand-off
 
 public UnitOfWork([MovedFrom] ref TransactionScope scope, string user)
 {

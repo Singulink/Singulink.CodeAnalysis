@@ -34,7 +34,7 @@ A project that declares the attributes itself, to have no runtime dependency, in
 
 The analyzers package is a development dependency, so `dotnet add package` and Visual Studio add it with `PrivateAssets="all"`, which keeps it to your own project. A library that wants the projects that use it checked too passes the analyzers on to them: see [Sharing Your Library](../guides/libraries.md).
 
-In a project that references one of the packages directly, the analyzers also check ten framework structs, such as <xref:System.Threading.SpinLock>: see [Built-in Types](../guides/built-in-types.md).
+In a project that references one of the packages directly, the analyzers also check some framework structs, such as <xref:System.Threading.SpinLock>: see [Built-in Types](../guides/built-in-types.md).
 
 ## Marking a First Struct
 
@@ -110,18 +110,18 @@ Here a method hands the guard to another method by value, and then uses it again
 
 ```cs
 var guard = myLock.Enter();
-TakeGuard(guard);               // SCA1003: TakeGuard gets a copy, and 'guard' is used again below
-guard.Dispose();
+TakeGuard(guard);               // hands the guard over, and 'guard' still holds it
+guard.Dispose();                // SCA1016: TakeGuard got a copy, since 'guard' is used here
 ```
 
 The build shows:
 
 ```text
-warning SCA1003: 'Worker.TakeGuard(LockGuard)' receives a copy of the stored value of non-copyable type 'LockGuard'. Use the value in
-place, use a new value, or move the stored value out first with NonCopyable.Move.
+warning SCA1016: 'guard' is used after 'Worker.TakeGuard(LockGuard)' received its value, so that hand-off was a copy of non-copyable
+type 'LockGuard'. Use 'guard' only before the hand-off, pass it by reference, or hand over NonCopyable.Move(ref guard).
 ```
 
-The message says what receives the copy (`TakeGuard`) and what to do instead. The ID links to [its article](../diagnostics/sca1003.md). There are two fixes, depending on who should own the guard afterwards.
+The warning is at the use after the hand-off, where the code goes wrong. Its message says where the value was handed over (`TakeGuard` received it) and what to do instead, and the ID links to [its article](../diagnostics/sca1016.md). There are two fixes, depending on who should own the guard afterwards.
 
 #### Hand the Guard Over
 

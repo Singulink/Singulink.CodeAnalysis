@@ -9,6 +9,7 @@ The rules for values come from the `RS0042` rule ("Do not copy value") of Roslyn
 | Topic | This analyzer | RS0042 |
 |---|---|---|
 | IDs | One ID per kind of warning | One ID |
+| Severity | A warning, and under the [updated memory safety rules](updated-memory-safety-rules.md) of C# an error outside an unsafe context | A warning |
 | Generic structs | A generic struct over a non-copyable type is a non-copyable type | Knows only <xref:System.Nullable`1>, which it forbids altogether, and misses copies of tuples and value tasks |
 | Generic code | Type parameters can be marked, generics that are not marked get a warning unless they are on the [symbol list](symbol-list-format.md), and containers are followed through conversions | Does not look at generic code |
 | Value tasks | Awaiting a stored <xref:System.Threading.Tasks.ValueTask`1> gets a warning | Treats it as a new value |
@@ -17,6 +18,7 @@ The rules for values come from the `RS0042` rule ("Do not copy value") of Roslyn
 | Returned variables | A lambda, a local function or an iterator that returns a variable which lives on gets a warning | Lets every local and by-value parameter be returned |
 | Captured returns | A method that returns a variable which one of its lambdas or local functions captures gets a warning | Lets every local and by-value parameter be returned |
 | The last use | A local or a by-value parameter is a new value at its last use, on the paths of the compiler's control-flow graph | Warns about every by-value read of a local except a returned one |
+| Use after a hand-off | A read that is not the last use is reported at the use after it, with an ID of its own | Warns at the read |
 | Iterator parameters | A by-value parameter of an iterator gets a warning | No warning |
 | Primary constructors | A parameter of a primary constructor that a copyable struct keeps gets a warning | No warning |
 | Default interface members | A struct that leaves an interface member to its default implementation gets a warning | No warning |
@@ -31,7 +33,7 @@ The rules for values come from the `RS0042` rule ("Do not copy value") of Roslyn
 | Nullable returns | A local or a by-value parameter can be returned as a <xref:System.Nullable`1> of its type |  Not described |
 | With | `with` on a stored value gets one warning, and on a new value it is allowed | Warns three times about every `with` |
 | Records and clones | A field of a non-copyable type in a record, and a <xref:System.Object.MemberwiseClone> that copies one, get a warning |  Not described |
-| Framework structs | <xref:System.Threading.SpinLock> and <xref:System.Runtime.InteropServices.GCHandle> are entries of the [built-in framework symbol list](framework-symbol-list.md), with eight more framework structs, and a project can leave them all out |  Not described |
+| Framework structs | <xref:System.Threading.SpinLock> and <xref:System.Runtime.InteropServices.GCHandle> are entries of the [built-in framework symbol list](framework-symbol-list.md), with other framework structs, and a project can leave them all out |  Not described |
 | Arglist | A non-copyable value passed in an `__arglist` gets a warning | Fails on it |
 
 </div>

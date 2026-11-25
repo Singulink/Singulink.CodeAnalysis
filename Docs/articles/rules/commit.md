@@ -2,7 +2,9 @@
 
 # Commit at the End of a Try Block
 
-A `catch` that disposes a guard is a later use of the guard, so a handover inside the `try` block is normally not its [last use](last-use.md). One shape is kept clean: "acquire, set up, commit, or dispose on failure". This page gives its exact rule.
+A `catch` that disposes a guard is a later use of the guard, so a handover inside the `try` block is normally not its [last use](last-use.md), and the `catch` gets a warning for using the guard after it (SCA1016). One shape is kept clean: "acquire, set up, commit, or dispose on failure". This page gives its exact rule.
+
+A hand-off to a member, such as `List<T>.Add`, is no commit. A member that throws may have taken the value, so a `catch` that uses the variable after the call gets the warning. Hand the value over after the `try` statement instead: see [Cleaning Up When Something Throws](../guides/cleanup-when-throwing.md#into-a-collection).
 
 ### At a Glance
 
@@ -47,8 +49,8 @@ In an instance member of a class, a read or a plain store of an instance field o
 ```cs
 // In a class:
 LockGuard guard = myLock.Enter();
-try { Work(); _held = guard; s_count++; }   // SCA1001: the static field can run its type's initializer, and the catch still uses 'guard'
-catch { guard.Dispose(); throw; }
+try { Work(); _held = guard; s_count++; }   // the static field can run its type's initializer...
+catch { guard.Dispose(); throw; }           // SCA1016: ...so the catch can still run after the store
 ```
 
 #### This in a Struct
@@ -108,10 +110,10 @@ A block that ends in a `throw` has committed nothing: the exception goes to the 
 
 ```cs
 try { Work(); }
-catch { _held = guard; throw; }      // SCA1001: the 'finally' still runs after the rethrow
-finally { guard.Dispose(); }
+catch { _held = guard; throw; }      // the 'finally' still runs after the rethrow...
+finally { guard.Dispose(); }         // SCA1016: ...and uses 'guard' after the store
 ```
 
-Sometimes a read gets a warning only because a handler still uses the variable, and the first thing after the store that can throw is a read or a write through a reference that is not known to refer to something. Then the message names that reference and says how to check it.
+Where the first thing after the store that can throw is a read or a write through a reference that is not known to refer to something, the message of SCA1016 at the handler names that reference and says how to check it.
 
 </div>

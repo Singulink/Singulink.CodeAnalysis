@@ -10,13 +10,13 @@ A struct is copied every time it is assigned or passed by value. For most struct
 
 ```cs
 var guard = myLock.Enter();     // one guard, which holds the lock
-var copy = guard;               // SCA1001: now two guards hold the same lock
+var copy = guard;               // now two guards hold the same lock
 
-guard.Dispose();                // releases the lock
+guard.Dispose();                // SCA1016: releases the lock, and 'copy' still holds it
 copy.Dispose();                 // releases it again
 ```
 
-Mark the struct with `[NonCopyable]` and you get a warning at every place where such a copy is made. To tell a copy from a legitimate handover, the analyzer sorts every value into one of two kinds: **new** or **stored**.
+Mark the struct with `[NonCopyable]` and you get a warning for every such copy. To tell a copy from a legitimate handover, the analyzer sorts every value into one of two kinds: **new** or **stored**.
 
 ## New Values
 
@@ -64,12 +64,12 @@ Log(guard.Id);
 _held = guard;                      // OK: 'guard' is not used again, so the guard moves into the field
 ```
 
-Use the variable once more, and the same line is a copy:
+Use the variable once more, and the same line is a copy. The warning goes to the use after it, where the code goes wrong (SCA1016):
 
 ```cs
 var guard = myLock.Enter();
-_held = guard;                      // SCA1001: 'guard' is read again below
-Log(guard.Id);
+_held = guard;                      // a copy, since 'guard' is read again below
+Log(guard.Id);                      // SCA1016: 'guard' is used after it was handed over
 ```
 
 The fix is usually to read what you need first, so that the handover is the last use:
@@ -81,7 +81,7 @@ _held = guard;                      // OK: the last use
 Log(id);
 ```
 
-A `catch`, a `finally` or an exception filter that uses the variable counts as a later use too, and the message of the warning says so. [Cleaning Up When Something Throws](../guides/cleanup-when-throwing.md) shows the pattern that works with a `catch`: store the value at the end of the `try` block, after everything that can throw.
+A `catch`, a `finally` or an exception filter that uses the variable counts as a later use too, and the message of the warning says so. [Cleaning Up When Something Throws](../guides/cleanup-when-throwing.md) shows the patterns that work with a `catch`: store the value at the end of the `try` block, after everything that can throw, or hand it to a member such as `List<T>.Add` after the `try` statement.
 
 Some variables never become new at their last use, because something else can still reach them. For example:
 

@@ -15,6 +15,7 @@ You need a symbol list file when:
 | A member of an assembly that was not built with the analyzers takes a non-copyable value by reference or in a container, and keeps nothing | [SCA1024](../diagnostics/sca1024.md) | `M:ThirdParty.Leases.Inspect(ThirdParty.Lease@);borrows` |
 | Such an assembly hands out a container that nothing else holds | [SCA1030](../diagnostics/sca1030.md) | `M:ThirdParty.Leases.Create;new` |
 | An assembly that uses your structs cannot be built with the analyzers, and you vouch for it | [SCA1025](../diagnostics/sca1025.md) | `A:Contoso.Plugins;trusted` |
+| A member takes a value only where it returns true, and the caller keeps the value where it returns false | [SCA1016](../diagnostics/sca1016.md), at the use where the member returned false | ``M:ThirdParty.Pool`1.TryReturn(`0);borrowswhen=false`` |
 | A struct that cannot be marked in its source must be non-copyable, or one that is non-copyable must not be | None | `T:ThirdParty.Handle;noncopyable`, `T:System.Runtime.InteropServices.GCHandle;copyable` |
 | A base class of a library clones itself with `MemberwiseClone`, and a class of yours that derives from it holds a non-copyable value | None: you find it in the library's documentation or code | `T:Contoso.Document;clones` |
 
@@ -67,12 +68,31 @@ Entries are exact per overload, with no wildcard. Your own generics mark their t
 | ``M:ThirdParty.Bag`1.Add(`0)`` | The member makes no copy. What it returns is new if the object and the arguments were new, and a copy if they were stored |
 | ``M:ThirdParty.Bag`1.Take;new`` | What the member hands out is always a new value, as for a member that takes it out |
 | `M:ThirdParty.Native.GetAddress(ThirdParty.Handle);borrows` | The member reads a stored value during the call and keeps nothing of it |
+| ``M:ThirdParty.Pool`1.TryReturn(`0);borrowswhen=false`` | The member keeps nothing of the value where it returns false |
 | `T:ThirdParty.Handle;noncopyable` | The struct is non-copyable, though its source cannot be marked |
 | `T:System.Runtime.InteropServices.GCHandle;copyable` | The struct is an ordinary struct for this project |
 | `A:Contoso.Plugins;trusted` | The assembly was not built with the analyzer, and makes no copy of the values that it gets at |
 | `T:Contoso.Document;clones` | The class clones its objects field by field, so a class that derives from it gets a warning for each field that holds a non-copyable value |
 
 The other markers (`drains`, `owned`, `for=`, `view`, `erasable`), what each entry may be put on, and what happens where two entries disagree: [Symbol List Format](../rules/symbol-list-format.md). What the analyzer ships for .NET's own libraries is on the [built-in framework symbol list](../rules/framework-symbol-list.md).
+
+## A Member That Takes a Value Only Where It Returns True
+
+A member that takes the value only where it returns true leaves the value with the caller where it returns false. The framework's own, such as `TryAdd` of a dictionary and `ChannelWriter<T>.TryWrite`, are on the framework symbol list already: see [Members That Take a Value Only Where They Return True](../rules/framework-symbol-list.md#members-that-take-a-value-only-where-they-return-true). For a member of a library, or of your own project, say so with the `borrowswhen` marker, followed by the result where the member keeps nothing of the value:
+
+```text
+# NonCopyableSymbols.txt
+M:ThirdParty.Pool`1.TryReturn(`0);borrowswhen=false
+```
+
+```cs
+if (!pool.TryReturn(lease))
+    lease.Dispose();                     // OK: TryReturn has not taken the lease here
+```
+
+The result counts only where it goes straight into a condition, as above. A member that throws may have taken the value, so a `catch` that uses the variable after the call gets a warning, whatever the line says.
+
+Write the line only where the member returns that result before it keeps anything of the value. The analyzer takes the line on trust, so read the member first. The exact rules: [Borrowswhen](../rules/symbol-list-format.md#borrowswhen).
 
 ## A Base Class That Clones Itself
 
@@ -102,12 +122,12 @@ A library that was not built with the analyzer is unchecked code. Three lines vo
 
 - **`borrows`** on a member that gets at a guard by `ref`, in a container, in a view or through a pointer. Without it the use gets a warning (SCA1024).
 - **`new`** on a member whose container result is new. Without it the container is stored.
-- **`trusted`** on an assembly that names your library's structs and cannot be built with the analyzer. Without it you get one warning for the reference (SCA1025).
+- **`trusted`** on an assembly that names your library's structs and cannot be built with the analyzer. Without it you get one report for the reference (SCA1025).
 
 See [Code Not Built With the Analyzer](../rules/unchecked-code.md).
 
 ## Built-in Non-copyable Types
 
-The [built-in framework symbol list](../rules/framework-symbol-list.md) makes ten framework structs non-copyable, such as <xref:System.Runtime.InteropServices.GCHandle> and <xref:System.Threading.SpinLock>. The analyzer checks them in a project that references one of the two packages directly, but not in a project that gets the analyzers only through a library. See [Built-in Types](built-in-types.md).
+The [built-in framework symbol list](../rules/framework-symbol-list.md) makes some framework structs non-copyable, such as <xref:System.Runtime.InteropServices.GCHandle> and <xref:System.Threading.SpinLock>. The analyzer checks them in a project that references one of the two packages directly, but not in a project that gets the analyzers only through a library. See [Built-in Types](built-in-types.md).
 
 </div>

@@ -18,7 +18,7 @@ A box holds one value. A new value moves into it, and a stored value is copied i
 ```cs
 IDisposable boxed = myLock.Enter();          // OK: the guard moves into the box
 boxed.Dispose();                             // OK: runs on the box
-object copy = guard;                         // SCA1004: boxes a copy of a stored value
+object copy = _guard;                        // SCA1004: boxes a copy of a stored value
 LockGuard back = (LockGuard)boxed;           // SCA1001: a copy out of the box
 object pair = (myLock.Enter(), 1);           // SCA1023: the code of the tuple is not checked
 ```

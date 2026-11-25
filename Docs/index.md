@@ -23,7 +23,7 @@ The analyzers come in two packages on NuGet:
 - `Singulink.CodeAnalysis` - the attributes and the <xref:Singulink.CodeAnalysis.NonCopyable> helpers, which bring the analyzers with them.
 - `Singulink.CodeAnalysis.Analyzers` - the analyzers only, for a project that declares the attributes itself.
 
-In a project that references one of the two packages directly, the analyzers also treat ten framework structs as non-copyable, such as
+In a project that references one of the two packages directly, the analyzers also treat some framework structs as non-copyable, such as
 <xref:System.Runtime.InteropServices.GCHandle> and <xref:System.Threading.SpinLock>. In a project that gets the analyzers only through a
 library, they do not. See [Built-in Types](articles/guides/built-in-types.md).
 

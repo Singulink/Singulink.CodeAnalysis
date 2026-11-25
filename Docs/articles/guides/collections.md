@@ -76,6 +76,21 @@ await foreach (var guard in _channel.Reader.ReadAllAsync())
     guard.Dispose();                                  // OK: each element has left the channel
 ```
 
+An `async` method that takes the channel as a parameter, and uses it after an `await`, marks the parameter `[Kept]`, or it gets [SCA1032](../diagnostics/sca1032.md). The mark costs the caller nothing, since what a read takes out of a channel is new whatever channel it reads:
+
+```cs
+async Task DrainAsync([Kept] ChannelReader<LockGuard> reader)
+{
+    while (await reader.WaitToReadAsync())            // without [Kept]: SCA1032, since 'reader' is used after an 'await'
+    {
+        while (reader.TryRead(out var guard))
+            guard.Dispose();                          // OK: taken out of the channel
+    }
+}
+```
+
+The usual loop that sends a value: [Sending to a Channel](../rules/framework-symbol-list.md#sending-to-a-channel).
+
 ## Collections That Cannot Be Used
 
 A collection that compares or copies its values has no member that is safe to use with a guard, and any use of one gets a warning (SCA1020):

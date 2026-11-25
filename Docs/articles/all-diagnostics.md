@@ -2,7 +2,7 @@
 
 # All Diagnostics
 
-Every warning of the analyzer has a diagnostic ID of the form `SCA1001`. Each kind of rule has its own thousand: the `SCA1000`s are the non-copyable rules. All are in the category Reliability, and each ID links to an article with an example and the ways to fix it.
+Every warning of the analyzer has a diagnostic ID of the form `SCA1001`. Each kind of rule has its own thousand: the `SCA1000`s are the non-copyable rules. All are in the category Reliability, and each ID links to an article with an example and the ways to fix it. In a project that turns on the [updated memory safety rules](rules/updated-memory-safety-rules.md) of C#, most of them are errors.
 
 Didn't add these analyzers yourself? See [Why Am I Seeing This?](start/why-am-i-seeing-this.md)
 
@@ -20,7 +20,7 @@ Didn't add these analyzers yourself? See [Why Am I Seeing This?](start/why-am-i-
 | [SCA1008](diagnostics/sca1008.md) | `MemberwiseClone` is called on a class that another assembly can derive from |
 | [SCA1009](diagnostics/sca1009.md) | A class whose base class clones itself, such as `Encoding`, holds or binds a non-copyable value, or an object of such a class is used in a way that lets other code clone it |
 
-## Declarations
+## Declarations and Hand-offs
 
 | ID | What it warns about |
 |---|---|
@@ -30,6 +30,7 @@ Didn't add these analyzers yourself? See [Why Am I Seeing This?](start/why-am-i-
 | [SCA1013](diagnostics/sca1013.md) | A non-copyable struct leaves an interface member to its default implementation |
 | [SCA1014](diagnostics/sca1014.md) | A non-copyable struct has an `async` or iterator instance member that is not `readonly` |
 | [SCA1015](diagnostics/sca1015.md) | An `await` uses an awaiter of a non-copyable type |
+| [SCA1016](diagnostics/sca1016.md) | A variable is used after its value was handed over, so the hand-off copied the value |
 
 ## Generic and Unchecked Code
 

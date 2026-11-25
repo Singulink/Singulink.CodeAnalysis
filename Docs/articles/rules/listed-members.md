@@ -76,7 +76,7 @@ The second form gets no warning, but it is not how to limit a wait for a lock: s
 
 ## Tasks in a Variable
 
-A task or a value task in a variable is a stored value up to the [last use](last-use.md) of the variable. So a read of its result gets a warning if the method uses the variable again afterwards. "Start now, await later" needs nothing more:
+A task or a value task in a variable is a stored value up to the [last use](last-use.md) of the variable. So a read of its result is a copy if the method uses the variable again afterwards. For a task the read gets the warning (SCA1030). A value task is a non-copyable value, so for it the use after the read gets the warning ([SCA1016](../diagnostics/sca1016.md)). "Start now, await later" needs nothing more:
 
 ```cs
 var pending = myLock.EnterAsync();                       // start now

@@ -27,7 +27,7 @@
   - name: "SCA1009: Non-copyable Value Behind a Base Class That Clones Itself"
     href: sca1009.md
 
-- name: Declarations
+- name: Declarations and Hand-offs
   items:
   - name: "SCA1010: Field in a Copyable Struct or a Record"
     href: sca1010.md
@@ -46,6 +46,9 @@
 
   - name: "SCA1015: Awaiter of a Non-copyable Type"
     href: sca1015.md
+
+  - name: "SCA1016: Use After a Hand-off"
+    href: sca1016.md
 
 - name: Generic and Unchecked Code
   items:

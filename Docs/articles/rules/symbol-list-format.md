@@ -12,7 +12,7 @@ A symbol list file tells the analyzer what it cannot see for itself in code that
 - **Entries are exact per overload.** There is no entry for every member of a type, and no wildcard.
 - **The files:** the project's own symbol list files and those that come with a library are read alike and merged with the [built-in framework symbol list](framework-symbol-list.md).
 - **Where two entries disagree,** the one that claims less applies, even between a project's file and a library's. Two exceptions: `copyable` overrides the framework symbol list, and `clones=complete` counts where any line for the class says it, in any file.
-- **Three kinds of line of a symbol list file get a warning (SCA1042):** a line that cannot be parsed; a `noncopyable`, `copyable`, `trusted`, `clones` or `clones=none` line that has no effect; and a line that says a member which clones makes no copy. The analyzer's own tests check the framework symbol list, so it never gets one.
+- **Some lines of a symbol list file get a warning (SCA1042):** a line that cannot be parsed; a line that has no effect, such as one that claims more of a member than the framework symbol list; an outcome of `borrowswhen` that the analyzer does not know; and a line that says a member which clones makes no copy. The analyzer's own tests check the framework symbol list, so it never gets one.
 
 ## Lines
 
@@ -36,6 +36,9 @@ M:ThirdParty.Feed`1.TakeAllAsync(System.Threading.CancellationToken);drains
 
 # owned: the task of the property belongs to its object alone, and no other member hands it out
 P:ThirdParty.Promise`1.Task;owned
+
+# borrowswhen: the method keeps nothing of the value that it is given where it returns false
+M:ThirdParty.Pool`1.TryReturn(`0);borrowswhen=false
 
 # for=: the entry vouches only for these type parameters
 M:ThirdParty.Map`2.Add(`0,`1);for=TValue
@@ -77,6 +80,7 @@ T:Contoso.Page;clones=none
 | A member | `borrows` | Uses what it is given during the call, and keeps nothing of it |
 | A method that returns a sequence | `drains` | The sequence takes each element out of its source |
 | An instance property of a class, of type <xref:System.Threading.Tasks.Task`1> | `owned` | The task belongs to the object alone |
+| A method that returns `bool` | `borrowswhen=true` or `borrowswhen=false` | Safe to use; keeps nothing of a value where it returned that |
 | A member | `for=T1,T2` | The entry vouches only for these type parameters |
 | A struct (`T:`) | `view` | Copying the struct copies no elements |
 | A struct (`T:`) | `noncopyable` | The struct is a non-copyable type |
@@ -122,6 +126,47 @@ An instance property of a class, of type <xref:System.Threading.Tasks.Task`1>, m
 
 Its one read on an object that the method has just made is a new value, as for <xref:System.Threading.Tasks.TaskCompletionSource`1.Task?displayProperty=nameWithType>, the one built-in entry. See [Task of a Completion Source](listed-members.md#task-of-a-completion-source).
 
+#### Borrowswhen
+
+A method marked `borrowswhen` is safe to use, as with no marker. The marker makes the claim of [`borrows`](#borrows), that the method uses the value during the call and keeps nothing of it, for one result of the call only. Its value is that result: `true` or `false`. Where the method returned the other result, or threw, it has taken the value.
+
+| Line | Keeps nothing of the value where it | Has taken the value where it |
+|---|---|---|
+| `borrowswhen=false` | Returned false | Returned true, or threw |
+| `borrowswhen=true` | Returned true | Returned false, or threw |
+
+```text
+M:ThirdParty.Pool`1.TryReturn(`0);borrowswhen=false
+```
+
+```cs
+if (!pool.TryReturn(lease))
+    lease.Dispose();                     // OK: TryReturn has not taken the lease here
+
+bool returned = pool.TryReturn(other);
+if (!returned)
+    other.Dispose();                     // SCA1016: the result went into a local first
+```
+
+Where the result counts:
+
+- **Only where the result goes straight into a condition.** That is an `if`, a loop, `!`, `&&`, `||` or `?:`, a comparison with the constant `true` or `false`, and `is true`, `is false`, `is not true` and `is not false`. A result that is stored, passed on, or combined with `&` or `|` counts as one where the method took the value. This is the limit that `[NotNullWhen]` has.
+- **On the branch where the method has not taken the value,** a use of the variable is no use after a hand-off (SCA1016), and does not keep the call from being the last use.
+- **A result of `Task<bool>` or `ValueTask<bool>`** counts where the call is awaited where it is made, directly or behind `ConfigureAwait`. A task that is stored first counts as one where the method took the value.
+- **Never where the method throws.** A method that throws may have taken the value, so a `catch` that uses the variable after the call gets a warning, as after any hand-off (see [Exception Paths](last-use.md#exception-paths)).
+
+What the line covers:
+
+- **A method that is called by its name** and returns `bool`, `Task<bool>` or `ValueTask<bool>`. A constructor, an operator, a conversion and an accessor cannot have the marker.
+- **Values only.** The marker covers each parameter that the method takes by value whose type in the method's definition is a struct or a type parameter that can be a struct. With `for=` after the marker, it covers only the type parameters that `for=` names. Unlike `borrows`, it says nothing about a container that the method is given, and it has no effect on the [`[Kept]` check](keeping-containers.md).
+- **Not a stored value.** A field or an element that is passed by value to such a method gets a warning as before, since where the method takes it there are two. The marker helps a local or a by-value parameter, at its [last use](last-use.md).
+
+How to write it:
+
+- **Outcomes go after the `=`,** separated by commas, each once, with white space allowed around the `=` and the `,`. `true` and `false` together cannot be parsed: for a method that keeps nothing of the value whatever it returns, write `borrows`.
+- **An outcome that the analyzer does not know is left out,** so the line claims less, and a line whose every outcome is unknown counts as a line with no marker. The project that owns the file gets a warning for it (SCA1042), and a project that gets the file from a library does not.
+- **Read the method first.** The analyzer does not check the line, also for a method that the project declares itself. Write the marker only where the method returns that result before it keeps anything of the value.
+
 #### For
 
 `for=T1,T2` goes after the marker, if any. The entry vouches only for these type parameters of the member or of its containing types. When a non-copyable type is bound to any other type parameter, the member counts as not on the symbol list.
@@ -136,7 +181,7 @@ A struct marked `noncopyable` is a non-copyable type.
 
 #### Copyable
 
-A struct marked `copyable` is an ordinary struct for this project, even though the [built-in framework symbol list](framework-symbol-list.md) or a referenced library makes it non-copyable. Use it for one of the ten framework structs that the project copies on purpose, or for a library's struct that another analyzer's attribute marks.
+A struct marked `copyable` is an ordinary struct for this project, even though the [built-in framework symbol list](framework-symbol-list.md) or a referenced library makes it non-copyable. Use it for one of the [built-in non-copyable types](../guides/built-in-types.md) that the project copies on purpose, or for a library's struct that another analyzer's attribute marks.
 
 Everything that depends on the struct changes with it. A struct with a field of it, a tuple or a `Nullable` of it, a `List<T>` of it, and a marked type parameter bound to it are all ordinary types too. Nothing that the analyzer guarantees holds for them.
 
@@ -247,6 +292,8 @@ An entry that names something the project does not reference is ignored, so one 
 | `clones` | It names no type, method, property or event, or has no effect |
 | A member line of any marker that names an accessor, such as `M:Contoso.Document.get_Title` or `M:Contoso.Document.add_Changed(System.EventHandler)` | Always: the analyzer looks up every use of an accessor under its property or event, so write the `P:` or `E:` line instead |
 | A member line with no marker, `new`, `borrows`, `drains` or `owned` | A `clones` line names the member; the line is left out |
+| A member line for a member that the framework symbol list names | It names the member for a type parameter that the framework symbol list leaves out, lists an outcome of `borrowswhen` that the framework symbol list does not, or says `borrows` where the framework symbol list says `borrowswhen` or no marker: see [Entries That Disagree](#entries-that-disagree) |
+| `borrowswhen` | An outcome is not `true` or `false`; the line is taken without it |
 
 - **A `noncopyable` line that names no type** gets a warning because a mistyped ID would leave the type copyable in a build that looks clean. A project that does not reference the type should take the line out of its file.
 - **A `copyable` line has no effect** in the cases that [Copyable](#copyable) gives.
@@ -260,6 +307,8 @@ A line cannot be parsed if it has:
 - a `for=` that names a type parameter which the member does not have, or one that fits more than one type parameter of the member and of the types that contain it;
 - a marker on something that it does not fit (see the table below);
 - `clones=complete` or `clones=none` on a method, a property or an event, a value of `clones` other than `complete` or `none`, or `complete` or `none` written as a marker of its own;
+- a `borrowswhen` with no outcome, an empty outcome, an outcome listed twice, or both `true` and `false`;
+- a marker that the analyzer does not know: the whole line is ignored;
 - a marker other than `trusted` on an assembly, or `trusted` on anything but an assembly;
 - an assembly given by a display name with a version, or by a file name.
 
@@ -272,6 +321,7 @@ A line cannot be parsed if it has:
 | `new`, `borrows` | A member, not a type |
 | `drains` | A method whose result is an <xref:System.Collections.Generic.IEnumerable`1> or an <xref:System.Collections.Generic.IAsyncEnumerable`1> |
 | `owned` | An instance property of a class whose type is <xref:System.Threading.Tasks.Task`1> |
+| `borrowswhen` | A method that is called by its name, not a constructor, an operator, a conversion or an accessor, that returns `bool`, `Task<bool>` or `ValueTask<bool>`, and that has a parameter which the marker covers |
 
 #### Entries That Disagree
 
@@ -280,7 +330,9 @@ Where two entries for the same ID disagree, the one that claims less applies, wh
 | Entries | What applies |
 |---|---|
 | `noncopyable` and `view` | `noncopyable` |
-| No marker and `new`, `borrows`, `drains` or `owned` | No marker |
+| No marker and `new`, `borrows`, `drains`, `owned` or `borrowswhen` | No marker |
+| `borrows` and `borrowswhen` | The `borrowswhen` line |
+| Two `borrowswhen` lines | The outcome that both list: `false` and `false` give `false`, and `false` and `true` give no marker |
 | Two `for=` limits | Only the type parameters that both name |
 | `copyable` and the framework symbol list | `copyable`, since that is what it is for |
 | `copyable` and `noncopyable` of the same type, in two symbol list files | `noncopyable` |
@@ -290,6 +342,17 @@ Where two entries for the same ID disagree, the one that claims less applies, wh
 | `clones=none`, and `clones` for the same class or a class above it | `clones`: the `clones=none` line has no effect, and gets a warning |
 
 So a file can add entries and can tighten a built-in one, but cannot loosen it. Two kinds of line do loosen: `copyable`, and `clones=complete`, by which you vouch for the members of a class.
+
+A `borrowswhen` line of a file cannot add an outcome to a member that the framework symbol list names, nor add the marker to one that it names without it. Such a line gets a warning that names the outcome that the framework symbol list does not list (SCA1042), and the entry of the framework symbol list applies. Which members of the framework have the marker: [Members That Take a Value Only Where They Return True](framework-symbol-list.md#members-that-take-a-value-only-where-they-return-true).
+
+A `borrows` line claims every outcome, so it claims more than a `borrowswhen` line or a line with no marker of the framework symbol list. It gets the same warning, which says what the framework symbol list has for the member, and the entry of the framework symbol list applies:
+
+```text
+# SCA1042: the framework symbol list names TryWrite with 'borrowswhen=false'
+M:System.Threading.Channels.ChannelWriter`1.TryWrite(`0);borrows
+```
+
+A `borrows` line whose `for=` leaves out a type parameter that the framework symbol list covers gets no such warning, since it takes the entry away for that type parameter.
 
 Take a member that the framework symbol list names with `for=`. A line of a file that names it for a type parameter that the `for=` leaves out, or names it with no `for=`, would add nothing. The analyzer leaves such a line out and warns about it (SCA1042). Where code uses the member, the warning says which type parameters the list names it for, and gives no line to add.
 

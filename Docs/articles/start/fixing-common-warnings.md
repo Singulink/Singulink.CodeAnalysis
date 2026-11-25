@@ -61,11 +61,11 @@ Take(NonCopyable.Move(ref _guard));                       // OK
 #### Variable That Is Used After It Was Handed On
 
 Read what you need first. A variable is a new value where it is used for the last time,
-so the hand-over has to be that last use.
+so the hand-over has to be that last use. The warning is at the use after the hand-over.
 
 ```cs
-_held = guard;                                            // SCA1001: 'guard' is read again below
-Log(guard.Id);
+_held = guard;                                            // a copy, since 'guard' is read again below
+Log(guard.Id);                                            // SCA1016: used after it was handed on
 
 int id = guard.Id;
 _held = guard;                                            // OK: the last use

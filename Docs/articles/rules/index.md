@@ -37,6 +37,10 @@ A container struct that only refers to elements stored elsewhere, such as <xref:
 
 The place where a method uses a local or a by-value parameter for the last time, on every path. There the variable is a new value, so it can be handed on without a copy. See [Last Use of a Variable](last-use.md).
 
+#### Use After a Hand-off
+
+A use of a local or a by-value parameter after a read that handed its value over by value. The read was not the last use, so it copied the value, and the analyzer reports the copy at the use (SCA1016). See [Use After a Hand-off](last-use.md#use-after-a-hand-off).
+
 #### Commit
 
 The store at the end of a `try` block that hands a value over, in the shape "acquire, set up, commit, or dispose on failure". The handlers of the `try` do not count as a later use of the variable if nothing that can throw runs after the store. See [Commit at the End of a Try Block](commit.md).
@@ -91,6 +95,10 @@ A generic class or interface where no base type or interface hands out a value o
 #### Class That Clones Itself
 
 A class whose own code clones its objects field by field with <xref:System.Object.MemberwiseClone>, such as <xref:System.Text.Encoding>. A class that derives from one and holds a non-copyable value gets a warning on that field (SCA1009). A `clones` line of the symbol list names such a class. See [Symbol List Format](symbol-list-format.md#clones).
+
+#### Current and Updated Memory Safety Rules
+
+The two sets of rules of C# for unsafe code. Under the current rules, which a project has by default, every report of the analyzer is a warning. Under the updated memory safety rules, a preview feature of the compiler, most reports are errors, and only code in an unsafe context, such as an `unsafe` block or an `unsafe(...)` expression, can take one on itself. See [Updated Memory Safety Rules](updated-memory-safety-rules.md).
 
 #### Temporary Copy
 

@@ -29,8 +29,8 @@ bool any = maybe.HasValue;                       // (the nullable is used again)
 var (entered, ok) = myLock.TryEnterTuple();      // OK
 var result = myLock.TryEnterTuple();
 result.guard.Dispose();                          // OK: in place
-LockGuard taken = result.guard;                  // SCA1001
-bool wasEntered = result.ok;                     // (the tuple is used again)
+LockGuard taken = result.guard;                  // a copy, since the tuple is used again
+bool wasEntered = result.ok;                     // SCA1016: 'result' is used after its guard was handed over
 
 if (boxed is LockGuard unboxed) { }              // SCA1001: a copy out of the box
 foreach (LockGuard item in guardArray) { }       // SCA1001: a copy of each element; use 'ref'

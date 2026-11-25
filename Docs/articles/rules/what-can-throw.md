@@ -49,15 +49,22 @@ The simple types are the integers, `bool`, `char`, `float`, `double`, enums and 
 
 ```cs
 // After a commit:
-try { Work(); _held = guard; _label = _prefix + _suffix; }   // SCA1001: the concatenation can throw
+LockGuard guard = myLock.Enter();
+try { Work(); _held = guard; _label = _prefix + _suffix; }   // the concatenation can throw...
+catch { guard.Dispose(); throw; }                            // SCA1016: ...so the catch can run after the store
 ```
 
 "Outside a `checked` context" applies to a compound assignment or an increment as a whole. On a type narrower than `int`, the result is converted back, and in a `checked` context that conversion is checked, even where the operator itself cannot overflow:
 
 ```cs
 // '_slot' is a byte:
-try { Work(); _held = guard; checked { _slot <<= 1; } }      // SCA1001: in a checked context the shift can throw
-try { Work(); _held = guard; _slot <<= 1; }                  // OK: outside a checked context
+LockGuard guard = myLock.Enter();
+try { Work(); _held = guard; checked { _slot <<= 1; } }      // in a checked context the shift can throw...
+catch { guard.Dispose(); throw; }                            // SCA1016: ...so the catch can run after the store
+
+LockGuard other = myLock.Enter();
+try { Work(); _held = other; _slot <<= 1; }                  // OK: outside a checked context
+catch { other.Dispose(); throw; }
 ```
 
 The context is the nearest `checked` or `unchecked` block or expression around the operation. With neither, it is how the project is compiled (`<CheckForOverflowUnderflow>`).
@@ -134,8 +141,8 @@ static void Hand([MovedFrom] ref LockGuard value, ref LockGuard to, LockGuard sp
 ```cs
 // After a commit:
 LockGuard guard = myLock.Enter();
-try { Work(); _held = guard; var mine = NonCopyable.Move(ref spare); }   // SCA1001: the move counts as a call here
-catch { guard.Dispose(); throw; }
+try { Work(); _held = guard; var mine = NonCopyable.Move(ref spare); }   // the move counts as a call here...
+catch { guard.Dispose(); throw; }                                        // SCA1016: ...so the catch can run after the store
 ```
 
 One thing is stricter between the read and the reset. A by-value read of a non-copyable value, or of a container, through another reference gets a warning there even where that reference is known to refer to something. If the two references refer to the same variable, the read is a second read of the same value.

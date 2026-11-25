@@ -7,9 +7,9 @@ If your library's public API has non-copyable structs, let the analyzer reach th
 ### At a Glance
 
 - **Reference the analyzers package with `PrivateAssets="none"`,** or reference `Singulink.CodeAnalysis` as a normal reference: either one passes the analyzer on.
-- **The analyzer then reaches every project down the chain,** and checks there only what your library marked. In those projects, it does not check the ten built-in framework structs.
-- **A library that keeps the analyzer to itself** leaves the projects that use it without the analyzer, and a project that references both gets a warning about it (SCA1025).
-- **A [symbol list file](symbol-list.md) can ship with the library,** for the members of its own generics that are not marked, and for each class of the library that clones itself.
+- **The analyzer then reaches every project down the chain,** and checks there only what your library marked. In those projects, it does not check the built-in framework structs.
+- **A library that keeps the analyzer to itself** leaves the projects that use it without the analyzer, and a project that references both is told about it (SCA1025).
+- **A [symbol list file](symbol-list.md) can ship with the library,** for the members of its own generics that are not marked, for its own members that take a value only where they return true, and for each class of the library that clones itself.
 
 ## Passing the Analyzer On
 
@@ -30,11 +30,11 @@ The .NET SDK (checked with the .NET 10 and 11 SDKs) applies the analyzers of eve
 In a project that only gets the analyzer through your library, the analyzer checks the types that your library marked, and it does not check the [built-in types](built-in-types.md). See [Why Am I Seeing This?](../start/why-am-i-seeing-this.md), which is the page your users land on.
 
 > [!CAUTION]
-> **A library that keeps the analyzer to itself leaves the projects that use it without the analyzer.** Their code can copy your structs where it implements one of your interfaces, makes a delegate that you call or reads an object of one of your classes, and neither your library nor a project further down the chain can see that. A project that references both your library and such an assembly gets a warning about it, once for each such assembly ([SCA1025](../diagnostics/sca1025.md)).
+> **A library that keeps the analyzer to itself leaves the projects that use it without the analyzer.** Their code can copy your structs where it implements one of your interfaces, makes a delegate that you call or reads an object of one of your classes, and neither your library nor a project further down the chain can see that. A project that references both your library and such an assembly gets [SCA1025](../diagnostics/sca1025.md) for it, once for each such assembly: a warning in a project that added the analyzer itself, and a message in one that got it only through a library.
 
 ## Shipping a Symbol List File With a Library
 
-Marking the type parameters of the library's generics comes first, since the analyzer then checks their bodies: see [Marking a Type Parameter](marking-a-type-parameter.md). A library whose generics stay unmarked can ship what its author knows about them, so that the projects that use the library get those entries with no setup. Such a file has entries only for the library's own members and types, never for the framework or for other libraries.
+Marking the type parameters of the library's generics comes first, since the analyzer then checks their bodies: see [Marking a Type Parameter](marking-a-type-parameter.md). A library whose generics stay unmarked can ship what its author knows about them, so that the projects that use the library get those entries with no setup. Such a file has entries only for the library's own members and types, never for the framework or for other libraries. A member of the library that takes a value only where it returns true gets a [`borrowswhen`](symbol-list.md#a-member-that-takes-a-value-only-where-it-returns-true) line there as well.
 
 The package carries a [symbol list file](symbol-list.md) that is named after the library. A props file named after the package adds the file to the additional files of each project that references the package:
 
@@ -63,7 +63,12 @@ The package carries a [symbol list file](symbol-list.md) that is named after the
 | `Visible="false"` | Keeps the file out of the project tree of the user |
 | The name `NonCopyableSymbols.MyLibrary.txt` | Keeps the file apart from the project's own `NonCopyableSymbols.txt` and from the file of every other library |
 
-The `AdditionalFiles` line makes the library read its own file, wherever the file is. So a line that cannot be parsed, or that does not fit what it names, gets a warning in the library's own build (SCA1042), where its author sees it. In a project that uses the library, such a line gets a warning at the file in the package. The exception is a line that names a member of the built-in framework symbol list for more type parameters than that list does: only the library's own build warns about it, and the line has no effect anywhere.
+The `AdditionalFiles` line makes the library read its own file, wherever the file is. So a line that cannot be parsed, or that does not fit what it names, gets a warning in the library's own build (SCA1042), where its author sees it. In a project that uses the library, such a line gets a warning at the file in the package. Four kinds of line get a warning only in the library's own build:
+
+- a line that names a member of the built-in framework symbol list for more type parameters than that list does, which has no effect anywhere;
+- a `borrowswhen` line that lists an outcome which the built-in framework symbol list does not list for the member, and the entry of that list applies;
+- a `borrows` line for a member that the built-in framework symbol list names with `borrowswhen` or with no marker, and the entry of that list applies;
+- a `borrowswhen` line with an outcome that the analyzer does not know, which is taken without that outcome.
 
 For the project that uses the library, the file is a symbol list file like its own: all symbol list files are merged, with each other and with the [built-in framework symbol list](../rules/framework-symbol-list.md). A library that ships a symbol list file also [passes the analyzer on](#passing-the-analyzer-on), since the list is of no use without it.
 

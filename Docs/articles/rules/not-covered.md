@@ -91,8 +91,8 @@ Value tasks are the same. Two value tasks made from one source and token are one
 
 Where you tell the analyzer something, it takes your word:
 
-- **a suppressed warning**;
-- **a symbol list entry that is wrong**, such as an entry for a member that copies, or for a member of a type that hands itself to another holder (see [Symbol List Format](symbol-list-format.md));
+- **a suppressed warning**, and under the [updated memory safety rules](updated-memory-safety-rules.md) the unsafe context that lets you suppress it;
+- **a symbol list entry that is wrong**, such as an entry for a member that copies, for a member of a type that hands itself to another holder, or a `borrowswhen` line that lists an outcome in which the member does take the value (see [Symbol List Format](symbol-list-format.md#borrowswhen));
 - **a `clones=complete` line for a class whose `clones` lines leave a member out:** the marker says that the lines name every member that clones the object or hands it on (see [Clones](symbol-list-format.md#clones));
 - **a `borrows` or a `new` entry, or a `trusted` line,** for code that was built without the analyzers;
 - **a `clones=none` or a `trusted` line for a base class that does clone itself:** the line says that no code of the class, or of the assembly, clones the object (see [SCA1009](../diagnostics/sca1009.md#a-base-class-that-is-not-known)).
@@ -106,7 +106,7 @@ A third-party library does not void the protection:
 - **Any other assembly** cannot be handed a non-copyable value directly to copy it silently. Passed by reference, in a container, in a view or through a pointer, the use gets a warning until you vouch for the member (SCA1024). Passed through a generic, it gets a warning until the member is on the [symbol list](symbol-list-format.md) (SCA1020).
 - **A container that such an assembly hands out** counts as stored.
 - **A base class of such an assembly** may clone itself, and the analyzer cannot tell. A class of yours that derives from it gets a warning on each field that holds a non-copyable value, until a symbol list line says whether the base class clones itself ([SCA1009](../diagnostics/sca1009.md#a-base-class-that-is-not-known)).
-- **An assembly that was not built with the analyzers** itself gets a warning, once, if it uses your non-copyable types or can get at a non-copyable value through a member of your code ([SCA1025](../diagnostics/sca1025.md)).
+- **An assembly that was not built with the analyzers** is itself reported, once, if it uses your non-copyable types or can get at a non-copyable value through a member of your code ([SCA1025](../diagnostics/sca1025.md)).
 
 A library that uses non-copyable types is usually built with the analyzers. The attributes package brings them with it, and passes them on unless a library keeps them private (see [Sharing Your Library](../guides/libraries.md)).
 

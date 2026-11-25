@@ -2,17 +2,17 @@
 
 # Built-in Types
 
-The analyzer knows ten framework structs as non-copyable, such as <xref:System.Runtime.InteropServices.GCHandle> and <xref:System.Threading.SpinLock>. This page says when they are checked, and how to change that for all ten or for one.
+The analyzer knows some framework structs as non-copyable, such as <xref:System.Runtime.InteropServices.GCHandle> and <xref:System.Threading.SpinLock>. This page lists them, says when they are checked, and how to change that for all of them or for one.
 
 ### At a Glance
 
-| Project | The ten structs |
+| Project | The built-in types |
 |---|---|
 | References `Singulink.CodeAnalysis` or `Singulink.CodeAnalysis.Analyzers` itself | On |
 | Only gets the analyzers through a library | Off |
 | Sets `NonCopyableIncludeBuiltInTypes` | As it says |
 
-## The Ten Structs
+## Which Structs
 
 - <xref:System.Threading.SpinLock>
 - <xref:System.Runtime.InteropServices.GCHandle>, <xref:System.Runtime.InteropServices.GCHandle`1>, <xref:System.Runtime.InteropServices.PinnedGCHandle`1>, <xref:System.Runtime.InteropServices.WeakGCHandle`1>
@@ -21,10 +21,11 @@ The analyzer knows ten framework structs as non-copyable, such as <xref:System.R
 - <xref:System.Runtime.CompilerServices.DefaultInterpolatedStringHandler>
 - <xref:System.Threading.AsyncFlowControl>
 - <xref:System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore`1>
+- <xref:System.Windows.Threading.DispatcherProcessingDisabled>, of WPF
 
 ## Why They Are Off Through a Library
 
-These are types that a project may copy on purpose. A library that marks its guards brings the analyzers to every project that uses it, to keep those projects from copying the guards. That should not also give them warnings about their own `GCHandle` code. So the analyzer checks the ten structs only in a project that references one of the two packages itself, with a `PackageReference`.
+These are types that a project may copy on purpose. A library that marks its guards brings the analyzers to every project that uses it, to keep those projects from copying the guards. That should not also give them warnings about their own `GCHandle` code. So the analyzer checks these structs only in a project that references one of the two packages itself, with a `PackageReference`.
 
 With central package management a `PackageReference` with no version counts, and so does a `GlobalPackageReference`. A version that is only pinned for a transitive reference does not.
 
@@ -34,7 +35,7 @@ A project that sets the property gets the value that it sets:
 
 ```xml
 <PropertyGroup>
-  <!-- false: the ten framework structs are off here, unless a noncopyable line names one -->
+  <!-- false: the built-in types are off here, unless a noncopyable line names one -->
   <NonCopyableIncludeBuiltInTypes>false</NonCopyableIncludeBuiltInTypes>
 </PropertyGroup>
 ```
@@ -42,10 +43,10 @@ A project that sets the property gets the value that it sets:
 Only the value `true` turns them on. For one struct, use a line of a [symbol list file](symbol-list.md) instead:
 
 ```text
-# Get one back where the ten are off
+# Get one back where they are off
 T:System.Threading.SpinLock;noncopyable
 
-# Drop one where the ten are on
+# Drop one where they are on
 T:System.Runtime.InteropServices.GCHandle;copyable
 ```
 

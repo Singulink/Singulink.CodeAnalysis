@@ -11,7 +11,7 @@ The rules treat two kinds of type specially: non-copyable types, whose values mu
 | A struct marked `[NonCopyable]` | Non-copyable | `LockGuard` |
 | A type parameter marked `[NonCopyable]`, inside the generic that declares it | Non-copyable | `T` in `Pool<[NonCopyable] T>` |
 | A generic struct with a non-copyable type argument, at any depth | Non-copyable | `ValueTask<LockGuard>`, `LockGuard?`, `(LockGuard, bool)`, `KeyValuePair<int, LockGuard>` |
-| A struct that a [symbol list entry](symbol-list-format.md) names as non-copyable, the ten of the [built-in framework symbol list](framework-symbol-list.md) included | Non-copyable | <xref:System.Threading.SpinLock> |
+| A struct that a [symbol list entry](symbol-list-format.md) names as non-copyable, the built-in non-copyable types of the [built-in framework symbol list](framework-symbol-list.md) included | Non-copyable | <xref:System.Threading.SpinLock> |
 | Any other type that mentions a non-copyable type | Container | `LockGuard[]`, `List<LockGuard>`, `Task<LockGuard>`, `Span<LockGuard>` |
 | A type that has a container among its base types or interfaces | Container of the same types | `class Guards : List<LockGuard>` |
 
@@ -24,7 +24,7 @@ The rules treat two kinds of type specially: non-copyable types, whose values mu
 
 #### Built-in Non-copyable Types
 
-The [built-in framework symbol list](framework-symbol-list.md) names ten framework structs, such as <xref:System.Threading.SpinLock> and <xref:System.Threading.Lock.Scope>. The analyzer checks them in a project that references one of the packages directly, and a project can [leave them out](msbuild-properties.md#built-in-non-copyable-types). All ten are in [Built-in Types](../guides/built-in-types.md).
+The [built-in framework symbol list](framework-symbol-list.md) names some framework structs, such as <xref:System.Threading.SpinLock> and <xref:System.Threading.Lock.Scope>. The analyzer checks them in a project that references one of the packages directly, and a project can [leave them out](msbuild-properties.md#built-in-non-copyable-types). All of them are listed in [Built-in Types](../guides/built-in-types.md).
 
 ## Containers
 

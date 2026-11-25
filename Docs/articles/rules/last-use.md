@@ -8,6 +8,7 @@ A variable that is not used again leaves no second copy behind. So where a metho
 
 - **Which variables:** a local or a by-value parameter of a non-copyable type, and a local that holds a container which is the method's own.
 - **The last use:** a use after which no path, an exception path included, uses the variable again before the variable is assigned as a whole.
+- **A read by value that is not the last use** is a copy, reported at the first use after it (SCA1016).
 - **Never moved from:** fields, elements, references, captured and `using` variables, views, and a variable that a reference can outlive.
 - **Turning it off:** a project can turn the move at the last use off: see [Turning Off the Move on the Last Use](msbuild-properties.md#turning-off-the-move-on-the-last-use).
 
@@ -23,8 +24,8 @@ if (!pending.IsCompletedSuccessfully)
 using var held = pending.Result;         // OK: the last use on this path
 
 var other = locks.LockAsync(key);
-var first = other.Result;                // SCA1030: 'other' is read again below
-var second = other.Result;               // OK: the last use of 'other'
+var first = other.Result;                // a copy, since 'other' is read again below
+var second = other.Result;               // SCA1016: 'other' is used after its value was handed over
 ```
 
 ## Which Variables
@@ -103,13 +104,20 @@ The last use is a use that takes the value or calls a member on it, when no path
 The analyzer finds the last use in the order of evaluation, not in the order of the text. With named arguments, the read of `guard` below comes first, so it is not the last use:
 
 ```cs
-Use(b: guard, a: Touch(ref guard));      // SCA1003: 'Touch' uses 'guard' after the read
+Use(b: guard, a: Touch(ref guard));      // SCA1016 at the second 'guard': 'Touch' uses it after the read
 ```
 
 A setter, an indexer setter or an event accessor runs after the value that it is given has been evaluated. So the setter's use of the variable comes after a read in that value:
 
 ```cs
-lease.Uses = LeaseOps.Close(lease);           // SCA1003: the setter uses 'lease' after the read
+lease.Uses = LeaseOps.Close(lease);           // SCA1016 at the first 'lease': the setter uses it after the read
+```
+
+A compound assignment, such as `+=` or `??=`, reads its target before its right side runs, and writes it after. So the read of the target counts before the right side:
+
+```cs
+LeaseOps.Take(lease);
+lease.Uses += LeaseOps.Reset(out lease);      // SCA1016 at the first 'lease': the getter reads it before Reset assigns it
 ```
 
 #### Loops
@@ -122,30 +130,61 @@ An exception is a path too. A use in a `catch`, a `finally` or an exception filt
 
 ```cs
 LockGuard guard = myLock.Enter();
-try { _holder.Take(guard); }           // SCA1003: if Take throws, the catch still uses 'guard'
-catch { guard.Dispose(); }
+try { _holder.Take(guard); }           // if Take throws...
+catch { guard.Dispose(); }             // SCA1016: ...the catch still uses 'guard'
+```
 
+```cs
+LockGuard guard = myLock.Enter();
 try { Work(); }
 catch when (Log(guard)) { }            // SCA1003: if Log gives false, the next catch still uses 'guard'
 catch { guard.Dispose(); }
 ```
 
 - A filter that gives false is followed by the `catch` clauses and filters after it, and after the last of them, by the handlers around the `try` statement. A filter that throws counts as giving false.
-- A read inside a filter is never a last use: filters run in a first pass, before the `finally` blocks between the `throw` and the `catch`, and a filter can run again for another exception.
-- Where a read gets a warning only because a `catch`, a `finally` or a filter still uses the variable, the message says so.
-- The message also says so where the variable is used after a `finally`, including the `finally` that the compiler adds for a `foreach`, a `using` or a `lock`. Code after a `finally` counts as following an exception as well.
+- A read inside a filter is never a last use: filters run in a first pass, before the `finally` blocks between the `throw` and the `catch`, and a filter can run again for another exception. Such a read is reported where it is, and the message says why.
+- Where the later use is in a `catch`, a `finally` or a filter, the message of SCA1016 says that the handler can still run.
+
+A member that throws may have taken the value, so a `catch` that uses the variable after a hand-off is reported. That holds for every member, also one that takes the value only where it returns true:
+
+```cs
+Lease lease = Pools.Rent();
+try { _pending.Add(lease); }
+catch { lease.Dispose(); throw; }             // SCA1016: Add may have taken the lease before it threw
+```
 
 > [!TIP]
-> One shape is kept clean: a store at the end of the `try` block, after which nothing that can throw runs. See [Commit at the End of a Try Block](commit.md).
+> One shape is kept clean: a store at the end of the `try` block, after which nothing that can throw runs. See [Commit at the End of a Try Block](commit.md). For a hand-off to a member, do the work that can fail inside the `try`, and hand the value over after it: see [Cleaning Up When Something Throws](../guides/cleanup-when-throwing.md#into-a-collection).
+
+## Use After a Hand-off
+
+A read by value that is not the last use of the variable copies the value. The analyzer reports that copy at the first use after the read on each path, as SCA1016, with the read as an additional location: the use is where the code goes wrong.
+
+- **A path ends** where the variable is assigned as a whole. An exception that can leave a block leads to its handlers.
+- **A use that two reads reach** is reported once. A use that is itself a hand-off is reported, and is the hand-off for the uses after it.
+- **The branch where a member did not take the value** has no use after the hand-off. A member whose symbol list entry has the [`borrowswhen`](symbol-list-format.md#borrowswhen) marker takes the value only on one branch of the condition that its result goes straight into, so the variable is still the caller's on the other branch.
+
+The copy stays at the read, with the ID of the copy (SCA1001, SCA1002 or SCA1003), where there is no use of its own to report:
+
+| Read | Why |
+|---|---|
+| A read that is its own later use, the next time round a loop | The use after it is the read itself |
+| A read whose later use has no place of its own in the source | There is nothing else to point at |
+| A read whose later uses an exception reaches only through the end of a `finally` | The same |
+| A read of a variable that is [never moved from](#variables-that-are-never-moved-from), or that a reference can outlive | It is a copy whatever follows |
+| A read in an exception filter | It is never a last use |
+| Two uses in one operation, such as `guard.With(ref guard)` | The call uses both |
+
+A read out of a container in a variable, such as a task or a list, is judged by whether the method owns the container (see [Locals That Hold a Container](#locals-that-hold-a-container)), and is reported at the read (SCA1030).
 
 ## Returned Variables
 
-The analyzer treats a returned variable like every other read. `return guard;` is fine where the variable ends with the method. It gets a warning (SCA1002) where something uses the variable after its value was read: a `finally`, or the end of a `using` scope that holds a reference to it. This holds even with the move on the last use turned off.
+The analyzer treats a returned variable like every other read. `return guard;` is fine where the variable ends with the method. Where a `finally` uses the variable after the `return` has read its value, the `return` handed the value over, and the use in the `finally` gets SCA1016. Where the end of a `using` scope that holds a reference to it uses the variable, the `return` gets SCA1002.
 
 ```cs
 LockGuard guard = myLock.Enter();
-try { return guard; }                  // SCA1002: the 'finally' runs after the value was read
-finally { guard.Dispose(); }
+try { return guard; }                  // hands the guard over...
+finally { guard.Dispose(); }           // SCA1016: ...and the 'finally' still uses 'guard'
 
 try { return guard; }                  // OK: the 'finally' resets the variable
 finally { guard = default; }
@@ -183,7 +222,7 @@ An argument for an `in` or `ref readonly` parameter is passed by reference even 
 
 ## What the Move Does Not Change
 
-- **The variable is not reset,** and no code gets a warning that did not get one before: a read that is not the last use is a copy, as it always was.
+- **The variable is not reset.** A read that is not the last use is a copy, and a use after a move by hand finds the default value.
 - **Where the analyzer cannot decide,** the variable is not moved from.
 - **A deconstruction through a `Deconstruct` method** is a use that takes the value: the compiler copies what is deconstructed into a temporary, and a local at its last use is moved into that temporary.
 
