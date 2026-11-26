@@ -270,6 +270,94 @@ public class ReturnedContainerTests
         Verify.UnownedContainerReturned(9, "C.TheOtherVariable()", "System.Collections.Generic.List<Guard>"),
         Verify.UnownedContainerReturned(10, "C.Captured()", "System.Collections.Generic.List<Guard>", because: "'list' is not the method's own anywhere in the method, because on line 113 a lambda or a local function uses it"));
 
+    // Pinning a local with 'fixed' passes it to nothing, like using an element of it in place: the local stays the method's own. A
+    // local that holds containers of containers is held to the short list, and pinning it is not on that list.
+    [TestMethod]
+    public Task Local_StaysTheMethodsOwnWhenItIsPinned() => Verify.AnalyzerAsync(
+        $$"""
+        using System.Collections.Generic;
+        using Singulink.CodeAnalysis;
+
+        sealed class Pinnable<[NonCopyable] T>
+        {
+            private readonly T[] _items = new T[1];
+
+            public ref T GetPinnableReference() => ref _items[0];
+        }
+
+        unsafe class C
+        {
+            Guard[] _field = new Guard[1];
+
+            Guard[] Array(RwLock rwLock)
+            {
+                var guards = new Guard[2];
+                guards[0] = rwLock.Enter();
+
+                fixed (Guard* q = guards)
+                    q[1].Value = 1;
+
+                return guards;
+            }
+
+            Guard[] Element()
+            {
+                var guards = new Guard[2];
+
+                fixed (Guard* q = &guards[0])
+                    q->Value = 1;
+
+                return guards;
+            }
+
+            Pinnable<Guard> OwnPinnableReference()
+            {
+                var pinnable = new Pinnable<Guard>();
+
+                fixed (Guard* q = pinnable)
+                    q->Value = 1;
+
+                return pinnable;
+            }
+
+            Guard[] Moved()
+            {
+                var guards = new Guard[2];
+
+                fixed (Guard* q = guards)
+                    q->Value = 1;
+
+                return NonCopyable.Move(ref guards);
+            }
+
+            // Pinning adds nothing to what else the method does with the local.
+            Guard[] AlsoInAField()
+            {
+                var guards = new Guard[2];
+
+                fixed (Guard* q = guards)
+                    _field = guards;
+
+                return {|#0:guards|};
+            }
+
+            List<Guard>[] Lists()
+            {
+                var lists = new List<Guard>[1];
+
+                fixed (List<Guard>* q = lists)
+                {
+                }
+
+                return {|#1:lists|};
+            }
+        }
+
+        {{Sources.Guard}}
+        """,
+        Verify.UnownedContainerReturned(0, "C.AlsoInAField()", "Guard[]", because: "'guards' is not the method's own anywhere in the method, because on line 62 it is assigned to something else"),
+        Verify.UnownedContainerReturned(1, "C.Lists()", "System.Collections.Generic.List<Guard>[]", because: "'lists' is not the method's own anywhere in the method, because on line 71 it is used in a way that can keep it or a view of it"));
+
     [TestMethod]
     public Task Iterator_MustNotYieldTheSameContainerTwice() => Verify.AnalyzerAsync(
         $$"""

@@ -724,6 +724,10 @@ public sealed partial class DoNotCopyValueAnalyzer
                 case IInvalidOperation or { Kind: OperationKind.None, Parent: IInvalidOperation }:
                     return ParameterUse.Allowed;
 
+                // A 'fixed' statement that pins it, with no code that could keep it. The pointer is not followed.
+                case { Kind: OperationKind.None } when IsPinnedWhereItStands(current):
+                    return ParameterUse.Allowed;
+
                 // Everything else that takes it as a value: a form that nobody named.
                 default:
                     return ParameterUse.NotFollowed;

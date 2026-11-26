@@ -1973,6 +1973,235 @@ public class ContainerOwnershipTests
         Verify.CopyByAssignmentIntoVariable(5, "Guard", "first"),
         Verify.ReadFromStoredContainer(6, "'..'", "Guard", canBeMoved: false));
 
+    // Pinning a container with 'fixed' leaves it with the caller, like using a member of it: an array, an element of it, and a type
+    // whose own 'GetPinnableReference' the compiler calls, such as a span. The pointer is not followed, also where it leaves the block.
+    [TestMethod]
+    public Task Kept_PinningAContainerParameterLeavesItWithTheCaller() => Verify.AnalyzerAsync(
+        $$"""
+        using System;
+        using Singulink.CodeAnalysis;
+
+        sealed class Pinnable<[NonCopyable] T>
+        {
+            private readonly T[] _items = new T[1];
+
+            public ref T GetPinnableReference() => ref _items[0];
+        }
+
+        static unsafe class C
+        {
+            static Guard[] s_field = new Guard[2];
+            static Guard* s_pointer;
+
+            static void Array(Guard[] guards)
+            {
+                fixed (Guard* q = guards)
+                {
+                    q[1].Value = 1;
+                    Guard* r = &q[0];
+                    r->Value = 2;
+                }
+            }
+
+            static void Element(Guard[] guards)
+            {
+                fixed (Guard* q = &guards[0])
+                    q->Value = 1;
+            }
+
+            static void Several(Guard[] guards, Guard[] others, bool flag)
+            {
+                fixed (Guard* q = guards, r = others)
+                fixed (void* s = (flag ? guards : others))
+                    q->Value = r->Value;
+            }
+
+            static void TwoDimensions(Guard[,] guards)
+            {
+                fixed (Guard* q = guards)
+                    q->Dispose();
+            }
+
+            static void Spans(Span<Guard> span, ReadOnlySpan<Guard> readOnly)
+            {
+                fixed (Guard* q = span)
+                fixed (Guard* r = readOnly)
+                    q->Value = r->Value;
+            }
+
+            static void OwnPinnableReference(Pinnable<Guard> pinnable)
+            {
+                fixed (Guard* q = pinnable)
+                    q->Value = 1;
+            }
+
+            static void ThroughALocal(Guard[] guards)
+            {
+                var alias = guards;
+
+                fixed (Guard* q = alias)
+                    q->Value = 1;
+            }
+
+            static void Marked([Kept] Guard[] guards)
+            {
+                fixed (Guard* q = guards)
+                    q->Value = 1;
+            }
+
+            static void AField()
+            {
+                fixed (Guard* q = s_field)
+                    q->Value = 1;
+            }
+
+            // What the pointer does is unsafe code, which the analyzer does not follow.
+            static Guard* Returned(Guard[] guards)
+            {
+                fixed (Guard* q = guards)
+                    return q;
+            }
+
+            static void Stored(Guard[] guards)
+            {
+                fixed (Guard* q = guards)
+                    s_pointer = q;
+            }
+        }
+
+        {{Sources.Guard}}
+        """);
+
+    // Pinning adds nothing to what else the method does with the container or reads through the pointer: a copy out of it, a store
+    // of the container and passing it to what keeps it keep their findings. A container of containers is not pinned in a known way,
+    // since the pointer reaches containers that the caller put in, as '&lists[0]' does.
+    [TestMethod]
+    public Task Kept_PinningAContainerParameterHidesNothingElse() => Verify.AnalyzerAsync(
+        $$"""
+        using System.Buffers;
+        using System.Collections.Generic;
+        using System.Threading.Tasks;
+        using Singulink.CodeAnalysis;
+
+        static unsafe class C
+        {
+            static Guard[]? s_kept;
+
+            static void Keep([Kept] Guard[] guards) { }
+
+            static void Take(Guard guard) { }
+
+            static void ReadOut(Guard[] guards)
+            {
+                fixed (Guard* q = guards)
+                {
+                    Guard copy = {|#0:q[0]|};
+                    Take({|#1:*q|});
+                }
+            }
+
+            static void Stored(Guard[] guards)
+            {
+                fixed (Guard* q = guards)
+                    s_kept = {|#2:guards|};
+            }
+
+            static void PassedOn(Guard[] guards)
+            {
+                fixed (Guard* q = guards)
+                    Keep({|#3:guards|});
+            }
+
+            static void Returned(Guard[] guards)
+            {
+                fixed (Guard* q = guards)
+                    ArrayPool<Guard>.Shared.Return({|#4:guards|});
+            }
+
+            static void Lists(List<Guard>[] lists)
+            {
+                fixed (List<Guard>* q = {|#5:lists|})
+                {
+                }
+            }
+
+            static void ListElement(List<Guard>[] lists)
+            {
+                fixed (List<Guard>* q = &{|#6:lists|}[0])
+                {
+                }
+            }
+
+        }
+
+        static class Later
+        {
+            // A method that goes on after it has returned keeps what it pins then.
+            static async Task AfterAnAwait(Guard[] guards)
+            {
+                await Task.Yield();
+
+                unsafe
+                {
+                    fixed (Guard* q = {|#7:guards|})
+                        q->Value = 1;
+                }
+            }
+        }
+
+        {{Sources.Guard}}
+        """,
+        Verify.CopyByAssignment(0, "Guard"),
+        Verify.CopyOfStoredValue(1, "'C.Take(Guard)' receives", "Guard"),
+        Verify.KeepsUnmarkedParameter(2, "C.Stored(Guard[])", "guards", "Guard[]"),
+        Verify.KeepsUnmarkedParameter(3, "C.PassedOn(Guard[])", "guards", "Guard[]"),
+        Verify.PassesParameterToUncheckedCode(4, "C.Returned(Guard[])", "guards", "Guard[]", "ArrayPool<Guard>.Return(Guard[], bool)", "M:System.Buffers.ArrayPool`1.Return(`0[],System.Boolean)"),
+        Verify.ParameterUsedInAWayNotFollowed(5, "C.Lists(List<Guard>[])", "lists", "System.Collections.Generic.List<Guard>[]"),
+        Verify.ParameterUsedInAWayNotFollowed(6, "C.ListElement(List<Guard>[])", "lists", "System.Collections.Generic.List<Guard>[]"),
+        Verify.KeepsParameterAfterReturning(7, "Later.AfterAnAwait(Guard[])", "guards", "Guard[]"));
+
+    // The same under the updated memory safety rules, for a type that is unsafe to copy: pinning is clean, and a store is still reported.
+    [TestMethod]
+    public Task Kept_PinningAContainerParameterLeavesItWithTheCallerUnderTheUpdatedRules() => Verify.UpdatedRulesAsync(
+        $$"""
+        using System;
+
+        static class C
+        {
+            static Guard[]? s_kept;
+
+            static void Array(Guard[] guards)
+            {
+                unsafe
+                {
+                    fixed (Guard* q = guards)
+                        q->Value = 1;
+                }
+            }
+
+            static void Span(Span<Guard> span)
+            {
+                unsafe
+                {
+                    fixed (Guard* q = span)
+                        q->Value = 1;
+                }
+            }
+
+            static void Stored(Guard[] guards)
+            {
+                unsafe
+                {
+                    fixed (Guard* q = guards)
+                        s_kept = {|#0:guards|};
+                }
+            }
+        }
+
+        {{Sources.UnsafeGuard}}
+        """,
+        Verify.KeepsUnmarkedParameter(0, "C.Stored(Guard[])", "guards", "Guard[]"));
+
     // A handler whose 'AppendFormatted' takes a marked type parameter keeps what a hole gives it, like every other parameter of that
     // kind. The handlers of the framework, whose type parameter is not marked, format what they are given.
     [TestMethod]

@@ -659,6 +659,48 @@ public sealed partial class DoNotCopyValueAnalyzer
                 _ => false,
             };
         }
+
+        /// <summary>
+        /// Gets a value indicating whether a 'fixed' statement pins the container that an operation gives, in a way that runs no code
+        /// with it: an array, which the compiler pins itself, or a type whose own 'GetPinnableReference' the compiler calls, as that of
+        /// a span. Nothing that the pointer reaches may be a container, which the caller put in and the pointer could hand on. The
+        /// pointer itself is unsafe code, which is not followed.
+        /// </summary>
+        /// <remarks>
+        /// A 'GetPinnableReference' of an extension is other code that the container is passed to, and the operation does not name
+        /// the one that the compiler binds, so that pinning is not known. Nor is it where the type declares no such method that takes
+        /// nothing: the compiler then looks for an extension.
+        /// </remarks>
+        private bool IsPinnedWhereItStands(IOperation current)
+        {
+            if (!IsPinnedByFixed(current) || current.Type is not { } type || types.HoldsContainers(type))
+                return false;
+
+            if (type is IArrayTypeSymbol)
+                return true;
+
+            for (var declaring = type; declaring is not null; declaring = declaring.BaseType)
+            {
+                var pins = declaring.GetMembers("GetPinnableReference");
+
+                if (!pins.IsEmpty)
+                    return pins.Any(static pin => pin is IMethodSymbol { IsStatic: false, Parameters.IsEmpty: true });
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Gets a value indicating whether an operation gives what the declaration of a 'fixed' statement pins, an array, the address of a
+        /// part of one, or a value with a 'GetPinnableReference'. The statement and what it pins have no kind of operation of their own:
+        /// the value stands under an implicit operation of no kind that gives the pointer.
+        /// </summary>
+        private static bool IsPinnedByFixed(IOperation current) => current.Parent is {
+            Kind: OperationKind.None,
+            IsImplicit: true,
+            Type.TypeKind: TypeKind.Pointer,
+            Parent: IVariableInitializerOperation { Syntax.Parent: VariableDeclaratorSyntax { Parent.Parent: FixedStatementSyntax } },
+        };
     }
 }
 

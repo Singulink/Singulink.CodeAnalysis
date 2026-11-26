@@ -798,7 +798,8 @@ internal static class Rules
     private const string ParameterUsedInAWayNotFollowedMessage =
         "'{0}' uses its parameter '{1}', a container of type {2}, which is not marked [Kept], in a way that is not known to leave it with " +
         "the caller alone, so it counts as kept. A caller takes a container that it passes to be its own afterwards. Mark the parameter " +
-        "[Kept], or use it in a way that is known: use a member of it, pass it to a parameter that does not keep it, test it or enumerate it.";
+        "[Kept], or use it in a way that is known: use a member of it, pass it to a parameter that does not keep it, test it, enumerate it " +
+        "or pin it with 'fixed'.";
 
     private const string PassesParameterToUncheckedCodeMessage =
         "'{0}' passes its parameter '{1}', a container of type {2}, which is not marked [Kept], to '{3}', which is taken to keep it: the " +

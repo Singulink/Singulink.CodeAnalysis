@@ -1113,10 +1113,11 @@ public class OwnershipListTests
         Verify.KeepsUnmarkedParameter(1, "C.OfASegment(Guard[])", "buffer", "Guard[]"),
         Verify.KeepsUnmarkedParameter(2, "C.OfATuple(List<Guard>)", "guards", ListOfGuardsType));
 
-    // A 'fixed' statement has no kind of operation of its own, so it is not on the list of what a container parameter may be used
-    // in: the 'GetPinnableReference' that it binds, also from an extension, is not followed, and the use is reported as that.
+    // A 'fixed' statement that pins a container through a 'GetPinnableReference' of an extension passes it to other code, and nothing
+    // names the method that the compiler binds: the use is not followed, and is reported as that. Pinning an array, or a type through
+    // its own 'GetPinnableReference', is a known use: see ContainerOwnershipTests.
     [TestMethod]
-    public Task Kept_AFixedStatementIsNotOnTheList() => Verify.AnalyzerAsync(
+    public Task Kept_PinningThroughAnExtensionIsNotFollowed() => Verify.AnalyzerAsync(
         $$"""
         using System;
         using System.Collections.Generic;

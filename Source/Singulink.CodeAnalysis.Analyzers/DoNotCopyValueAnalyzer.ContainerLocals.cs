@@ -324,10 +324,12 @@ public sealed partial class DoNotCopyValueAnalyzer
             if (IsViewUsedOnTheSpot(current, reference.Local.Type) || IsQuietUseOfLocalThatHoldsContainers(reference, use))
                 return;
 
+            // Pinning it with 'fixed' passes it to nothing, as using an element of it in place does.
             if (IsOnlyUsedByWhatItIsPassedTo(current, reference.Local.Type) ||
                 IsElementUsedInPlace(current) ||
                 IsFieldOfLocalUsed(current) ||
-                IsViewMadeAndUsedOnTheSpot(current))
+                IsViewMadeAndUsedOnTheSpot(current) ||
+                IsPinnedWhereItStands(current))
             {
                 use.IsUsedLoosely = true;
             }
@@ -647,6 +649,10 @@ public sealed partial class DoNotCopyValueAnalyzer
                     return ReturnsByValue(property.Property) && IsNoViewAndNoReference(property.Type);
 
                 case IEventReferenceOperation raised when ReferenceEquals(used, raised.Instance):
+                    return true;
+
+                // The address that a 'fixed' statement pins. The pointer is not followed.
+                case IAddressOfOperation address when IsPinnedByFixed(address):
                     return true;
 
                 case IInvocationOperation invocation when ReferenceEquals(used, invocation.Instance):

@@ -1295,7 +1295,7 @@ internal static class Verify
         $"'{method}' uses its parameter '{parameter}', a container of type {Container(type, through)}, which is not marked [Kept], in a way that " +
         "is not known to leave it with the caller alone, so it counts as kept. A caller takes a container that it passes to be its own " +
         "afterwards. Mark the parameter [Kept], or use it in a way that is known: use a member of it, pass it to a parameter that does not " +
-        "keep it, test it or enumerate it.");
+        "keep it, test it, enumerate it or pin it with 'fixed'.");
 
     public static DiagnosticResult PassesParameterToUncheckedCode(int location, string method, string parameter, string type, string member, string id) => Diagnostic(
         DiagnosticIds.KeptParameter,
