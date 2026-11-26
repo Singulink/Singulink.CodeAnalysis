@@ -6,18 +6,34 @@ If your library's public API has non-copyable structs, let the analyzer reach th
 
 ### At a Glance
 
-- **Reference the analyzers package with `PrivateAssets="none"`,** or reference `Singulink.CodeAnalysis` as a normal reference: either one passes the analyzer on.
+- **Reference `Singulink.CodeAnalysis` as a normal reference,** or reference the analyzers package with `PrivateAssets="none"`: either one passes the analyzer on.
 - **The analyzer then reaches every project down the chain,** and checks there only what your library marked. In those projects, it does not check the [built-in non-copyable types](built-in-types.md).
 - **A library that keeps the analyzer to itself** leaves the projects that use it without the analyzer, and a project that references both is told about it (SCA1025).
 - **A [symbol list file](symbol-list.md) can ship with the library,** for the members of its own generics that are not marked, for its own members that take a value only where they return true, and for each class of the library that clones itself.
 
 ## Passing the Analyzer On
 
+The simplest way is a normal reference to `Singulink.CodeAnalysis`, with no `PrivateAssets`:
+
+```xml
+<PackageReference Include="Singulink.CodeAnalysis" Version="1.0.0" />
+```
+
+Your package then depends on `Singulink.CodeAnalysis`, which passes the analyzer on, so a project that references your package gets the analyzer.
+
+A library that wants no runtime dependency [declares the attributes itself](marking-a-struct.md#declaring-the-attributes-yourself) and references the analyzers package with `PrivateAssets="none"`:
+
 ```xml
 <PackageReference Include="Singulink.CodeAnalysis.Analyzers" Version="1.0.0" PrivateAssets="none" />
 ```
 
-Your package then depends on the analyzers package with all its assets (`<dependency id="Singulink.CodeAnalysis.Analyzers" version="1.0.0" include="All" />`), and a project that references your package gets the analyzer. If you reference `Singulink.CodeAnalysis` instead, keep it a normal reference and the same holds: the attributes package already passes the analyzers on.
+Your package then depends on the analyzers package with all its assets (`<dependency id="Singulink.CodeAnalysis.Analyzers" version="1.0.0" include="All" />`), and a project that references your package gets the analyzer.
+
+| | `Singulink.CodeAnalysis` | `Singulink.CodeAnalysis.Analyzers` alone |
+|---|---|---|
+| Attributes and helpers | They come from the package, and an update brings them together with the analyzer | You declare them in your project, and bring them up to date yourself |
+| Runtime dependency | One small assembly | None |
+| Reference | A normal reference | `PrivateAssets="none"` |
 
 #### Down the Chain
 

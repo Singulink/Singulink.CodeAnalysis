@@ -44,6 +44,9 @@ Let `Dispose` clear the struct, so that a second call on the same instance does 
 
 ## Declaring the Attributes Yourself
 
+> [!TIP]
+> **Reference `Singulink.CodeAnalysis` unless the runtime dependency is a problem.** An update of the package brings the attributes, the helpers and the analyzer together. Attributes that you declare stay as you wrote them, so a property or an attribute that an update of the analyzer adds is yours to add as well.
+
 The analyzer recognizes its attributes by their full name: the namespace `Singulink.CodeAnalysis` and the name of the class, in any assembly, public or internal. So a project that wants no runtime dependency declares them itself, in that namespace, and references only `Singulink.CodeAnalysis.Analyzers`:
 
 ```cs

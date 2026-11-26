@@ -20,7 +20,7 @@ There are two packages:
 | `Singulink.CodeAnalysis` | The attributes, such as <xref:Singulink.CodeAnalysis.NonCopyableAttribute>, and the <xref:Singulink.CodeAnalysis.NonCopyable> helpers. It brings the analyzer with it. |
 | `Singulink.CodeAnalysis.Analyzers` | The analyzer only, with no runtime assembly and no dependencies. It adds nothing to your build output. |
 
-Most projects install the first one:
+Most projects install the first one. An update then brings the attributes, the helpers and the analyzer together:
 
 ```xml
 <PackageReference Include="Singulink.CodeAnalysis" Version="1.0.0" />

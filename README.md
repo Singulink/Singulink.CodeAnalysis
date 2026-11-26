@@ -249,7 +249,7 @@ There are two packages:
 | `Singulink.CodeAnalysis` | The attributes, such as `Singulink.CodeAnalysis.NonCopyableAttribute`, the `NonCopyable.Move` helper, and the checks `NonCopyable.ThrowIfNullRef` and `NonCopyable.ThrowIfNullRefArgument`, in assemblies for .NET Standard 2.0 and .NET 10. It depends on `Singulink.CodeAnalysis.Analyzers`, so referencing it brings the analyzer too. |
 | `Singulink.CodeAnalysis.Analyzers` | The analyzer only. It has no runtime assembly and no dependencies, so it adds nothing to your build output. |
 
-Install **`Singulink.CodeAnalysis`** if you want to use the attributes from the package:
+Install **`Singulink.CodeAnalysis`** in most projects. An update then brings the attributes, the helpers and the analyzer together:
 
 ```xml
 <PackageReference Include="Singulink.CodeAnalysis" Version="1.0.0" />
