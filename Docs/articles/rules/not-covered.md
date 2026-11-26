@@ -55,6 +55,8 @@ Buffer.MemoryCopy(pointer, target, size, size);   // no warning: the bytes of th
 
 The same goes for the other ways to copy memory, such as <xref:System.Runtime.InteropServices.NativeMemory.Copy*?displayProperty=nameWithType>, <xref:System.Runtime.CompilerServices.Unsafe.CopyBlock*?displayProperty=nameWithType> and a span of bytes over the pointer. `__makeref` and <xref:System.TypedReference> are not followed either: `TypedReference.ToObject` hands out what the reference refers to as an `object`.
 
+Pinning a container with `fixed` is a use that leaves the container with its caller: see [What a Parameter May Do](keeping-containers.md#what-a-parameter-may-do). A pointer that a method stores or returns out of the `fixed` block gets no warning, though it still refers into the container.
+
 #### Reflection and Dynamic
 
 - **Reflection** can read a field into a box, and an expression tree that a consumer evaluates by reflection gives a boxed copy of a captured value. Compiling or interpreting the tree uses the value in place.

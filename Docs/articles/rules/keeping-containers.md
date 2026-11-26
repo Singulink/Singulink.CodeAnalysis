@@ -93,6 +93,7 @@ void Register(List<LockGuard> list) { var other = list; _all = other; }   // SCA
 | A reference or a view of it that stays in the method (`ref LockGuard first = ref span[0];`, `Span<LockGuard> view = CollectionsMarshal.AsSpan(list);`) | No |
 | Passing it, by value or by reference and whatever the declared type of the parameter, to a parameter that does not keep (`ArgumentNullException.ThrowIfNull(list);`) | No |
 | A test, a pattern, a `foreach`, an `await`, a spread and a `with`, as far as the members that those call are its own | No |
+| Pinning it with `fixed`, as an array, by the address of an element, or through its own `GetPinnableReference` as a span is pinned (`fixed (LockGuard* first = guards)`) | No. The pointer is not followed: see [Pointers](not-covered.md#pointers) |
 | Returning it, which is judged on its own: see [Returning a Container](returning-containers.md) | No |
 | A write of the variable | No |
 | A store into anything but a local of the method | Yes. A store into a local is the container under another name, and the check follows it |

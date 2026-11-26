@@ -16,7 +16,7 @@ If your library's public API has non-copyable structs, let the analyzer reach th
 The simplest way is a normal reference to `Singulink.CodeAnalysis`, with no `PrivateAssets`:
 
 ```xml
-<PackageReference Include="Singulink.CodeAnalysis" Version="1.0.0" />
+<PackageReference Include="Singulink.CodeAnalysis" Version="1.0.1" />
 ```
 
 Your package then depends on `Singulink.CodeAnalysis`, which passes the analyzer on, so a project that references your package gets the analyzer.
@@ -24,10 +24,10 @@ Your package then depends on `Singulink.CodeAnalysis`, which passes the analyzer
 A library that wants no runtime dependency [declares the attributes itself](marking-a-struct.md#declaring-the-attributes-yourself) and references the analyzers package with `PrivateAssets="none"`:
 
 ```xml
-<PackageReference Include="Singulink.CodeAnalysis.Analyzers" Version="1.0.0" PrivateAssets="none" />
+<PackageReference Include="Singulink.CodeAnalysis.Analyzers" Version="1.0.1" PrivateAssets="none" />
 ```
 
-Your package then depends on the analyzers package with all its assets (`<dependency id="Singulink.CodeAnalysis.Analyzers" version="1.0.0" include="All" />`), and a project that references your package gets the analyzer.
+Your package then depends on the analyzers package with all its assets (`<dependency id="Singulink.CodeAnalysis.Analyzers" version="1.0.1" include="All" />`), and a project that references your package gets the analyzer.
 
 | | `Singulink.CodeAnalysis` | `Singulink.CodeAnalysis.Analyzers` alone |
 |---|---|---|

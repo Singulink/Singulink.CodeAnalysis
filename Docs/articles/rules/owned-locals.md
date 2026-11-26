@@ -94,6 +94,15 @@ guards[0].Dispose();                          // OK: an element used in place
 return guards;                                // OK
 ```
 
+Pinning it with `fixed`, the whole array or an element of it, passes it to nothing either. The pointer is not followed: see [Pointers](not-covered.md#pointers).
+
+```cs
+var guards = new LockGuard[2];
+fixed (LockGuard* first = guards)             // OK: pinned in place
+    first->Dispose();
+return guards;                                // OK
+```
+
 #### Views Used in One Go
 
 A view of it may be made and used in one go. A view that is put into a variable, passed on or returned ends its ownership:

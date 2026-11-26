@@ -23,13 +23,13 @@ There are two packages:
 Most projects install the first one. An update then brings the attributes, the helpers and the analyzer together:
 
 ```xml
-<PackageReference Include="Singulink.CodeAnalysis" Version="1.0.0" />
+<PackageReference Include="Singulink.CodeAnalysis" Version="1.0.1" />
 ```
 
 A project that declares the attributes itself, to have no runtime dependency, installs the second one alone (see [Marking a Struct](../guides/marking-a-struct.md)):
 
 ```xml
-<PackageReference Include="Singulink.CodeAnalysis.Analyzers" Version="1.0.0" PrivateAssets="all" />
+<PackageReference Include="Singulink.CodeAnalysis.Analyzers" Version="1.0.1" PrivateAssets="all" />
 ```
 
 The analyzers package is a development dependency, so `dotnet add package` and Visual Studio add it with `PrivateAssets="all"`, which keeps it to your own project. A library that wants the projects that use it checked too passes the analyzer on to them: see [Sharing Your Library](../guides/libraries.md).

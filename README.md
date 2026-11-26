@@ -252,14 +252,14 @@ There are two packages:
 Install **`Singulink.CodeAnalysis`** in most projects. An update then brings the attributes, the helpers and the analyzer together:
 
 ```xml
-<PackageReference Include="Singulink.CodeAnalysis" Version="1.0.0" />
+<PackageReference Include="Singulink.CodeAnalysis" Version="1.0.1" />
 ```
 
 Install **`Singulink.CodeAnalysis.Analyzers`** alone if you declare the attributes yourself (see [Marking a Struct of Your Own](#marking-a-struct-of-your-own) above) and want
 no runtime dependency:
 
 ```xml
-<PackageReference Include="Singulink.CodeAnalysis.Analyzers" Version="1.0.0" PrivateAssets="all" />
+<PackageReference Include="Singulink.CodeAnalysis.Analyzers" Version="1.0.1" PrivateAssets="all" />
 ```
 
 In a project that references one of the two packages directly, the analyzer also checks the built-in non-copyable types, a few structs of

@@ -146,7 +146,7 @@ The members that the compiler calls are these:
 
 An operation that is allowed is allowed with every member that it carries. The analyzer keeps a closed list of the kinds of operation that a container may be used in, with every member that each kind carries. A test checks that list against the compiler's API, so that a member which a later compiler adds is caught there.
 
-A statement with no operation of its own, such as `fixed`, is not on that closed list. A container that such a statement uses gets a warning for a use that the check does not follow.
+A `fixed` statement has no operation of its own, and the list names it apart. Pinning a container with it is a known use where the compiler runs no other code with the container: an array, the address of an element, or a type whose own `GetPinnableReference` the compiler calls, such as a span. Pinning through a `GetPinnableReference` of an extension, or pinning a container whose elements are containers, gets a warning for a use that the check does not follow. The pointer itself is not followed: see [Pointers](not-covered.md#pointers).
 
 ## Indexers
 
